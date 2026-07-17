@@ -16,6 +16,11 @@ type Clause = {
   matchExpr?: string;
   minSecs?: number;
   maxSecs?: number;
+  scenario?:
+    | "outcomes"
+    | "desktop_payload"
+    | "desktop_unavailable"
+    | "discord_receipt";
   procedure?: string;
 };
 
@@ -57,6 +62,65 @@ ${indent(c.ruleOverride ?? "", 8)}
 ${indent(c.fissureOverride ?? "", 8)}
         prop_assert!(!filter::rule_matches(&rule, &f), "${msg}");
     }`;
+    case "storm_truth_table":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(mut f in arb_fissure()) {
+        let mut rule = WatchRule {
+            mode: Mode::Both,
+            ..WatchRule::default()
+        };
+        for (storms, normal_matches, storm_matches) in [
+            (StormMode::Exclude, true, false),
+            (StormMode::Include, true, true),
+            (StormMode::Only, false, true),
+        ] {
+            rule.storms = storms;
+            f.is_storm = false;
+            prop_assert_eq!(
+                filter::rule_matches(&rule, &f),
+                normal_matches,
+                "${msg} (mode={:?}, isStorm=false)",
+                storms,
+            );
+            f.is_storm = true;
+            prop_assert_eq!(
+                filter::rule_matches(&rule, &f),
+                storm_matches,
+                "${msg} (mode={:?}, isStorm=true)",
+                storms,
+            );
+        }
+    }`;
+    case "proxima_node_aliases":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(mut f in arb_fissure(), pick in any::<prop::sample::Index>()) {
+        let aliases = [
+            ("Earth Proxima", "Earth"),
+            ("Venus Proxima", "Venus"),
+            ("Saturn Proxima", "Saturn"),
+            ("Neptune Proxima", "Neptune"),
+            ("Pluto Proxima", "Pluto"),
+            ("Veil Proxima", "Veil"),
+        ];
+        let (configured, api_planet) = aliases[pick.index(aliases.len())];
+        let mut rule = WatchRule {
+            planets: vec![configured.to_string()],
+            mode: Mode::Both,
+            storms: StormMode::Only,
+            ..WatchRule::default()
+        };
+        f.is_storm = true;
+        f.node = format!("Node ({api_planet})");
+        prop_assert!(filter::rule_matches(&rule, &f), "${msg} (VOID嵐が不一致)");
+
+        rule.storms = StormMode::Include;
+        f.is_storm = false;
+        prop_assert!(!filter::rule_matches(&rule, &f), "${msg} (通常亀裂へ別名を誤適用)");
+    }`;
     case "rule_pass_when_empty":
       return `
     /// ${c.id}: ${c.desc}
@@ -91,7 +155,7 @@ ${indent(c.fissureOverride ?? "", 8)}
         let remaining_ok = f.expiry.signed_duration_since(now).num_seconds() >= min as i64;
         prop_assert_eq!(
             filter::matches(&s, &f, now),
-            remaining_ok && filter::rule_matches(&rule, &f),
+            remaining_ok && rule.enabled && filter::rule_matches(&rule, &f),
             "${msg}"
         );
     }`;
@@ -99,13 +163,121 @@ ${indent(c.fissureOverride ?? "", 8)}
       return `
     /// ${c.id}: ${c.desc}
     #[test]
-    fn ${name}(s in arb_settings(), extra in arb_rule(), f in arb_fissure()) {
+    fn ${name}(s in arb_settings(), mut extra in arb_rule(), f in arb_fissure()) {
         let now = base_now();
         if filter::matches(&s, &f, now) {
+            extra.enabled = true;
             let mut bigger = s.clone();
             bigger.rules.push(extra);
             prop_assert!(filter::matches(&bigger, &f, now), "${msg}");
         }
+    }`;
+    case "enabled_rules_or":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(s in arb_settings(), f in arb_fissure()) {
+        let now = base_now();
+        let remaining_ok = f.expiry.signed_duration_since(now).num_seconds()
+            >= s.min_remaining_secs as i64;
+        let enabled_or = s.rules.iter().any(|rule|
+            rule.enabled && filter::rule_matches(rule, &f)
+        );
+        prop_assert_eq!(
+            filter::matches(&s, &f, now),
+            remaining_ok && enabled_or,
+            "${msg} (有効ルールORの完全な等式)"
+        );
+
+        let mut all_disabled = s.clone();
+        for rule in &mut all_disabled.rules {
+            rule.enabled = false;
+        }
+        let mut valid_fissure = f.clone();
+        valid_fissure.expiry = now + Duration::seconds(s.min_remaining_secs as i64 + 1);
+        prop_assert!(
+            !filter::matches(&all_disabled, &valid_fissure, now),
+            "${msg} (全ルールdisabledなのに合致した)"
+        );
+
+        let empty = FilterSettings {
+            rules: vec![],
+            min_remaining_secs: s.min_remaining_secs,
+        };
+        prop_assert!(
+            !filter::matches(&empty, &valid_fissure, now),
+            "${msg} (ルールなしなのに合致した)"
+        );
+    }`;
+    case "enabled_projection":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(
+        s in arb_settings(),
+        mut disabled in arb_rule(),
+        mut edited_disabled in arb_rule(),
+        mut enabled in arb_rule(),
+    ) {
+        let base = filter::enabled_projection(&s);
+        let expected: Vec<WatchRule> = s.rules.iter()
+            .filter(|rule| rule.enabled)
+            .cloned()
+            .collect();
+        prop_assert_eq!(base.rules.as_slice(), expected.as_slice(), "${msg} (有効ルールと一致しない)");
+        prop_assert_eq!(base.min_remaining_secs, s.min_remaining_secs, "${msg} (min_remaining_secsを保持しない)");
+
+        disabled.enabled = false;
+        let mut with_disabled = s.clone();
+        with_disabled.rules.push(disabled);
+        let added = filter::enabled_projection(&with_disabled);
+        prop_assert_eq!(added.rules.as_slice(), base.rules.as_slice(), "${msg} (disabled追加で射影が変化した)");
+        prop_assert_eq!(added.min_remaining_secs, base.min_remaining_secs, "${msg} (disabled追加で時間条件が変化した)");
+
+        edited_disabled.enabled = false;
+        *with_disabled.rules.last_mut().expect("disabled ruleを追加済み") = edited_disabled;
+        let edited = filter::enabled_projection(&with_disabled);
+        prop_assert_eq!(edited.rules.as_slice(), base.rules.as_slice(), "${msg} (disabled条件編集で射影が変化した)");
+        with_disabled.rules.pop();
+        let removed = filter::enabled_projection(&with_disabled);
+        prop_assert_eq!(removed.rules.as_slice(), base.rules.as_slice(), "${msg} (disabled削除で射影が変化した)");
+
+        enabled.enabled = true;
+        let mut with_enabled = s.clone();
+        with_enabled.rules.push(enabled.clone());
+        let enabled_added = filter::enabled_projection(&with_enabled);
+        prop_assert_eq!(enabled_added.rules.len(), base.rules.len() + 1, "${msg} (enabled追加が射影へ反映されない)");
+        prop_assert_eq!(enabled_added.rules.last(), Some(&enabled), "${msg} (enabled追加の条件を保持しない)");
+
+        let toggled_rule = WatchRule {
+            enabled: false,
+            ..WatchRule::default()
+        };
+        let mut toggled = FilterSettings {
+            rules: vec![toggled_rule],
+            min_remaining_secs: s.min_remaining_secs,
+        };
+        prop_assert!(filter::enabled_projection(&toggled).rules.is_empty(), "${msg} (disabledを射影へ含めた)");
+        toggled.rules[0].enabled = true;
+        prop_assert_eq!(filter::enabled_projection(&toggled).rules.len(), 1, "${msg} (enabled切替が射影へ反映されない)");
+
+        let mut changed_condition = toggled.clone();
+        changed_condition.rules[0].tiers = vec!["__projection_changed__".to_string()];
+        prop_assert_ne!(
+            filter::enabled_projection(&toggled).rules,
+            filter::enabled_projection(&changed_condition).rules,
+            "${msg} (有効ルール条件の変更が射影へ反映されない)"
+        );
+
+        let changed_min = FilterSettings {
+            rules: s.rules.clone(),
+            min_remaining_secs: s.min_remaining_secs + 1,
+        };
+        prop_assert_ne!(
+            filter::enabled_projection(&s).min_remaining_secs,
+            filter::enabled_projection(&changed_min).min_remaining_secs,
+            "${msg} (min_remaining_secs変更が射影へ反映されない)"
+        );
     }`;
     case "at_most_once":
       return `
@@ -138,6 +310,29 @@ ${indent(c.fissureOverride ?? "", 8)}
         for i in 0..n_dead {
             prop_assert!(!set.contains(&format!("D{i}")), "${msg} (期限切れidが残った)");
         }
+    }`;
+    case "overlapping_rules_at_most_once":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(mut f in arb_fissure()) {
+        let now = base_now();
+        f.expiry = now + Duration::hours(1);
+        f.is_storm = false;
+        let rule = WatchRule::default();
+        let settings = FilterSettings {
+            rules: vec![rule.clone(), rule],
+            min_remaining_secs: 0,
+        };
+        let visible = poller::visible_fissures(&settings, &[f.clone()], now);
+        prop_assert_eq!(visible.len(), 1, "${msg} (複数ルール合致で一覧が重複した)");
+
+        let mut notified = NotifiedSet::new();
+        let first = poller::select_notifications(&mut notified, visible.clone(), false);
+        prop_assert_eq!(first.len(), 1, "${msg} (最初の通知候補が1件でない)");
+        prop_assert_eq!(first[0].id.as_str(), f.id.as_str(), "${msg} (別idを通知した)");
+        let second = poller::select_notifications(&mut notified, visible, false);
+        prop_assert!(second.is_empty(), "${msg} (同じidを再通知した)");
     }`;
     case "parse_total":
       return `
@@ -177,6 +372,79 @@ ${indent(c.fissureOverride ?? "", 8)}
         for f in &fs {
             prop_assert!(set.contains(&f.id), "${msg} (シードされていないidがある)");
         }
+    }`;
+    case "notification_scope_change":
+      return `
+    /// ${c.id}: ${c.desc} (射影による変更判定)
+    #[test]
+    fn ${fnName(c.id, "projection")}(
+        previous in arb_settings(),
+        current in arb_settings(),
+        mut disabled in arb_rule(),
+    ) {
+        let previous_projection = filter::enabled_projection(&previous);
+        let current_projection = filter::enabled_projection(&current);
+        let expected = previous_projection.min_remaining_secs != current_projection.min_remaining_secs
+            || previous_projection.rules != current_projection.rules;
+        prop_assert_eq!(
+            poller::notification_scope_changed(Some(&previous), &current),
+            expected,
+            "${msg} (enabled projectionとの差分と一致しない)"
+        );
+        prop_assert!(
+            poller::notification_scope_changed(None, &current),
+            "${msg} (初回評価をscope changeと判定しない)"
+        );
+
+        disabled.enabled = false;
+        let mut disabled_only_change = previous.clone();
+        disabled_only_change.rules.push(disabled);
+        prop_assert!(
+            !poller::notification_scope_changed(Some(&previous), &disabled_only_change),
+            "${msg} (disabled draft追加をscope changeと誤判定した)"
+        );
+    }
+
+    /// ${c.id}: ${c.desc} (scope change時のsilent seed)
+    #[test]
+    fn ${fnName(c.id, "silent_seed")}(mut f in arb_fissure()) {
+        let now = base_now();
+        f.expiry = now + Duration::hours(1);
+        f.is_storm = false;
+
+        let enabled_rule = WatchRule::default();
+        let mut disabled_rule = enabled_rule.clone();
+        disabled_rule.enabled = false;
+        let previous = FilterSettings {
+            rules: vec![disabled_rule],
+            min_remaining_secs: 0,
+        };
+        let current = FilterSettings {
+            rules: vec![enabled_rule],
+            min_remaining_secs: 0,
+        };
+        prop_assert!(
+            poller::notification_scope_changed(Some(&previous), &current),
+            "${msg} (ルール有効化をscope changeと判定しない)"
+        );
+
+        let existing = poller::visible_fissures(&current, &[f.clone()], now);
+        prop_assert_eq!(existing.len(), 1, "${msg} (現存合致亀裂を取得できない)");
+        let mut notified = NotifiedSet::new();
+        let seeded = poller::select_notifications(&mut notified, existing.clone(), true);
+        prop_assert!(seeded.is_empty(), "${msg} (scope change直後の現存亀裂を一括通知した)");
+        prop_assert!(notified.contains(&f.id), "${msg} (現存亀裂をsilent seedしていない)");
+        let repeated = poller::select_notifications(&mut notified, existing, false);
+        prop_assert!(repeated.is_empty(), "${msg} (seed済み現存亀裂を次回通知した)");
+
+        let mut new_fissure = f.clone();
+        new_fissure.id = format!("{}-new", f.id);
+        let newly_visible = poller::visible_fissures(&current, &[new_fissure.clone()], now);
+        let fresh = poller::select_notifications(&mut notified, newly_visible.clone(), false);
+        prop_assert_eq!(fresh.len(), 1, "${msg} (scope change後の新規idを通知候補にしない)");
+        prop_assert_eq!(fresh[0].id.as_str(), new_fissure.id.as_str(), "${msg} (新規idを保持しない)");
+        let duplicate = poller::select_notifications(&mut notified, newly_visible, false);
+        prop_assert!(duplicate.is_empty(), "${msg} (scope change後の新規idを再通知した)");
     }`;
     case "filtered_view":
       return `
@@ -261,6 +529,97 @@ ${indent(c.fissureOverride ?? "", 8)}
             }
         }
     }`;
+    case "editor_activation_independent":
+      return `
+    /// ${c.id}: ${c.desc} (enabled切替)
+    #[test]
+    fn ${fnName(c.id, "set_enabled")}(
+        rules in proptest::collection::vec(arb_rule(), 1..5),
+        edit_pick in any::<prop::sample::Index>(),
+        target_pick in any::<prop::sample::Index>(),
+        enabled in any::<bool>(),
+    ) {
+        let active = edit_pick.index(rules.len());
+        let target = target_pick.index(rules.len());
+        let mut expected_rules = rules.clone();
+        expected_rules[target].enabled = enabled;
+        let mut state = palette::EditorState { rules, active };
+        let before_active = state.active;
+        prop_assert!(
+            palette::set_rule_enabled(&mut state, target, enabled),
+            "${msg} (有効なindexの切替に失敗した)"
+        );
+        prop_assert_eq!(state.active, before_active, "${msg} (enabled切替でedit indexが変化した)");
+        prop_assert_eq!(state.rules.as_slice(), expected_rules.as_slice(), "${msg} (enabled以外の条件が変化した)");
+
+        let before_invalid = state.clone();
+        let invalid_index = state.rules.len();
+        prop_assert!(
+            !palette::set_rule_enabled(&mut state, invalid_index, enabled),
+            "${msg} (範囲外indexを成功扱いした)"
+        );
+        prop_assert_eq!(state, before_invalid, "${msg} (範囲外indexでstateを変更した)");
+    }
+
+    /// ${c.id}: ${c.desc} (edit focus変更)
+    #[test]
+    fn ${fnName(c.id, "edit_focus")}(
+        rules in proptest::collection::vec(arb_rule(), 1..5),
+        pick in any::<prop::sample::Index>(),
+    ) {
+        let before = rules.clone();
+        let mut state = palette::EditorState { rules, active: 0 };
+        state.active = pick.index(state.rules.len());
+        prop_assert_eq!(state.rules.as_slice(), before.as_slice(), "${msg} (edit index変更でrulesが変化した)");
+    }
+
+    /// ${c.id}: ${c.desc} (disabled draftの条件編集)
+    #[test]
+    fn ${fnName(c.id, "disabled_edit")}(
+        mut rule in arb_rule(),
+        ops in proptest::collection::vec(any::<prop::sample::Index>(), 0..40),
+    ) {
+        rule.enabled = false;
+        let mut state = palette::EditorState { rules: vec![rule], active: 0 };
+        let candidates: Vec<Candidate> = palette::catalog()
+            .into_iter()
+            .filter(|candidate| candidate.facet != Facet::Action)
+            .collect();
+        for op in ops {
+            let candidate = &candidates[op.index(candidates.len())];
+            palette::apply(&mut state, candidate);
+            prop_assert!(!state.rules[0].enabled, "${msg} ({} 適用でdisabled ruleを再有効化した)", candidate.id);
+            let settings = FilterSettings {
+                rules: state.rules.clone(),
+                min_remaining_secs: 0,
+            };
+            prop_assert!(
+                filter::enabled_projection(&settings).rules.is_empty(),
+                "${msg} (disabled編集中にruntime projectionへ現れた)"
+            );
+        }
+    }`;
+    case "new_rule_disabled":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(
+        rules in proptest::collection::vec(arb_rule(), 0..5),
+        pick in any::<prop::sample::Index>(),
+    ) {
+        let active = if rules.is_empty() { 0 } else { pick.index(rules.len()) };
+        let mut state = palette::EditorState { rules, active };
+        let before = state.rules.clone();
+        let catalog = palette::catalog();
+        let new_rule = catalog.iter()
+            .find(|candidate| candidate.id == "action:new-rule")
+            .expect("NEW RULE candidateが存在すること");
+        palette::apply(&mut state, new_rule);
+        prop_assert_eq!(state.rules.len(), before.len() + 1, "${msg} (draftが1本追加されない)");
+        prop_assert_eq!(&state.rules[..before.len()], before.as_slice(), "${msg} (既存ルールを変更した)");
+        prop_assert!(!state.rules.last().expect("draft追加済み").enabled, "${msg} (NEW RULEがenabledで作成された)");
+        prop_assert_eq!(state.active, state.rules.len() - 1, "${msg} (新しいdraftがedit対象でない)");
+    }`;
     case "clear_resets":
       return `
     /// ${c.id}: ${c.desc}
@@ -277,8 +636,20 @@ ${indent(c.fissureOverride ?? "", 8)}
             "${msg} (軸が既定でない)"
         );
         prop_assert!(matches!(r.mode, Mode::Both), "${msg} (modeが既定でない)");
-        prop_assert!(!r.include_storms, "${msg} (stormsが既定でない)");
+        prop_assert!(matches!(r.storms, StormMode::Exclude), "${msg} (stormsが既定でない)");
+        prop_assert!(r.enabled, "${msg} (既定ルールがdisabled)");
         prop_assert!(palette::satisfiable(r), "${msg} (既定ルールが充足不能)");
+    }`;
+    case "legacy_storm_config":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(include in any::<bool>()) {
+        let raw = format!(r#"{{"includeStorms":{include}}}"#);
+        let rule: WatchRule = serde_json::from_str(&raw)
+            .expect("旧WatchRule JSONを読み込めること");
+        let expected = if include { StormMode::Include } else { StormMode::Exclude };
+        prop_assert_eq!(rule.storms, expected, "${msg}");
     }`;
     case "manual":
       return ""; // 機械検証なし。SPEC.mdのみ
@@ -287,7 +658,200 @@ ${indent(c.fissureOverride ?? "", 8)}
   }
 }
 
-const tests = spec.clauses.map(genClause).filter(Boolean).join("\n");
+function genExampleClause(c: Clause): string {
+  const name = fnName(c.id);
+  const msg = `SPEC ${c.id} 違反: ${c.desc.replace(/"/g, '\\"')}`;
+  if (c.pattern === "legacy_rule_enabled") {
+    return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let legacy: WatchRule = serde_json::from_str(
+        r#"{"tiers":["Axi"],"includeStorms":false}"#,
+    )
+    .expect("enabled欠落の旧WatchRule JSONを読み込めること");
+    assert!(legacy.enabled, "${msg} (enabled欠落をfalseへ移行した)");
+
+    let explicit_disabled: WatchRule = serde_json::from_str(r#"{"enabled":false}"#)
+        .expect("enabled=falseを読み込めること");
+    assert!(!explicit_disabled.enabled, "${msg} (明示falseをtrueへ変更した)");
+    let encoded = serde_json::to_string(&explicit_disabled)
+        .expect("enabled=falseをserializeできること");
+    let round_trip: WatchRule = serde_json::from_str(&encoded)
+        .expect("serialize済みWatchRuleを再読込できること");
+    assert!(!round_trip.enabled, "${msg} (round-tripで明示falseを失った)");
+}`;
+  }
+  if (c.pattern !== "notification_example") {
+    throw new Error(`未知のexampleパターン: ${c.pattern} (${c.id})`);
+  }
+
+  switch (c.scenario) {
+    case "outcomes":
+      return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let accepted = notify::summarize_test_outcomes(&[
+        NotificationOutcome::Requested { destination: "desktop" },
+        NotificationOutcome::Requested { destination: "discord" },
+    ])
+    .expect("全選択先がRequestedなら成功すること");
+    assert!(
+        accepted.contains("通知要求を受け付けました"),
+        "${msg} (要求受付の文言がない: {accepted})"
+    );
+    for forbidden in ["送信OK", "表示済み", "配信済み"] {
+        assert!(
+            !accepted.contains(forbidden),
+            "${msg} (結果不明なのに成功を主張した: {accepted})"
+        );
+    }
+
+    let partial = notify::summarize_test_outcomes(&[
+        NotificationOutcome::Requested { destination: "desktop" },
+        NotificationOutcome::Failed {
+            destination: "discord",
+            reason: "HTTP 500".to_string(),
+        },
+    ])
+    .expect_err("1件でもFailedなら失敗すること");
+    assert!(partial.contains("desktop"), "${msg} (部分成功先がない: {partial})");
+    assert!(partial.contains("discord"), "${msg} (失敗先がない: {partial})");
+    assert!(partial.contains("HTTP 500"), "${msg} (失敗理由がない: {partial})");
+    for forbidden in ["送信OK", "表示済み", "配信済み"] {
+        assert!(
+            !partial.contains(forbidden),
+            "${msg} (エラーに成功語がある: {partial})"
+        );
+    }
+
+    assert!(
+        notify::summarize_test_outcomes(&[]).is_err(),
+        "${msg} (通知先なしを成功扱いした)"
+    );
+}`;
+    case "desktop_payload":
+      return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let now = base_now();
+    let mut fissure = Fissure {
+        id: "notification-example".to_string(),
+        activation: now,
+        expiry: now + Duration::minutes(30),
+        node: "Test Node (Void)".to_string(),
+        mission_type: "Survival".to_string(),
+        enemy: "Orokin".to_string(),
+        tier: "Axi".to_string(),
+        tier_num: 4,
+        is_storm: true,
+        is_hard: true,
+    };
+
+    let payload = notify::desktop_payload(&fissure, now);
+    assert_eq!(
+        payload.title,
+        "Axi Survival — Test Node (Void) 【鋼】 [STORM]",
+        "${msg} (title)"
+    );
+    assert_eq!(
+        payload.body,
+        "Orokin / 消滅まで残り30分",
+        "${msg} (body)"
+    );
+
+    fissure.expiry = now - Duration::seconds(1);
+    let expired = notify::desktop_payload(&fissure, now);
+    assert_eq!(
+        expired.body,
+        "Orokin / 消滅まで残り0分",
+        "${msg} (期限切れbody)"
+    );
+}`;
+    case "desktop_unavailable":
+      return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let detail = "notification backend unavailable";
+    let message = notify::desktop_unavailable_message(detail);
+    assert!(message.contains(detail), "${msg} (失敗詳細がない: {message})");
+    assert!(
+        message.contains("just notification-test"),
+        "${msg} (実行コマンドがない: {message})"
+    );
+    assert!(
+        message.contains(".app"),
+        "${msg} (bundleアプリを使う案内がない: {message})"
+    );
+    for forbidden in ["送信OK", "表示済み", "配信済み"] {
+        assert!(
+            !message.contains(forbidden),
+            "${msg} (利用不能案内に成功語がある: {message})"
+        );
+    }
+}`;
+    case "discord_receipt":
+      return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let request_url = match notify::discord_request_url(
+        "https://discord.com/api/webhooks/123/test-token?thread_id=456&wait=false&foo=bar&wait=false",
+    ) {
+        Ok(url) => url,
+        Err(_) => panic!("${msg} (有効なWebhook URLを構築できない)"),
+    };
+    let query: Vec<(String, String)> = request_url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    assert!(
+        query.iter().any(|pair| pair == &("thread_id".to_string(), "456".to_string())),
+        "${msg} (既存thread_id queryが失われた)"
+    );
+    assert!(
+        query.iter().any(|pair| pair == &("foo".to_string(), "bar".to_string())),
+        "${msg} (既存queryが失われた)"
+    );
+    let waits: Vec<&str> = query
+        .iter()
+        .filter(|(key, _)| key == "wait")
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(
+        waits,
+        vec!["true"],
+        "${msg} (wait queryはtrueをちょうど1つだけ持つこと)"
+    );
+
+    let message_id = notify::discord_message_id(r#"{"id":"1234567890"}"#)
+        .unwrap_or_else(|_| panic!("${msg} (非空Message IDを拒否した)"));
+    assert_eq!(message_id, "1234567890", "${msg} (Message IDを保持しない)");
+
+    for invalid_response in [r#"{}"#, r#"{"id":""}"#, "not json"] {
+        assert!(
+            notify::discord_message_id(invalid_response).is_err(),
+            "${msg} (ID欠落・空文字・不正JSONを成功扱いした)"
+        );
+    }
+}`;
+    default:
+      throw new Error(`未知のnotification example scenario: ${c.scenario} (${c.id})`);
+  }
+}
+
+const propertyTests = spec.clauses
+  .filter((c) => c.label === "property-tested")
+  .map(genClause)
+  .filter(Boolean)
+  .join("\n");
+const exampleTests = spec.clauses
+  .filter((c) => c.label === "example-tested")
+  .map(genExampleClause)
+  .join("\n");
 
 const oracle = `// @generated by tools/spec-gen.ts from specs/notifier.pkl — DO NOT EDIT
 // テストを直したくなったら specs/ を編集して \`just spec-gen\` を実行する。
@@ -299,8 +863,9 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use proptest::prelude::*;
 use relico_lib::backoff::Backoff;
 use relico_lib::dedup::NotifiedSet;
-use relico_lib::filter::{self, FilterSettings, Mode, WatchRule};
+use relico_lib::filter::{self, FilterSettings, Mode, StormMode, WatchRule};
 use relico_lib::model::Fissure;
+use relico_lib::notify::{self, NotificationOutcome};
 use relico_lib::palette::{self, Candidate, Facet};
 use relico_lib::poller;
 
@@ -323,6 +888,14 @@ fn arb_mode() -> impl Strategy<Value = Mode> {
     prop_oneof![Just(Mode::Normal), Just(Mode::SteelPath), Just(Mode::Both)]
 }
 
+fn arb_storm_mode() -> impl Strategy<Value = StormMode> {
+    prop_oneof![
+        Just(StormMode::Exclude),
+        Just(StormMode::Include),
+        Just(StormMode::Only),
+    ]
+}
+
 fn arb_subset(pool: &'static [&'static str]) -> impl Strategy<Value = Vec<String>> {
     proptest::sample::subsequence(pool.to_vec(), 0..=pool.len())
         .prop_map(|v| v.into_iter().map(String::from).collect())
@@ -330,18 +903,20 @@ fn arb_subset(pool: &'static [&'static str]) -> impl Strategy<Value = Vec<String
 
 fn arb_rule() -> impl Strategy<Value = WatchRule> {
     (
+        any::<bool>(),
         arb_subset(TIERS),
         arb_subset(MISSIONS),
         arb_subset(PLANETS),
         arb_mode(),
-        any::<bool>(),
+        arb_storm_mode(),
     )
-        .prop_map(|(tiers, mission_types, planets, mode, include_storms)| WatchRule {
+        .prop_map(|(enabled, tiers, mission_types, planets, mode, storms)| WatchRule {
+            enabled,
             tiers,
             mission_types,
             planets,
             mode,
-            include_storms,
+            storms,
         })
 }
 
@@ -395,14 +970,16 @@ fn mk_catalog(labels: Vec<String>) -> Vec<Candidate> {
 }
 
 proptest! {
-${tests}
+${propertyTests}
 }
+
+${exampleTests}
 `;
 
 // ---- SPEC.md生成 ----
 const labelNote: Record<string, string> = {
   "property-tested": "proptestオラクルで機械検証",
-  "example-tested": "手書きexampleテストで検証",
+  "example-tested": "具体例テストで機械検証",
   manual: "手動確認(残余)",
 };
 
@@ -422,8 +999,10 @@ const specMd = `# ${spec.title}
 > 保証の勾配: このプロジェクトの機械保証の最上位は property-based test である。
 > proven(証明) / model-checked(モデル検査) の条項は存在しない。勾配を平らに見せない。
 >
-> フィルタの意味論はルールOR: 設定は監視ルール(WatchRule)のリストで、亀裂が
-> どれか1つのルールに合致すれば通知・表示対象になる。ルール内はAND。
+> フィルタの意味論は有効ルールOR: 設定は監視ルール(WatchRule)のリストで、亀裂が
+> enabled=trueのどれか1つのルールに合致すれば通知・表示対象になる。
+> enabled=falseのルールは保存・編集できるがruntime判定には参加しない。ルール内はAND。
+> UIのedit focusはruntime activationとは独立する。
 
 ## 条項一覧
 

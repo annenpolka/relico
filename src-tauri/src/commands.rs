@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 use tokio::sync::watch;
 
 use crate::config::AppConfig;
-use crate::filter::Mode;
+use crate::filter::{Mode, StormMode};
 use crate::model::Fissure;
 use crate::notify;
 use crate::palette::{self, Facet};
@@ -36,7 +36,7 @@ pub fn set_config(app: AppHandle, state: State<AppState>, config: AppConfig) -> 
     persist(&app, &state, config)
 }
 
-/// パレット候補のビュー(on状態はアクティブルール基準)
+/// パレット候補のビュー(on状態は編集中ルール基準。runtime enabledとは独立)
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CandView {
@@ -64,10 +64,19 @@ pub fn query_candidates(state: State<AppState>, q: String, active: usize) -> Vec
                 Facet::Mode => rule.is_some_and(|ru| {
                     matches!(
                         (&ru.mode, c.value.as_str()),
-                        (Mode::Normal, "Normal") | (Mode::SteelPath, "SteelPath") | (Mode::Both, "Both")
+                        (Mode::Normal, "Normal")
+                            | (Mode::SteelPath, "SteelPath")
+                            | (Mode::Both, "Both")
                     )
                 }),
-                Facet::Toggle => rule.is_some_and(|ru| ru.include_storms),
+                Facet::Storm => rule.is_some_and(|ru| {
+                    matches!(
+                        (ru.storms, c.value.as_str()),
+                        (StormMode::Exclude, "Exclude")
+                            | (StormMode::Include, "Include")
+                            | (StormMode::Only, "Only")
+                    )
+                }),
                 Facet::Action => c.value == "pause" && cfg.paused,
             };
             CandView {
@@ -137,6 +146,27 @@ pub fn clear_filter(app: AppHandle, state: State<AppState>) -> Result<AppConfig,
     Ok(cfg)
 }
 
+/// ルールの通知参加状態を保存する。編集フォーカスとは独立。SPEC: EDT-001
+#[tauri::command]
+pub fn set_rule_enabled(
+    app: AppHandle,
+    state: State<AppState>,
+    index: usize,
+    enabled: bool,
+) -> Result<AppConfig, String> {
+    let mut cfg = state.cfg_tx.borrow().clone();
+    let mut editor = palette::EditorState {
+        rules: cfg.rules.clone(),
+        active: index.min(cfg.rules.len().saturating_sub(1)),
+    };
+    if !palette::set_rule_enabled(&mut editor, index, enabled) {
+        return Err(format!("未知のルールindex: {index}"));
+    }
+    cfg.rules = editor.rules;
+    persist(&app, &state, cfg.clone())?;
+    Ok(cfg)
+}
+
 #[tauri::command]
 pub fn get_autostart(app: AppHandle) -> Result<bool, String> {
     use tauri_plugin_autostart::ManagerExt;
@@ -161,14 +191,11 @@ pub fn get_status(state: State<AppState>) -> StatusSnapshot {
 
 /// MAN-001 / MAN-002 の確認手段。ダミー亀裂で通知経路を発火する
 #[tauri::command]
-pub async fn test_notification(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
+pub async fn test_notification(state: State<'_, AppState>) -> Result<String, String> {
     let cfg = state.cfg_tx.borrow().clone();
     let now = Utc::now();
     let dummy = Fissure {
-        id: format!("test-{}", now.timestamp()),
+        id: format!("test-{}", now.timestamp_millis()),
         activation: now,
         expiry: now + Duration::minutes(30),
         node: "Test Node (Void)".to_string(),
@@ -180,21 +207,40 @@ pub async fn test_notification(
         is_hard: true,
     };
 
-    let mut sent = vec![];
+    let mut outcomes = vec![];
+    let mut notes = vec![];
     if cfg.desktop_notification {
-        notify::desktop(&app, &dummy);
-        sent.push("desktop");
+        match notify::desktop(&dummy, now, true).await {
+            Ok(receipt) => {
+                outcomes.push(notify::NotificationOutcome::Requested {
+                    destination: "desktop",
+                });
+                if let Some(warning) = receipt.warning {
+                    notes.push(warning);
+                }
+            }
+            Err(reason) => outcomes.push(notify::NotificationOutcome::Failed {
+                destination: "desktop",
+                reason,
+            }),
+        }
     }
     if let Some(url) = cfg.discord_webhook_url.as_deref() {
         if !url.is_empty() {
-            notify::discord(&state.client, url, &dummy)
-                .await
-                .map_err(|e| format!("Discord送信失敗: {e}"))?;
-            sent.push("discord");
+            match notify::discord(&state.client, url, &dummy).await {
+                Ok(_) => outcomes.push(notify::NotificationOutcome::Requested {
+                    destination: "discord",
+                }),
+                Err(reason) => outcomes.push(notify::NotificationOutcome::Failed {
+                    destination: "discord",
+                    reason,
+                }),
+            }
         }
     }
-    if sent.is_empty() {
-        return Err("通知先が1つも有効になっていない".to_string());
+    let mut summary = notify::summarize_test_outcomes(&outcomes)?;
+    if !notes.is_empty() {
+        summary.push_str(&format!("（{}）", notes.join(" / ")));
     }
-    Ok(format!("送信OK: {}", sent.join(" + ")))
+    Ok(summary)
 }

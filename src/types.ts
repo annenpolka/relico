@@ -2,14 +2,16 @@
 // 判定・スコアリングのロジックはRust側にのみ存在する。ここは型だけ。
 
 export type Mode = "Normal" | "SteelPath" | "Both";
-export type Facet = "tier" | "mission" | "planet" | "mode" | "toggle" | "action";
+export type StormMode = "Exclude" | "Include" | "Only";
+export type Facet = "tier" | "mission" | "planet" | "mode" | "storm" | "action";
 
 export interface WatchRule {
+  enabled: boolean;
   tiers: string[];
   missionTypes: string[];
   planets: string[];
   mode: Mode;
-  includeStorms: boolean;
+  storms: StormMode;
 }
 
 export interface AppConfig {
@@ -32,6 +34,8 @@ export interface Fissure {
   tierNum: number;
   isStorm: boolean;
   isHard: boolean;
+  /** Rustの既存extract_planetでnodeから抽出した表示用の惑星名 */
+  planet: string | null;
 }
 
 export interface StatusSnapshot {
@@ -45,7 +49,7 @@ export interface StatusSnapshot {
   paused: boolean;
 }
 
-/** パレット候補(on状態はアクティブルール基準) */
+/** パレット候補(on状態は編集中ルール基準。runtime enabledとは独立) */
 export interface CandView {
   id: string;
   label: string;

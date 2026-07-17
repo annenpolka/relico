@@ -30,10 +30,14 @@ pub struct TrayHandles {
 }
 
 pub fn watch_line(cfg: &AppConfig) -> String {
-    match cfg.rules.len() {
-        0 => "WATCH: NO RULES".to_string(),
-        1 => format!("WATCH: {}", palette::rule_summary(&cfg.rules[0])),
-        n => format!("WATCH: {n} RULES"),
+    let enabled: Vec<_> = cfg.rules.iter().filter(|rule| rule.enabled).collect();
+    match enabled.len() {
+        0 => "WATCH: NO ENABLED RULES".to_string(),
+        1 if cfg.rules.len() == 1 => {
+            format!("WATCH: {}", palette::rule_summary(enabled[0]))
+        }
+        n if n == cfg.rules.len() => format!("WATCH: {n} RULES"),
+        n => format!("WATCH: {n}/{} RULES", cfg.rules.len()),
     }
 }
 
@@ -82,18 +86,55 @@ fn toggle_pause(app: &AppHandle) {
     let _ = state.cfg_tx.send(cfg);
 }
 
+#[cfg(target_os = "macos")]
+fn set_console_activation_policy(app: &AppHandle, visible: bool) {
+    let policy = if visible {
+        tauri::ActivationPolicy::Regular
+    } else {
+        tauri::ActivationPolicy::Accessory
+    };
+    if let Err(error) = app.set_activation_policy(policy) {
+        eprintln!("activation policy update failed: {error}");
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_console_activation_policy(_app: &AppHandle, _visible: bool) {}
+
+fn show_console(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        eprintln!("main console window not found");
+        return;
+    };
+
+    set_console_activation_policy(app, true);
+    #[cfg(target_os = "macos")]
+    if let Err(error) = app.show() {
+        eprintln!("application show failed: {error}");
+    }
+    if let Err(error) = window.show() {
+        eprintln!("console show failed: {error}");
+        set_console_activation_policy(app, false);
+        return;
+    }
+    if let Err(error) = window.unminimize() {
+        eprintln!("console unminimize failed: {error}");
+    }
+    if let Err(error) = window.set_focus() {
+        eprintln!("console focus failed: {error}");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
         .setup(|app| {
-            #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            set_console_activation_policy(app.handle(), true);
 
             let config_dir = app.path().app_config_dir()?;
             let config_path = config_dir.join("config.json");
@@ -142,18 +183,20 @@ pub fn run() {
                 pause: pause_item,
             });
 
+            #[cfg(target_os = "macos")]
+            let tray_icon =
+                tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+            #[cfg(not(target_os = "macos"))]
+            let tray_icon = app.default_window_icon().unwrap().clone();
+
             TrayIconBuilder::with_id("main")
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(tray_icon)
+                .icon_as_template(cfg!(target_os = "macos"))
                 .tooltip("RELICO")
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "open" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
-                    }
+                    "open" => show_console(app),
                     "pause" => toggle_pause(app),
                     "quit" => app.exit(0),
                     _ => {}
@@ -171,7 +214,10 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                match window.hide() {
+                    Ok(()) => set_console_activation_policy(window.app_handle(), false),
+                    Err(error) => eprintln!("console hide failed: {error}"),
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -183,8 +229,19 @@ pub fn run() {
             commands::set_autostart,
             commands::query_candidates,
             commands::apply_candidate,
-            commands::clear_filter
+            commands::clear_filter,
+            commands::set_rule_enabled
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = event
+            {
+                show_console(app);
+            }
+        });
 }

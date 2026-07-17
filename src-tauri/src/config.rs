@@ -56,6 +56,9 @@ impl AppConfig {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)?;
         }
-        fs::write(path, serde_json::to_string_pretty(self).expect("serialize config"))
+        fs::write(
+            path,
+            serde_json::to_string_pretty(self).expect("serialize config"),
+        )
     }
 }

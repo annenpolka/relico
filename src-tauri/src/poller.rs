@@ -1,9 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::watch;
 
@@ -16,11 +16,35 @@ use crate::notify;
 
 pub const API_URL: &str = "https://api.warframestat.us/pc/fissures";
 
+/// raw APIモデルを変えず、UI表示にだけ既存の惑星抽出結果を付加する。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FissureView<'a> {
+    #[serde(flatten)]
+    fissure: &'a Fissure,
+    planet: Option<String>,
+}
+
+fn serialize_fissures<S>(fissures: &[Fissure], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    fissures
+        .iter()
+        .map(|fissure| FissureView {
+            fissure,
+            planet: filter::extract_planet(&fissure.node),
+        })
+        .collect::<Vec<_>>()
+        .serialize(serializer)
+}
+
 /// フロントエンドとトレイに配る現在状態
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusSnapshot {
     /// フィルタ合致亀裂のみ(SPEC: VIS-001)。消滅が近い順
+    #[serde(serialize_with = "serialize_fissures")]
     pub fissures: Vec<Fissure>,
     pub api_ok: bool,
     pub last_error: Option<String>,
@@ -89,6 +113,19 @@ pub fn select_notifications(
     }
 }
 
+/// 起動直後または有効な通知scope変更後は、現存分を通知せず既知IDとしてseedする。
+/// 無効ルールの編集や通知先だけの変更はscope変更ではない。SPEC: POL-003
+pub fn notification_scope_changed(
+    previous: Option<&FilterSettings>,
+    current: &FilterSettings,
+) -> bool {
+    let current = filter::enabled_projection(current);
+    match previous {
+        None => true,
+        Some(previous) => filter::enabled_projection(previous) != current,
+    }
+}
+
 /// 常駐ポーリングループ。設定変更(watch)で即時に再評価する
 pub async fn run(
     app: AppHandle,
@@ -98,7 +135,7 @@ pub async fn run(
 ) {
     let client = http_client();
     let mut backoff = Backoff::new(60, 600);
-    let mut seeded = false;
+    let mut seeded_scope: Option<FilterSettings> = None;
 
     loop {
         let cfg = cfg_rx.borrow().clone();
@@ -109,9 +146,11 @@ pub async fn run(
             });
             3600 // 再開はwatch変更で即起きる
         } else {
-            match poll_once(&app, &client, &cfg, &state, &notified_path, !seeded).await {
+            let current_scope = cfg.filter();
+            let seed_only = notification_scope_changed(seeded_scope.as_ref(), &current_scope);
+            match poll_once(&app, &client, &cfg, &state, &notified_path, seed_only).await {
                 Ok(()) => {
-                    seeded = true;
+                    seeded_scope = Some(filter::enabled_projection(&current_scope));
                     backoff.on_success();
                     cfg.effective_poll_secs()
                 }
@@ -145,7 +184,7 @@ async fn poll_once(
     client: &reqwest::Client,
     cfg: &AppConfig,
     state: &Arc<Mutex<PollerState>>,
-    notified_path: &PathBuf,
+    notified_path: &Path,
     seed_only: bool,
 ) -> Result<(), String> {
     let fissures: Vec<Fissure> = client
@@ -186,7 +225,7 @@ async fn poll_once(
     emit_snapshot(app, cfg, state, |_| {});
 
     for f in &to_notify {
-        notify::send(app, client, cfg, f).await;
+        notify::send(client, cfg, f).await;
     }
     Ok(())
 }

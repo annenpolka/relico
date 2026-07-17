@@ -1,9 +1,9 @@
 //! ファジーパレット: 候補カタログ、fzf風スコアラ、ルールの充足可能性と上書き解決。
-//! SPEC: FZY-001..004 / SAT-001 / CLR-001
+//! SPEC: FZY-001..004 / SAT-001 / EDT-001..002 / CLR-001
 
 use serde::{Deserialize, Serialize};
 
-use crate::filter::{Mode, WatchRule};
+use crate::filter::{Mode, StormMode, WatchRule, PROXIMA_PLANET_ALIASES};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -12,7 +12,7 @@ pub enum Facet {
     Mission,
     Planet,
     Mode,
-    Toggle,
+    Storm,
     Action,
 }
 
@@ -30,7 +30,10 @@ pub const TIERS: &[&str] = &["Lith", "Meso", "Neo", "Axi", "Requiem", "Omnia"];
 
 // 日本語aliasは暫定(日本語クライアントの正式訳の確認が要る)。ローマ字・略語併記
 const MISSIONS: &[(&str, &[&str])] = &[
-    ("Survival", &["生存", "seizon", "surv"]),
+    (
+        "Survival",
+        &["耐久", "生存", "taikyu", "taikyuu", "seizon", "surv"],
+    ),
     ("Defense", &["防衛", "boei", "def"]),
     ("Mobile Defense", &["モバイル防衛", "md"]),
     ("Capture", &["確保", "kakuho", "cap"]),
@@ -38,7 +41,10 @@ const MISSIONS: &[(&str, &[&str])] = &[
     ("Rescue", &["救出", "kyushutsu"]),
     ("Sabotage", &["妨害", "bougai", "sab"]),
     ("Spy", &["潜入", "sennyu"]),
-    ("Disruption", &["ディスラプション", "kakuran", "dis"]),
+    (
+        "Disruption",
+        &["分裂", "ディスラプション", "bunretsu", "kakuran", "dis"],
+    ),
     ("Excavation", &["発掘", "hakkutsu", "exc"]),
     ("Interception", &["傍受", "boju", "int"]),
     ("Hijack", &["ハイジャック"]),
@@ -99,7 +105,11 @@ pub fn catalog() -> Vec<Candidate> {
         });
     }
     for (label, value, aliases) in [
-        ("NORMAL ONLY", "Normal", vec!["通常のみ", "tsujou", "normal"]),
+        (
+            "NORMAL ONLY",
+            "Normal",
+            vec!["通常のみ", "tsujou", "normal"],
+        ),
         (
             "HARD ONLY",
             "SteelPath",
@@ -115,13 +125,31 @@ pub fn catalog() -> Vec<Candidate> {
             facet: Facet::Mode,
         });
     }
-    out.push(Candidate {
-        id: "toggle:storms".to_string(),
-        label: "INCL. STORMS".to_string(),
-        value: "storms".to_string(),
-        aliases: vec!["ストーム".into(), "storm".into(), "void storm".into()],
-        facet: Facet::Toggle,
-    });
+    for (label, value, aliases) in [
+        (
+            "EXCL. VOID STORMS",
+            "Exclude",
+            vec!["VOID嵐除外", "嵐除外", "storm exclude", "no storm"],
+        ),
+        (
+            "INCL. VOID STORMS",
+            "Include",
+            vec!["VOID嵐含む", "嵐含む", "storm", "void storm"],
+        ),
+        (
+            "VOID STORMS ONLY",
+            "Only",
+            vec!["VOID嵐のみ", "嵐のみ", "storm only", "void storm only"],
+        ),
+    ] {
+        out.push(Candidate {
+            id: format!("storm:{value}"),
+            label: label.to_string(),
+            value: value.to_string(),
+            aliases: aliases.into_iter().map(String::from).collect(),
+            facet: Facet::Storm,
+        });
+    }
     for (m, aliases) in MISSIONS {
         out.push(Candidate {
             id: format!("mission:{m}"),
@@ -206,8 +234,11 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<(i64, Vec<usize>)> {
     score -= (idx[idx.len() - 1] - idx[0] - (idx.len() - 1)) as i64;
     score -= t.len() as i64 / 8;
     let eq_full = t.len() == q.len() && t.iter().zip(&q).all(|(&a, &b)| char_eq_fold(a, b));
-    let eq_prefix =
-        t.len() >= q.len() && t[..q.len()].iter().zip(&q).all(|(&a, &b)| char_eq_fold(a, b));
+    let eq_prefix = t.len() >= q.len()
+        && t[..q.len()]
+            .iter()
+            .zip(&q)
+            .all(|(&a, &b)| char_eq_fold(a, b));
     if eq_full {
         score += 100;
     } else if eq_prefix {
@@ -263,9 +294,14 @@ pub fn query_catalog(catalog: &[Candidate], query: &str) -> Vec<Ranked> {
 /// ゲーム上あり得る(tier, mission, planet, 鋼, storm)の組か。
 /// 確信のある制約のみ符号化し、未知の値は互換とみなす(過剰な上書きを防ぐ)
 fn domain_possible(tier: &str, mission: &str, planet: &str, hard: bool, storm: bool) -> bool {
-    let proxima = planet.ends_with("Proxima");
-    if storm != proxima {
-        return false; // ボイドストームはProxima星系のみ、Proximaはストームのみ
+    let proxima_label = PROXIMA_PLANET_ALIASES
+        .iter()
+        .any(|&(configured, _)| planet == configured);
+    let proxima_api_name = PROXIMA_PLANET_ALIASES
+        .iter()
+        .any(|&(_, api_planet)| planet == api_planet);
+    if (storm && !(proxima_label || proxima_api_name)) || (!storm && proxima_label) {
+        return false; // VOID嵐はProxima星系のみ。APIのnodeは基底惑星名を返す
     }
     if storm && hard {
         return false; // 鋼のボイドストームは存在しない
@@ -306,10 +342,10 @@ pub fn satisfiable(rule: &WatchRule) -> bool {
         Mode::SteelPath => &[true],
         Mode::Both => &[false, true],
     };
-    let storms: &[bool] = if rule.include_storms {
-        &[false, true]
-    } else {
-        &[false]
+    let storms: &[bool] = match rule.storms {
+        StormMode::Exclude => &[false],
+        StormMode::Include => &[false, true],
+        StormMode::Only => &[true],
     };
     for t in &tiers {
         for m in &missions {
@@ -350,6 +386,22 @@ pub fn clear(state: &mut EditorState) {
     state.active = 0;
 }
 
+/// 通知への参加状態だけを変更する。編集対象や条件本体は変えない。SPEC: EDT-001
+pub fn set_rule_enabled(state: &mut EditorState, index: usize, enabled: bool) -> bool {
+    let Some(rule) = state.rules.get_mut(index) else {
+        return false;
+    };
+    rule.enabled = enabled;
+    true
+}
+
+fn draft_rule() -> WatchRule {
+    WatchRule {
+        enabled: false,
+        ..WatchRule::default()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Axis {
     Tiers,
@@ -364,7 +416,7 @@ enum Changed {
     Storms,
 }
 
-fn axis_members<'a>(rule: &'a WatchRule, axis: Axis) -> &'a Vec<String> {
+fn axis_members(rule: &WatchRule, axis: Axis) -> &Vec<String> {
     match axis {
         Axis::Tiers => &rule.tiers,
         Axis::Missions => &rule.mission_types,
@@ -398,7 +450,7 @@ pub fn apply(state: &mut EditorState, cand: &Candidate) {
     if cand.facet == Facet::Action {
         match cand.value.as_str() {
             "new-rule" => {
-                state.rules.push(WatchRule::default());
+                state.rules.push(draft_rule());
                 state.active = state.rules.len() - 1;
             }
             "delete-rule" => {
@@ -415,7 +467,7 @@ pub fn apply(state: &mut EditorState, cand: &Candidate) {
     }
 
     if state.rules.is_empty() {
-        state.rules.push(WatchRule::default());
+        state.rules.push(draft_rule());
         state.active = 0;
     }
     state.active = state.active.min(state.rules.len() - 1);
@@ -442,8 +494,12 @@ pub fn apply(state: &mut EditorState, cand: &Candidate) {
             };
             Changed::Mode
         }
-        Facet::Toggle => {
-            rule.include_storms = !rule.include_storms;
+        Facet::Storm => {
+            rule.storms = match cand.value.as_str() {
+                "Include" => StormMode::Include,
+                "Only" => StormMode::Only,
+                _ => StormMode::Exclude,
+            };
             Changed::Storms
         }
         Facet::Action => unreachable!(),
@@ -456,10 +512,10 @@ fn resolve(rule: &mut WatchRule, changed: Changed) {
     if satisfiable(rule) {
         return;
     }
-    // 1) storms緩和(=trueは常により寛容)
-    if changed != Changed::Storms && !rule.include_storms {
+    // 1) storms緩和(Includeは通常/VOID嵐の両方を許す)
+    if changed != Changed::Storms && rule.storms != StormMode::Include {
         let mut t = rule.clone();
-        t.include_storms = true;
+        t.storms = StormMode::Include;
         if satisfiable(&t) {
             *rule = t;
             return;
@@ -473,8 +529,8 @@ fn resolve(rule: &mut WatchRule, changed: Changed) {
             *rule = t;
             return;
         }
-        if changed != Changed::Storms && !t.include_storms {
-            t.include_storms = true;
+        if changed != Changed::Storms && t.storms != StormMode::Include {
+            t.storms = StormMode::Include;
             if satisfiable(&t) {
                 *rule = t;
                 return;
@@ -484,7 +540,7 @@ fn resolve(rule: &mut WatchRule, changed: Changed) {
     // 3) 変更していない軸から、変更内容と共存できないメンバーを落とす(空=全対象)
     let mut t = rule.clone();
     if changed != Changed::Storms {
-        t.include_storms = true;
+        t.storms = StormMode::Include;
     }
     if changed != Changed::Mode {
         t.mode = Mode::Both;
@@ -498,7 +554,7 @@ fn resolve(rule: &mut WatchRule, changed: Changed) {
             .filter(|m| {
                 let mut probe = WatchRule {
                     mode: t.mode,
-                    include_storms: t.include_storms,
+                    storms: t.storms,
                     ..WatchRule::default()
                 };
                 set_axis(&mut probe, axis, vec![(*m).clone()]);
@@ -514,8 +570,9 @@ fn resolve(rule: &mut WatchRule, changed: Changed) {
     if !satisfiable(&t) {
         // 最終手段: 変更した内容だけ残して他は全対象
         let mut u = WatchRule {
+            enabled: t.enabled,
             mode: t.mode,
-            include_storms: t.include_storms,
+            storms: t.storms,
             ..WatchRule::default()
         };
         if let Changed::Axis(ca) = changed {
@@ -549,8 +606,10 @@ pub fn rule_summary(rule: &WatchRule) -> String {
     if !rule.planets.is_empty() {
         s.push_str(&format!("/P{}", rule.planets.len()));
     }
-    if rule.include_storms {
-        s.push_str("/STORM");
+    match rule.storms {
+        StormMode::Exclude => {}
+        StormMode::Include => s.push_str("/+STORM"),
+        StormMode::Only => s.push_str("/STORM ONLY"),
     }
     s
 }

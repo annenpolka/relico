@@ -57,6 +57,9 @@ impl NotifiedSet {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)?;
         }
-        fs::write(path, serde_json::to_string(self).expect("serialize notified set"))
+        fs::write(
+            path,
+            serde_json::to_string(self).expect("serialize notified set"),
+        )
     }
 }

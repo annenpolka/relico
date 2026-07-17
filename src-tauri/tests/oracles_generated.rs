@@ -8,8 +8,9 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use proptest::prelude::*;
 use relico_lib::backoff::Backoff;
 use relico_lib::dedup::NotifiedSet;
-use relico_lib::filter::{self, FilterSettings, Mode, WatchRule};
+use relico_lib::filter::{self, FilterSettings, Mode, StormMode, WatchRule};
 use relico_lib::model::Fissure;
+use relico_lib::notify::{self, NotificationOutcome};
 use relico_lib::palette::{self, Candidate, Facet};
 use relico_lib::poller;
 
@@ -32,6 +33,14 @@ fn arb_mode() -> impl Strategy<Value = Mode> {
     prop_oneof![Just(Mode::Normal), Just(Mode::SteelPath), Just(Mode::Both)]
 }
 
+fn arb_storm_mode() -> impl Strategy<Value = StormMode> {
+    prop_oneof![
+        Just(StormMode::Exclude),
+        Just(StormMode::Include),
+        Just(StormMode::Only),
+    ]
+}
+
 fn arb_subset(pool: &'static [&'static str]) -> impl Strategy<Value = Vec<String>> {
     proptest::sample::subsequence(pool.to_vec(), 0..=pool.len())
         .prop_map(|v| v.into_iter().map(String::from).collect())
@@ -39,18 +48,20 @@ fn arb_subset(pool: &'static [&'static str]) -> impl Strategy<Value = Vec<String
 
 fn arb_rule() -> impl Strategy<Value = WatchRule> {
     (
+        any::<bool>(),
         arb_subset(TIERS),
         arb_subset(MISSIONS),
         arb_subset(PLANETS),
         arb_mode(),
-        any::<bool>(),
+        arb_storm_mode(),
     )
-        .prop_map(|(tiers, mission_types, planets, mode, include_storms)| WatchRule {
+        .prop_map(|(enabled, tiers, mission_types, planets, mode, storms)| WatchRule {
+            enabled,
             tiers,
             mission_types,
             planets,
             mode,
-            include_storms,
+            storms,
         })
 }
 
@@ -121,12 +132,77 @@ proptest! {
         prop_assert!(!filter::rule_matches(&rule, &f), "SPEC FLT-002 違反: mode=通常のみ のルールは、isHard=true の亀裂にどんな入力でも合致しない");
     }
 
-    /// FLT-003: include_storms=false のルールは、isStorm=true の亀裂(ボイドストーム)に合致しない
+    /// FLT-003: storms=除外 のルールは、isStorm=true の亀裂(VOID嵐)に合致しない
     #[test]
     fn flt_003(mut rule in arb_rule(), mut f in arb_fissure()) {
-        rule.include_storms = false;
+        rule.storms = StormMode::Exclude;
         f.is_storm = true;
-        prop_assert!(!filter::rule_matches(&rule, &f), "SPEC FLT-003 違反: include_storms=false のルールは、isStorm=true の亀裂(ボイドストーム)に合致しない");
+        prop_assert!(!filter::rule_matches(&rule, &f), "SPEC FLT-003 違反: storms=除外 のルールは、isStorm=true の亀裂(VOID嵐)に合致しない");
+    }
+
+    /// FLT-010: storms=嵐のみ のルールは、isStorm=false の通常亀裂に合致しない(storm only指定)
+    #[test]
+    fn flt_010(mut rule in arb_rule(), mut f in arb_fissure()) {
+        rule.storms = StormMode::Only;
+        f.is_storm = false;
+        prop_assert!(!filter::rule_matches(&rule, &f), "SPEC FLT-010 違反: storms=嵐のみ のルールは、isStorm=false の通常亀裂に合致しない(storm only指定)");
+    }
+
+    /// FLT-011: 他の条件が全対象なら、storms=除外/含む/嵐のみ は isStorm=false/true に対してそれぞれ (合致/棄却)/(合致/合致)/(棄却/合致) となる
+    #[test]
+    fn flt_011(mut f in arb_fissure()) {
+        let mut rule = WatchRule {
+            mode: Mode::Both,
+            ..WatchRule::default()
+        };
+        for (storms, normal_matches, storm_matches) in [
+            (StormMode::Exclude, true, false),
+            (StormMode::Include, true, true),
+            (StormMode::Only, false, true),
+        ] {
+            rule.storms = storms;
+            f.is_storm = false;
+            prop_assert_eq!(
+                filter::rule_matches(&rule, &f),
+                normal_matches,
+                "SPEC FLT-011 違反: 他の条件が全対象なら、storms=除外/含む/嵐のみ は isStorm=false/true に対してそれぞれ (合致/棄却)/(合致/合致)/(棄却/合致) となる (mode={:?}, isStorm=false)",
+                storms,
+            );
+            f.is_storm = true;
+            prop_assert_eq!(
+                filter::rule_matches(&rule, &f),
+                storm_matches,
+                "SPEC FLT-011 違反: 他の条件が全対象なら、storms=除外/含む/嵐のみ は isStorm=false/true に対してそれぞれ (合致/棄却)/(合致/合致)/(棄却/合致) となる (mode={:?}, isStorm=true)",
+                storms,
+            );
+        }
+    }
+
+    /// FLT-012: VOID嵐ではUIのEarth/Venus/Saturn/Neptune/Pluto/Veil Proxima条件がAPI nodeの基底名Earth/Venus/Saturn/Neptune/Pluto/Veilに合致するが、通常亀裂にはProxima別名を適用しない
+    #[test]
+    fn flt_012(mut f in arb_fissure(), pick in any::<prop::sample::Index>()) {
+        let aliases = [
+            ("Earth Proxima", "Earth"),
+            ("Venus Proxima", "Venus"),
+            ("Saturn Proxima", "Saturn"),
+            ("Neptune Proxima", "Neptune"),
+            ("Pluto Proxima", "Pluto"),
+            ("Veil Proxima", "Veil"),
+        ];
+        let (configured, api_planet) = aliases[pick.index(aliases.len())];
+        let mut rule = WatchRule {
+            planets: vec![configured.to_string()],
+            mode: Mode::Both,
+            storms: StormMode::Only,
+            ..WatchRule::default()
+        };
+        f.is_storm = true;
+        f.node = format!("Node ({api_planet})");
+        prop_assert!(filter::rule_matches(&rule, &f), "SPEC FLT-012 違反: VOID嵐ではUIのEarth/Venus/Saturn/Neptune/Pluto/Veil Proxima条件がAPI nodeの基底名Earth/Venus/Saturn/Neptune/Pluto/Veilに合致するが、通常亀裂にはProxima別名を適用しない (VOID嵐が不一致)");
+
+        rule.storms = StormMode::Include;
+        f.is_storm = false;
+        prop_assert!(!filter::rule_matches(&rule, &f), "SPEC FLT-012 違反: VOID嵐ではUIのEarth/Venus/Saturn/Neptune/Pluto/Veil Proxima条件がAPI nodeの基底名Earth/Venus/Saturn/Neptune/Pluto/Veilに合致するが、通常亀裂にはProxima別名を適用しない (通常亀裂へ別名を誤適用)");
     }
 
     /// FLT-004: ルールのtiersが空のとき、tierを理由に棄却しない(空=全tier対象)
@@ -179,7 +255,7 @@ proptest! {
         prop_assert!(!filter::matches(&s, &f, now), "SPEC FLT-007 違反: 残り時間がmin_remaining_secs未満の亀裂は、ルール構成に依らず合致しない(期限切れ含む)");
     }
 
-    /// FLT-008: ルール1つの設定では、全体合致 = (残り時間OK ∧ そのルールが合致)
+    /// FLT-008: ルール1つの設定では、全体合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致)
     #[test]
     fn flt_008(rule in arb_rule(), f in arb_fissure(), min in 0u64..1800) {
         let now = base_now();
@@ -187,20 +263,126 @@ proptest! {
         let remaining_ok = f.expiry.signed_duration_since(now).num_seconds() >= min as i64;
         prop_assert_eq!(
             filter::matches(&s, &f, now),
-            remaining_ok && filter::rule_matches(&rule, &f),
-            "SPEC FLT-008 違反: ルール1つの設定では、全体合致 = (残り時間OK ∧ そのルールが合致)"
+            remaining_ok && rule.enabled && filter::rule_matches(&rule, &f),
+            "SPEC FLT-008 違反: ルール1つの設定では、全体合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致)"
         );
     }
 
-    /// FLT-009: ルールを追加しても、それまで合致していた亀裂は合致し続ける(OR単調性)
+    /// FLT-009: 有効ルールを追加しても、それまで合致していた亀裂は合致し続ける(有効ルールORの単調性)
     #[test]
-    fn flt_009(s in arb_settings(), extra in arb_rule(), f in arb_fissure()) {
+    fn flt_009(s in arb_settings(), mut extra in arb_rule(), f in arb_fissure()) {
         let now = base_now();
         if filter::matches(&s, &f, now) {
+            extra.enabled = true;
             let mut bigger = s.clone();
             bigger.rules.push(extra);
-            prop_assert!(filter::matches(&bigger, &f, now), "SPEC FLT-009 違反: ルールを追加しても、それまで合致していた亀裂は合致し続ける(OR単調性)");
+            prop_assert!(filter::matches(&bigger, &f, now), "SPEC FLT-009 違反: 有効ルールを追加しても、それまで合致していた亀裂は合致し続ける(有効ルールORの単調性)");
         }
+    }
+
+    /// FLT-013: 全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。disabledルールだけ、またはルールなしでは合致しない
+    #[test]
+    fn flt_013(s in arb_settings(), f in arb_fissure()) {
+        let now = base_now();
+        let remaining_ok = f.expiry.signed_duration_since(now).num_seconds()
+            >= s.min_remaining_secs as i64;
+        let enabled_or = s.rules.iter().any(|rule|
+            rule.enabled && filter::rule_matches(rule, &f)
+        );
+        prop_assert_eq!(
+            filter::matches(&s, &f, now),
+            remaining_ok && enabled_or,
+            "SPEC FLT-013 違反: 全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。disabledルールだけ、またはルールなしでは合致しない (有効ルールORの完全な等式)"
+        );
+
+        let mut all_disabled = s.clone();
+        for rule in &mut all_disabled.rules {
+            rule.enabled = false;
+        }
+        let mut valid_fissure = f.clone();
+        valid_fissure.expiry = now + Duration::seconds(s.min_remaining_secs as i64 + 1);
+        prop_assert!(
+            !filter::matches(&all_disabled, &valid_fissure, now),
+            "SPEC FLT-013 違反: 全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。disabledルールだけ、またはルールなしでは合致しない (全ルールdisabledなのに合致した)"
+        );
+
+        let empty = FilterSettings {
+            rules: vec![],
+            min_remaining_secs: s.min_remaining_secs,
+        };
+        prop_assert!(
+            !filter::matches(&empty, &valid_fissure, now),
+            "SPEC FLT-013 違反: 全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。disabledルールだけ、またはルールなしでは合致しない (ルールなしなのに合致した)"
+        );
+    }
+
+    /// FLT-014: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される
+    #[test]
+    fn flt_014(
+        s in arb_settings(),
+        mut disabled in arb_rule(),
+        mut edited_disabled in arb_rule(),
+        mut enabled in arb_rule(),
+    ) {
+        let base = filter::enabled_projection(&s);
+        let expected: Vec<WatchRule> = s.rules.iter()
+            .filter(|rule| rule.enabled)
+            .cloned()
+            .collect();
+        prop_assert_eq!(base.rules.as_slice(), expected.as_slice(), "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (有効ルールと一致しない)");
+        prop_assert_eq!(base.min_remaining_secs, s.min_remaining_secs, "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (min_remaining_secsを保持しない)");
+
+        disabled.enabled = false;
+        let mut with_disabled = s.clone();
+        with_disabled.rules.push(disabled);
+        let added = filter::enabled_projection(&with_disabled);
+        prop_assert_eq!(added.rules.as_slice(), base.rules.as_slice(), "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (disabled追加で射影が変化した)");
+        prop_assert_eq!(added.min_remaining_secs, base.min_remaining_secs, "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (disabled追加で時間条件が変化した)");
+
+        edited_disabled.enabled = false;
+        *with_disabled.rules.last_mut().expect("disabled ruleを追加済み") = edited_disabled;
+        let edited = filter::enabled_projection(&with_disabled);
+        prop_assert_eq!(edited.rules.as_slice(), base.rules.as_slice(), "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (disabled条件編集で射影が変化した)");
+        with_disabled.rules.pop();
+        let removed = filter::enabled_projection(&with_disabled);
+        prop_assert_eq!(removed.rules.as_slice(), base.rules.as_slice(), "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (disabled削除で射影が変化した)");
+
+        enabled.enabled = true;
+        let mut with_enabled = s.clone();
+        with_enabled.rules.push(enabled.clone());
+        let enabled_added = filter::enabled_projection(&with_enabled);
+        prop_assert_eq!(enabled_added.rules.len(), base.rules.len() + 1, "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (enabled追加が射影へ反映されない)");
+        prop_assert_eq!(enabled_added.rules.last(), Some(&enabled), "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (enabled追加の条件を保持しない)");
+
+        let toggled_rule = WatchRule {
+            enabled: false,
+            ..WatchRule::default()
+        };
+        let mut toggled = FilterSettings {
+            rules: vec![toggled_rule],
+            min_remaining_secs: s.min_remaining_secs,
+        };
+        prop_assert!(filter::enabled_projection(&toggled).rules.is_empty(), "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (disabledを射影へ含めた)");
+        toggled.rules[0].enabled = true;
+        prop_assert_eq!(filter::enabled_projection(&toggled).rules.len(), 1, "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (enabled切替が射影へ反映されない)");
+
+        let mut changed_condition = toggled.clone();
+        changed_condition.rules[0].tiers = vec!["__projection_changed__".to_string()];
+        prop_assert_ne!(
+            filter::enabled_projection(&toggled).rules,
+            filter::enabled_projection(&changed_condition).rules,
+            "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (有効ルール条件の変更が射影へ反映されない)"
+        );
+
+        let changed_min = FilterSettings {
+            rules: s.rules.clone(),
+            min_remaining_secs: s.min_remaining_secs + 1,
+        };
+        prop_assert_ne!(
+            filter::enabled_projection(&s).min_remaining_secs,
+            filter::enabled_projection(&changed_min).min_remaining_secs,
+            "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (min_remaining_secs変更が射影へ反映されない)"
+        );
     }
 
     /// DED-001: 同一亀裂idは任意のポーリング列で高々1回しか通知されない
@@ -231,6 +413,28 @@ proptest! {
         for i in 0..n_dead {
             prop_assert!(!set.contains(&format!("D{i}")), "SPEC DED-002 違反: pruneは生存中idの通知済み状態を保持し、期限切れidを除去する (期限切れidが残った)");
         }
+    }
+
+    /// DED-003: 同じ亀裂へ複数の有効ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない
+    #[test]
+    fn ded_003(mut f in arb_fissure()) {
+        let now = base_now();
+        f.expiry = now + Duration::hours(1);
+        f.is_storm = false;
+        let rule = WatchRule::default();
+        let settings = FilterSettings {
+            rules: vec![rule.clone(), rule],
+            min_remaining_secs: 0,
+        };
+        let visible = poller::visible_fissures(&settings, &[f.clone()], now);
+        prop_assert_eq!(visible.len(), 1, "SPEC DED-003 違反: 同じ亀裂へ複数の有効ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (複数ルール合致で一覧が重複した)");
+
+        let mut notified = NotifiedSet::new();
+        let first = poller::select_notifications(&mut notified, visible.clone(), false);
+        prop_assert_eq!(first.len(), 1, "SPEC DED-003 違反: 同じ亀裂へ複数の有効ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (最初の通知候補が1件でない)");
+        prop_assert_eq!(first[0].id.as_str(), f.id.as_str(), "SPEC DED-003 違反: 同じ亀裂へ複数の有効ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (別idを通知した)");
+        let second = poller::select_notifications(&mut notified, visible, false);
+        prop_assert!(second.is_empty(), "SPEC DED-003 違反: 同じ亀裂へ複数の有効ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (同じidを再通知した)");
     }
 
     /// PRS-001: 惑星抽出は任意文字列でパニックせず、"Node (Planet)" 形式でPlanetを返す (全入力でパニックしない)
@@ -269,16 +473,88 @@ proptest! {
         }
     }
 
-    /// VIS-001: 一覧に表示されるのはいずれかのルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない
+    /// POL-003: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (射影による変更判定)
+    #[test]
+    fn pol_003_projection(
+        previous in arb_settings(),
+        current in arb_settings(),
+        mut disabled in arb_rule(),
+    ) {
+        let previous_projection = filter::enabled_projection(&previous);
+        let current_projection = filter::enabled_projection(&current);
+        let expected = previous_projection.min_remaining_secs != current_projection.min_remaining_secs
+            || previous_projection.rules != current_projection.rules;
+        prop_assert_eq!(
+            poller::notification_scope_changed(Some(&previous), &current),
+            expected,
+            "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (enabled projectionとの差分と一致しない)"
+        );
+        prop_assert!(
+            poller::notification_scope_changed(None, &current),
+            "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (初回評価をscope changeと判定しない)"
+        );
+
+        disabled.enabled = false;
+        let mut disabled_only_change = previous.clone();
+        disabled_only_change.rules.push(disabled);
+        prop_assert!(
+            !poller::notification_scope_changed(Some(&previous), &disabled_only_change),
+            "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (disabled draft追加をscope changeと誤判定した)"
+        );
+    }
+
+    /// POL-003: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (scope change時のsilent seed)
+    #[test]
+    fn pol_003_silent_seed(mut f in arb_fissure()) {
+        let now = base_now();
+        f.expiry = now + Duration::hours(1);
+        f.is_storm = false;
+
+        let enabled_rule = WatchRule::default();
+        let mut disabled_rule = enabled_rule.clone();
+        disabled_rule.enabled = false;
+        let previous = FilterSettings {
+            rules: vec![disabled_rule],
+            min_remaining_secs: 0,
+        };
+        let current = FilterSettings {
+            rules: vec![enabled_rule],
+            min_remaining_secs: 0,
+        };
+        prop_assert!(
+            poller::notification_scope_changed(Some(&previous), &current),
+            "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (ルール有効化をscope changeと判定しない)"
+        );
+
+        let existing = poller::visible_fissures(&current, &[f.clone()], now);
+        prop_assert_eq!(existing.len(), 1, "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (現存合致亀裂を取得できない)");
+        let mut notified = NotifiedSet::new();
+        let seeded = poller::select_notifications(&mut notified, existing.clone(), true);
+        prop_assert!(seeded.is_empty(), "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (scope change直後の現存亀裂を一括通知した)");
+        prop_assert!(notified.contains(&f.id), "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (現存亀裂をsilent seedしていない)");
+        let repeated = poller::select_notifications(&mut notified, existing, false);
+        prop_assert!(repeated.is_empty(), "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (seed済み現存亀裂を次回通知した)");
+
+        let mut new_fissure = f.clone();
+        new_fissure.id = format!("{}-new", f.id);
+        let newly_visible = poller::visible_fissures(&current, &[new_fissure.clone()], now);
+        let fresh = poller::select_notifications(&mut notified, newly_visible.clone(), false);
+        prop_assert_eq!(fresh.len(), 1, "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (scope change後の新規idを通知候補にしない)");
+        prop_assert_eq!(fresh[0].id.as_str(), new_fissure.id.as_str(), "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (新規idを保持しない)");
+        let duplicate = poller::select_notifications(&mut notified, newly_visible, false);
+        prop_assert!(duplicate.is_empty(), "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (scope change後の新規idを再通知した)");
+    }
+
+    /// VIS-001: 一覧に表示されるのはいずれかの有効ルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない
     #[test]
     fn vis_001(s in arb_settings(), fs in proptest::collection::vec(arb_fissure(), 0..30)) {
         let now = base_now();
         let visible = poller::visible_fissures(&s, &fs, now);
         for f in &visible {
-            prop_assert!(filter::matches(&s, f, now), "SPEC VIS-001 違反: 一覧に表示されるのはいずれかのルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない (対象外が表示された)");
+            prop_assert!(filter::matches(&s, f, now), "SPEC VIS-001 違反: 一覧に表示されるのはいずれかの有効ルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない (対象外が表示された)");
         }
         for f in fs.iter().filter(|f| filter::matches(&s, f, now)) {
-            prop_assert!(visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 一覧に表示されるのはいずれかのルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない (合致亀裂が欠落した)");
+            prop_assert!(visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 一覧に表示されるのはいずれかの有効ルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない (合致亀裂が欠落した)");
         }
     }
 
@@ -329,7 +605,7 @@ proptest! {
         prop_assert_eq!(a, b, "SPEC FZY-004 違反: 同一クエリ・同一候補集合に対するパレットの結果順序は決定的");
     }
 
-    /// SAT-001: パレット操作列をどう並べても、適用後のすべてのルールはドメイン互換表(Requiem↔クバ要塞、Omnia↔ザリマン、ストーム↔Proxima、鋼ストーム不存在等)に関して充足可能。ルール内で両立しない選択は新しい方を残して上書き解決される
+    /// SAT-001: パレット操作列をどう並べても、適用後のすべてのルールはドメイン互換表(Requiem↔クバ要塞、Omnia↔ザリマン、VOID嵐↔Proxima星系等)に関して充足可能。ルール内で両立しない選択は新しい方を残して上書き解決される
     #[test]
     fn sat_001(ops in proptest::collection::vec(any::<prop::sample::Index>(), 0..40)) {
         let catalog = palette::filter_catalog();
@@ -340,27 +616,294 @@ proptest! {
             for rule in &state.rules {
                 prop_assert!(
                     palette::satisfiable(rule),
-                    "SPEC SAT-001 違反: パレット操作列をどう並べても、適用後のすべてのルールはドメイン互換表(Requiem↔クバ要塞、Omnia↔ザリマン、ストーム↔Proxima、鋼ストーム不存在等)に関して充足可能。ルール内で両立しない選択は新しい方を残して上書き解決される ({} 適用後に充足不能: {:?})", cand.id, rule
+                    "SPEC SAT-001 違反: パレット操作列をどう並べても、適用後のすべてのルールはドメイン互換表(Requiem↔クバ要塞、Omnia↔ザリマン、VOID嵐↔Proxima星系等)に関して充足可能。ルール内で両立しない選択は新しい方を残して上書き解決される ({} 適用後に充足不能: {:?})", cand.id, rule
                 );
             }
         }
     }
 
-    /// CLR-001: クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す
+    /// EDT-001: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (enabled切替)
+    #[test]
+    fn edt_001_set_enabled(
+        rules in proptest::collection::vec(arb_rule(), 1..5),
+        edit_pick in any::<prop::sample::Index>(),
+        target_pick in any::<prop::sample::Index>(),
+        enabled in any::<bool>(),
+    ) {
+        let active = edit_pick.index(rules.len());
+        let target = target_pick.index(rules.len());
+        let mut expected_rules = rules.clone();
+        expected_rules[target].enabled = enabled;
+        let mut state = palette::EditorState { rules, active };
+        let before_active = state.active;
+        prop_assert!(
+            palette::set_rule_enabled(&mut state, target, enabled),
+            "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (有効なindexの切替に失敗した)"
+        );
+        prop_assert_eq!(state.active, before_active, "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (enabled切替でedit indexが変化した)");
+        prop_assert_eq!(state.rules.as_slice(), expected_rules.as_slice(), "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (enabled以外の条件が変化した)");
+
+        let before_invalid = state.clone();
+        let invalid_index = state.rules.len();
+        prop_assert!(
+            !palette::set_rule_enabled(&mut state, invalid_index, enabled),
+            "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (範囲外indexを成功扱いした)"
+        );
+        prop_assert_eq!(state, before_invalid, "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (範囲外indexでstateを変更した)");
+    }
+
+    /// EDT-001: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (edit focus変更)
+    #[test]
+    fn edt_001_edit_focus(
+        rules in proptest::collection::vec(arb_rule(), 1..5),
+        pick in any::<prop::sample::Index>(),
+    ) {
+        let before = rules.clone();
+        let mut state = palette::EditorState { rules, active: 0 };
+        state.active = pick.index(state.rules.len());
+        prop_assert_eq!(state.rules.as_slice(), before.as_slice(), "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (edit index変更でrulesが変化した)");
+    }
+
+    /// EDT-001: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (disabled draftの条件編集)
+    #[test]
+    fn edt_001_disabled_edit(
+        mut rule in arb_rule(),
+        ops in proptest::collection::vec(any::<prop::sample::Index>(), 0..40),
+    ) {
+        rule.enabled = false;
+        let mut state = palette::EditorState { rules: vec![rule], active: 0 };
+        let candidates: Vec<Candidate> = palette::catalog()
+            .into_iter()
+            .filter(|candidate| candidate.facet != Facet::Action)
+            .collect();
+        for op in ops {
+            let candidate = &candidates[op.index(candidates.len())];
+            palette::apply(&mut state, candidate);
+            prop_assert!(!state.rules[0].enabled, "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる ({} 適用でdisabled ruleを再有効化した)", candidate.id);
+            let settings = FilterSettings {
+                rules: state.rules.clone(),
+                min_remaining_secs: 0,
+            };
+            prop_assert!(
+                filter::enabled_projection(&settings).rules.is_empty(),
+                "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (disabled編集中にruntime projectionへ現れた)"
+            );
+        }
+    }
+
+    /// EDT-002: NEW RULEは既存ルールを一切変更せず、enabled=falseのdraftを末尾へ追加し、そのdraftをedit対象にする
+    #[test]
+    fn edt_002(
+        rules in proptest::collection::vec(arb_rule(), 0..5),
+        pick in any::<prop::sample::Index>(),
+    ) {
+        let active = if rules.is_empty() { 0 } else { pick.index(rules.len()) };
+        let mut state = palette::EditorState { rules, active };
+        let before = state.rules.clone();
+        let catalog = palette::catalog();
+        let new_rule = catalog.iter()
+            .find(|candidate| candidate.id == "action:new-rule")
+            .expect("NEW RULE candidateが存在すること");
+        palette::apply(&mut state, new_rule);
+        prop_assert_eq!(state.rules.len(), before.len() + 1, "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseのdraftを末尾へ追加し、そのdraftをedit対象にする (draftが1本追加されない)");
+        prop_assert_eq!(&state.rules[..before.len()], before.as_slice(), "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseのdraftを末尾へ追加し、そのdraftをedit対象にする (既存ルールを変更した)");
+        prop_assert!(!state.rules.last().expect("draft追加済み").enabled, "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseのdraftを末尾へ追加し、そのdraftをedit対象にする (NEW RULEがenabledで作成された)");
+        prop_assert_eq!(state.active, state.rules.len() - 1, "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseのdraftを末尾へ追加し、そのdraftをedit対象にする (新しいdraftがedit対象でない)");
+    }
+
+    /// CLR-001: クリア操作は1回でルール構成を既定(enabled=trueの全対象ルール1本、ストーム除外、両方モード)に戻す
     #[test]
     fn clr_001(rules in proptest::collection::vec(arb_rule(), 0..4), pick in any::<prop::sample::Index>()) {
         let active = if rules.is_empty() { 0 } else { pick.index(rules.len()) };
         let mut state = palette::EditorState { rules, active };
         palette::clear(&mut state);
-        prop_assert_eq!(state.rules.len(), 1, "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す");
-        prop_assert_eq!(state.active, 0, "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す");
+        prop_assert_eq!(state.rules.len(), 1, "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(enabled=trueの全対象ルール1本、ストーム除外、両方モード)に戻す");
+        prop_assert_eq!(state.active, 0, "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(enabled=trueの全対象ルール1本、ストーム除外、両方モード)に戻す");
         let r = &state.rules[0];
         prop_assert!(
             r.tiers.is_empty() && r.mission_types.is_empty() && r.planets.is_empty(),
-            "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す (軸が既定でない)"
+            "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(enabled=trueの全対象ルール1本、ストーム除外、両方モード)に戻す (軸が既定でない)"
         );
-        prop_assert!(matches!(r.mode, Mode::Both), "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す (modeが既定でない)");
-        prop_assert!(!r.include_storms, "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す (stormsが既定でない)");
-        prop_assert!(palette::satisfiable(r), "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す (既定ルールが充足不能)");
+        prop_assert!(matches!(r.mode, Mode::Both), "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(enabled=trueの全対象ルール1本、ストーム除外、両方モード)に戻す (modeが既定でない)");
+        prop_assert!(matches!(r.storms, StormMode::Exclude), "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(enabled=trueの全対象ルール1本、ストーム除外、両方モード)に戻す (stormsが既定でない)");
+        prop_assert!(r.enabled, "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(enabled=trueの全対象ルール1本、ストーム除外、両方モード)に戻す (既定ルールがdisabled)");
+        prop_assert!(palette::satisfiable(r), "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(enabled=trueの全対象ルール1本、ストーム除外、両方モード)に戻す (既定ルールが充足不能)");
+    }
+
+    /// CFG-001: 旧設定のincludeStorms=false/trueは、読込時にstorms=除外/含むへそれぞれ無損失移行される
+    #[test]
+    fn cfg_001(include in any::<bool>()) {
+        let raw = format!(r#"{{"includeStorms":{include}}}"#);
+        let rule: WatchRule = serde_json::from_str(&raw)
+            .expect("旧WatchRule JSONを読み込めること");
+        let expected = if include { StormMode::Include } else { StormMode::Exclude };
+        prop_assert_eq!(rule.storms, expected, "SPEC CFG-001 違反: 旧設定のincludeStorms=false/trueは、読込時にstorms=除外/含むへそれぞれ無損失移行される");
+    }
+}
+
+
+/// CFG-002: enabledを持たない既存WatchRule JSONはenabled=trueとして読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する
+#[test]
+fn cfg_002() {
+    let legacy: WatchRule = serde_json::from_str(
+        r#"{"tiers":["Axi"],"includeStorms":false}"#,
+    )
+    .expect("enabled欠落の旧WatchRule JSONを読み込めること");
+    assert!(legacy.enabled, "SPEC CFG-002 違反: enabledを持たない既存WatchRule JSONはenabled=trueとして読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する (enabled欠落をfalseへ移行した)");
+
+    let explicit_disabled: WatchRule = serde_json::from_str(r#"{"enabled":false}"#)
+        .expect("enabled=falseを読み込めること");
+    assert!(!explicit_disabled.enabled, "SPEC CFG-002 違反: enabledを持たない既存WatchRule JSONはenabled=trueとして読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する (明示falseをtrueへ変更した)");
+    let encoded = serde_json::to_string(&explicit_disabled)
+        .expect("enabled=falseをserializeできること");
+    let round_trip: WatchRule = serde_json::from_str(&encoded)
+        .expect("serialize済みWatchRuleを再読込できること");
+    assert!(!round_trip.enabled, "SPEC CFG-002 違反: enabledを持たない既存WatchRule JSONはenabled=trueとして読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する (round-tripで明示falseを失った)");
+}
+
+/// NTF-001: 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する
+#[test]
+fn ntf_001() {
+    let accepted = notify::summarize_test_outcomes(&[
+        NotificationOutcome::Requested { destination: "desktop" },
+        NotificationOutcome::Requested { destination: "discord" },
+    ])
+    .expect("全選択先がRequestedなら成功すること");
+    assert!(
+        accepted.contains("通知要求を受け付けました"),
+        "SPEC NTF-001 違反: 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する (要求受付の文言がない: {accepted})"
+    );
+    for forbidden in ["送信OK", "表示済み", "配信済み"] {
+        assert!(
+            !accepted.contains(forbidden),
+            "SPEC NTF-001 違反: 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する (結果不明なのに成功を主張した: {accepted})"
+        );
+    }
+
+    let partial = notify::summarize_test_outcomes(&[
+        NotificationOutcome::Requested { destination: "desktop" },
+        NotificationOutcome::Failed {
+            destination: "discord",
+            reason: "HTTP 500".to_string(),
+        },
+    ])
+    .expect_err("1件でもFailedなら失敗すること");
+    assert!(partial.contains("desktop"), "SPEC NTF-001 違反: 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する (部分成功先がない: {partial})");
+    assert!(partial.contains("discord"), "SPEC NTF-001 違反: 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する (失敗先がない: {partial})");
+    assert!(partial.contains("HTTP 500"), "SPEC NTF-001 違反: 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する (失敗理由がない: {partial})");
+    for forbidden in ["送信OK", "表示済み", "配信済み"] {
+        assert!(
+            !partial.contains(forbidden),
+            "SPEC NTF-001 違反: 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する (エラーに成功語がある: {partial})"
+        );
+    }
+
+    assert!(
+        notify::summarize_test_outcomes(&[]).is_err(),
+        "SPEC NTF-001 違反: 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する (通知先なしを成功扱いした)"
+    );
+}
+
+/// NTF-002: desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める
+#[test]
+fn ntf_002() {
+    let now = base_now();
+    let mut fissure = Fissure {
+        id: "notification-example".to_string(),
+        activation: now,
+        expiry: now + Duration::minutes(30),
+        node: "Test Node (Void)".to_string(),
+        mission_type: "Survival".to_string(),
+        enemy: "Orokin".to_string(),
+        tier: "Axi".to_string(),
+        tier_num: 4,
+        is_storm: true,
+        is_hard: true,
+    };
+
+    let payload = notify::desktop_payload(&fissure, now);
+    assert_eq!(
+        payload.title,
+        "Axi Survival — Test Node (Void) 【鋼】 [STORM]",
+        "SPEC NTF-002 違反: desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める (title)"
+    );
+    assert_eq!(
+        payload.body,
+        "Orokin / 消滅まで残り30分",
+        "SPEC NTF-002 違反: desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める (body)"
+    );
+
+    fissure.expiry = now - Duration::seconds(1);
+    let expired = notify::desktop_payload(&fissure, now);
+    assert_eq!(
+        expired.body,
+        "Orokin / 消滅まで残り0分",
+        "SPEC NTF-002 違反: desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める (期限切れbody)"
+    );
+}
+
+/// NTF-003: 未バンドルのraw devでdesktop通知を利用できない場合は、失敗詳細を保持し、デバッグbundle .appを使う just notification-test を案内する
+#[test]
+fn ntf_003() {
+    let detail = "notification backend unavailable";
+    let message = notify::desktop_unavailable_message(detail);
+    assert!(message.contains(detail), "SPEC NTF-003 違反: 未バンドルのraw devでdesktop通知を利用できない場合は、失敗詳細を保持し、デバッグbundle .appを使う just notification-test を案内する (失敗詳細がない: {message})");
+    assert!(
+        message.contains("just notification-test"),
+        "SPEC NTF-003 違反: 未バンドルのraw devでdesktop通知を利用できない場合は、失敗詳細を保持し、デバッグbundle .appを使う just notification-test を案内する (実行コマンドがない: {message})"
+    );
+    assert!(
+        message.contains(".app"),
+        "SPEC NTF-003 違反: 未バンドルのraw devでdesktop通知を利用できない場合は、失敗詳細を保持し、デバッグbundle .appを使う just notification-test を案内する (bundleアプリを使う案内がない: {message})"
+    );
+    for forbidden in ["送信OK", "表示済み", "配信済み"] {
+        assert!(
+            !message.contains(forbidden),
+            "SPEC NTF-003 違反: 未バンドルのraw devでdesktop通知を利用できない場合は、失敗詳細を保持し、デバッグbundle .appを使う just notification-test を案内する (利用不能案内に成功語がある: {message})"
+        );
+    }
+}
+
+/// NTF-004: Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する
+#[test]
+fn ntf_004() {
+    let request_url = match notify::discord_request_url(
+        "https://discord.com/api/webhooks/123/test-token?thread_id=456&wait=false&foo=bar&wait=false",
+    ) {
+        Ok(url) => url,
+        Err(_) => panic!("SPEC NTF-004 違反: Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する (有効なWebhook URLを構築できない)"),
+    };
+    let query: Vec<(String, String)> = request_url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    assert!(
+        query.iter().any(|pair| pair == &("thread_id".to_string(), "456".to_string())),
+        "SPEC NTF-004 違反: Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する (既存thread_id queryが失われた)"
+    );
+    assert!(
+        query.iter().any(|pair| pair == &("foo".to_string(), "bar".to_string())),
+        "SPEC NTF-004 違反: Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する (既存queryが失われた)"
+    );
+    let waits: Vec<&str> = query
+        .iter()
+        .filter(|(key, _)| key == "wait")
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(
+        waits,
+        vec!["true"],
+        "SPEC NTF-004 違反: Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する (wait queryはtrueをちょうど1つだけ持つこと)"
+    );
+
+    let message_id = notify::discord_message_id(r#"{"id":"1234567890"}"#)
+        .unwrap_or_else(|_| panic!("SPEC NTF-004 違反: Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する (非空Message IDを拒否した)"));
+    assert_eq!(message_id, "1234567890", "SPEC NTF-004 違反: Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する (Message IDを保持しない)");
+
+    for invalid_response in [r#"{}"#, r#"{"id":""}"#, "not json"] {
+        assert!(
+            notify::discord_message_id(invalid_response).is_err(),
+            "SPEC NTF-004 違反: Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する (ID欠落・空文字・不正JSONを成功扱いした)"
+        );
     }
 }

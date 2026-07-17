@@ -12,61 +12,92 @@
     <main class="console">
       <section class="tablewrap">
         <table>
+          <colgroup>
+            <col class="col-tier" />
+            <col class="col-node" />
+            <col class="col-mission" />
+            <col class="col-faction" />
+            <col class="col-timer" />
+            <col class="col-mode" />
+            <col class="col-storm" />
+          </colgroup>
           <thead>
             <tr>
-              <th>TIER</th>
-              <th>NODE</th>
-              <th>MISSION</th>
-              <th>FACTION</th>
-              <th>T-REMAIN</th>
-              <th>FLAGS</th>
+              <th class="col-tier" scope="col">TIER</th>
+              <th class="col-node" scope="col">NODE</th>
+              <th class="col-mission" scope="col">MISSION</th>
+              <th class="col-faction" scope="col">FACTION</th>
+              <th class="col-timer" scope="col">T-REMAIN</th>
+              <th class="col-mode" scope="col">MODE</th>
+              <th class="col-storm" scope="col">STORM</th>
             </tr>
           </thead>
           <tbody id="fissure-rows">
-            <tr><td colspan="6" class="empty">WAITING FOR WORLDSTATE…</td></tr>
+            <tr><td colspan="7" class="empty">WAITING FOR WORLDSTATE…</td></tr>
           </tbody>
         </table>
       </section>
 
       <aside class="rail">
-        <h3>RULES (OR)</h3>
-        <div id="rules-list"></div>
-        <div class="rowbtns">
-          <button id="rule-new" class="action">NEW</button>
-          <button id="rule-del" class="action">DEL</button>
-          <button id="clear-btn" class="action">CLEAR</button>
+        <section class="rail-rules">
+          <div class="rail-heading">
+            <h3>NOTIFY RULES (OR)</h3>
+            <span id="rules-meta">--</span>
+          </div>
+          <div id="rules-list"></div>
+          <div class="rowbtns">
+            <button id="rule-new" class="action">NEW</button>
+            <button id="rule-del" class="action">DEL</button>
+            <button id="clear-btn" class="action">CLEAR</button>
+          </div>
+        </section>
+
+        <div class="rail-tabs" role="tablist" aria-label="Sidebar section">
+          <button id="filters-tab" class="rail-tab active" type="button" role="tab" aria-selected="true" aria-controls="filters-panel">FILTERS</button>
+          <button id="delivery-tab" class="rail-tab" type="button" role="tab" aria-selected="false" aria-controls="delivery-panel">DELIVERY</button>
         </div>
-        <hr />
-        <h3>TIER FILTER</h3>
-        <div id="tier-checks"></div>
-        <hr />
-        <h3>MODE</h3>
-        <div id="mode-checks"></div>
-        <hr />
-        <h3>MISSION</h3>
-        <div id="mission-checks" class="scrolllist"></div>
-        <hr />
-        <h3>PLANET</h3>
-        <div id="planet-checks" class="scrolllist"></div>
-        <hr />
-        <h3>NOTIFY</h3>
-        <button class="check" id="desktop-check"><span class="box">[x]</span> DESKTOP</button>
-        <button class="check" id="autostart-check"><span class="box">[ ]</span> AUTOSTART</button>
-        <input id="webhook-input" type="text" placeholder="DISCORD WEBHOOK URL" spellcheck="false" />
-        <div class="rowbtns">
-          <button id="test-btn" class="action">TEST</button>
-          <button id="pause-btn" class="action">PAUSE</button>
+
+        <section id="filters-panel" class="rail-panel" role="tabpanel" aria-labelledby="filters-tab">
+          <div class="rail-heading panel-heading">
+            <h3>EDIT RULE</h3>
+            <span id="editing-meta">--</span>
+          </div>
+          <div class="facet-launchers">
+            <button id="tier-checks" class="facet-launch" type="button"></button>
+            <button id="mode-checks" class="facet-launch" type="button"></button>
+            <button id="storm-checks" class="facet-launch" type="button"></button>
+            <button id="mission-checks" class="facet-launch" type="button"></button>
+            <button id="planet-checks" class="facet-launch" type="button"></button>
+          </div>
+        </section>
+
+        <section id="delivery-panel" class="rail-panel" role="tabpanel" aria-labelledby="delivery-tab" hidden>
+          <div class="rail-heading panel-heading">
+            <h3>ALL ENABLED RULES</h3>
+          </div>
+          <div class="delivery-toggles">
+            <button class="check" id="desktop-check"><span class="box">[x]</span> DESKTOP</button>
+            <button class="check" id="autostart-check"><span class="box">[ ]</span> AUTOSTART</button>
+          </div>
+          <input id="webhook-input" type="text" placeholder="DISCORD WEBHOOK URL" spellcheck="false" />
+          <button id="test-btn" class="action wide">TEST DELIVERY</button>
+          <div class="kv-grid">
+            <label class="kv"><span>MIN-REMAIN</span><input id="minremain-input" type="number" min="0" step="60" /></label>
+            <label class="kv"><span>POLL SECS</span><input id="poll-input" type="number" min="30" step="10" /></label>
+          </div>
+        </section>
+
+        <div class="rail-footer">
+          <button id="pause-btn" class="action wide">PAUSE</button>
+          <p id="rail-msg"></p>
         </div>
-        <div class="kv"><span>MIN-REMAIN</span><input id="minremain-input" type="number" min="0" step="60" /></div>
-        <div class="kv"><span>POLL SECS</span><input id="poll-input" type="number" min="30" step="10" /></div>
-        <p id="rail-msg"></p>
       </aside>
 
       <footer class="statusbar">
         <span id="sb-poll">POLL --s</span>
         <span id="sb-api">API --</span>
         <span id="sb-next">NEXT REFRESH --s</span>
-        <span id="sb-notified">NOTIFIED TODAY: 0</span>
+        <span id="sb-notified">ATTEMPTED TODAY: 0</span>
         <span id="sb-watch" class="grow"></span>
       </footer>
     </main>

@@ -1,8 +1,10 @@
 /// パターン語彙のスキーマ定義。
 /// dspec方式の「対応するパターンだけを書ける狭い語彙」。全域表現は意図的に捨てる。
 ///
-/// フィルタの意味論はルールOR: 設定は WatchRule のリストで、亀裂がどれか1つの
-/// ルールに合致すれば全体として合致する。ルール内はAND。
+/// フィルタの意味論は有効ルールOR: 設定は WatchRule のリストで、亀裂が
+/// enabled=true のどれか1つのルールに合致すれば全体として合致する。
+/// enabled=false のルールは保存・編集できるがruntime判定には参加しない。
+/// ルール内はAND。
 ///
 /// Rustスニペット(ruleOverride / fissureOverride)内で使える束縛:
 ///   rule: WatchRule(mut) / s: FilterSettings(mut) / f: Fissure(mut) / now: DateTime<Utc>
@@ -30,6 +32,18 @@ class RuleRejectWhen extends Clause {
   fissureOverride: String = ""
 }
 
+/// storm条件以外を全対象に固定し、StormMode三値の真理値表を検証する。
+class StormTruthTable extends Clause {
+  pattern = "storm_truth_table"
+  label = "property-tested"
+}
+
+/// VOID嵐のnodeでAPIが返す基底惑星名と、UIのProxima名の対応を検証する。
+class ProximaNodeAliases extends Clause {
+  pattern = "proxima_node_aliases"
+  label = "property-tested"
+}
+
 /// ルールの軸が空のとき、その軸を理由にそのルールが棄却しない。
 /// 検証形: rule_matches(軸=[], f) == rule_matches(軸=[fに合致する値], f)
 class RulePassWhenEmpty extends Clause {
@@ -48,15 +62,30 @@ class SettingsRejectWhen extends Clause {
   fissureOverride: String = ""
 }
 
-/// ルール1つの設定では、全体合致 = (残り時間OK ∧ そのルールが合致)
+/// ルール1つの設定では、全体合致 = (残り時間OK ∧ enabled ∧ そのルールの条件合致)
 class SingleRuleEmbedding extends Clause {
   pattern = "single_rule_embedding"
   label = "property-tested"
 }
 
-/// ルールを追加しても、それまで合致していた亀裂は合致し続ける(OR単調性)
+/// enabled=trueのルールを追加しても、それまで合致していた亀裂は合致し続ける
+/// (有効ルールORの単調性)
 class RuleAdditivity extends Clause {
   pattern = "rule_additivity"
+  label = "property-tested"
+}
+
+/// 全体合致は残り時間条件と、enabled=trueのルールだけをORした結果に等しい。
+/// 全ルール無効またはルールなしなら合致しない。
+class EnabledRulesOr extends Clause {
+  pattern = "enabled_rules_or"
+  label = "property-tested"
+}
+
+/// runtime通知範囲を表す射影は、enabled=trueのルールを元の順序で残し、
+/// 共通の残り時間条件を保持する。disabled draftの追加・削除・条件編集は射影を変えない。
+class EnabledProjection extends Clause {
+  pattern = "enabled_projection"
   label = "property-tested"
 }
 
@@ -69,6 +98,13 @@ class AtMostOnce extends Clause {
 /// pruneは生存中idの通知済み状態を保持し、期限切れidを除去する
 class PrunePreservesLive extends Clause {
   pattern = "prune_preserves_live"
+  label = "property-tested"
+}
+
+/// 同じ亀裂へ複数の有効ルールが合致しても、一覧・通知候補では亀裂id単位の1件であり、
+/// dedupにより高々1回しか通知されない。
+class OverlappingRulesAtMostOnce extends Clause {
+  pattern = "overlapping_rules_at_most_once"
   label = "property-tested"
 }
 
@@ -90,6 +126,13 @@ class Bounded extends Clause {
 /// 記録するだけで、通知対象には1件も選ばれない
 class SeedSilent extends Clause {
   pattern = "seed_silent"
+  label = "property-tested"
+}
+
+/// 初回起動または有効ルール射影の変更時だけ通知範囲変更と判定し、
+/// 変更時点の現存対象はsilent seedする。disabled draftだけの変更では再seedしない。
+class NotificationScopeChange extends Clause {
+  pattern = "notification_scope_change"
   label = "property-tested"
 }
 
@@ -132,10 +175,43 @@ class SatisfiableAfterOps extends Clause {
   label = "property-tested"
 }
 
+/// edit focusとruntime activationを独立に扱う。enabled変更は条件とedit indexを変えず、
+/// disabledルールの条件編集はそのルールを有効化しない。
+class EditorActivationIndependent extends Clause {
+  pattern = "editor_activation_independent"
+  label = "property-tested"
+}
+
+/// NEW RULEは既存ルールを変えず、disabled draftを末尾へ追加してedit対象にする。
+class NewRuleDisabled extends Clause {
+  pattern = "new_rule_disabled"
+  label = "property-tested"
+}
+
 /// クリア操作は1回でルール構成を既定(全対象ルール1本)に戻す
 class ClearResets extends Clause {
   pattern = "clear_resets"
   label = "property-tested"
+}
+
+/// 旧WatchRule JSONのincludeStorms:booleanを新StormModeへ無損失移行する。
+class LegacyStormConfig extends Clause {
+  pattern = "legacy_storm_config"
+  label = "property-tested"
+}
+
+/// enabledを持たない旧WatchRule JSONは有効として読み込み、明示falseはround-tripで保持する。
+class LegacyRuleEnabled extends Clause {
+  pattern = "legacy_rule_enabled"
+  label = "example-tested"
+}
+
+/// 通知テストの結果表示・payload・raw dev時の案内を、固定した具体例で検証する。
+/// 外部OSへの実配送や人間による知覚はManualへ残す。
+class NotificationExample extends Clause {
+  pattern = "notification_example"
+  label = "example-tested"
+  scenario: "outcomes" | "desktop_payload" | "desktop_unavailable" | "discord_receipt"
 }
 
 /// 機械検証しない残余。手動確認手順をSPEC.mdに列挙する

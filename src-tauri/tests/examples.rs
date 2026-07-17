@@ -2,7 +2,7 @@
 // パースと判定の具体例を固定する。性質はoracles_generated.rs(生成物)が担う。
 
 use chrono::{TimeZone, Utc};
-use relico_lib::filter::{self, FilterSettings, Mode, WatchRule};
+use relico_lib::filter::{self, FilterSettings, Mode, StormMode, WatchRule};
 use relico_lib::model::Fissure;
 use relico_lib::palette;
 
@@ -34,9 +34,18 @@ fn parses_real_api_response() {
 
 #[test]
 fn extracts_planets_from_real_nodes() {
-    assert_eq!(filter::extract_planet("Kappa (Sedna)").as_deref(), Some("Sedna"));
-    assert_eq!(filter::extract_planet("Nsu Grid (Veil Proxima)").as_deref(), Some("Veil Proxima"));
-    assert_eq!(filter::extract_planet("Everview Arc (Zariman)").as_deref(), Some("Zariman"));
+    assert_eq!(
+        filter::extract_planet("Kappa (Sedna)").as_deref(),
+        Some("Sedna")
+    );
+    assert_eq!(
+        filter::extract_planet("Nsu Grid (Veil Proxima)").as_deref(),
+        Some("Veil Proxima")
+    );
+    assert_eq!(
+        filter::extract_planet("Everview Arc (Zariman)").as_deref(),
+        Some("Zariman")
+    );
     assert_eq!(filter::extract_planet("括弧なしノード"), None);
 }
 
@@ -54,7 +63,10 @@ fn steel_path_meso_rule_matches_exactly_three() {
         .map(|f| f.node.clone())
         .collect();
     // 鋼のMesoは Keeler / Pallas / Monolith の3つ
-    assert_eq!(matched, vec!["Keeler (Saturn)", "Pallas (Ceres)", "Monolith (Phobos)"]);
+    assert_eq!(
+        matched,
+        vec!["Keeler (Saturn)", "Pallas (Ceres)", "Monolith (Phobos)"]
+    );
 }
 
 #[test]
@@ -73,7 +85,10 @@ fn two_rules_union_matches_five() {
             ..rule()
         },
     ]);
-    let count = fixture().iter().filter(|f| filter::matches(&s, f, now)).count();
+    let count = fixture()
+        .iter()
+        .filter(|f| filter::matches(&s, f, now))
+        .count();
     assert_eq!(count, 5); // Taranis + Kappa + Keeler + Pallas + Monolith
 }
 
@@ -129,6 +144,50 @@ fn alias_md_hits_mobile_defense() {
 fn alias_sedona_hits_sedna() {
     assert_eq!(top_label("sedona"), "Sedna");
     assert_eq!(top_label("生存"), "Survival");
+}
+
+#[test]
+fn mission_aliases_cover_japanese_and_romaji_variants() {
+    for query in ["耐久", "taikyu", "taikyuu"] {
+        assert_eq!(top_label(query), "Survival");
+    }
+    for query in ["分裂", "bunretsu"] {
+        assert_eq!(top_label(query), "Disruption");
+    }
+}
+
+#[test]
+fn storm_candidates_select_each_mode() {
+    let catalog = palette::catalog();
+    for (id, expected) in [
+        ("storm:Exclude", StormMode::Exclude),
+        ("storm:Include", StormMode::Include),
+        ("storm:Only", StormMode::Only),
+    ] {
+        let mut state = palette::EditorState::default();
+        let candidate = catalog.iter().find(|c| c.id == id).unwrap();
+        palette::apply(&mut state, candidate);
+        assert_eq!(state.rules[0].storms, expected);
+        assert!(palette::satisfiable(&state.rules[0]));
+    }
+}
+
+#[test]
+fn storm_only_preserves_base_and_proxima_planet_choices() {
+    let catalog = palette::catalog();
+    let storm_only = catalog.iter().find(|c| c.id == "storm:Only").unwrap();
+    for planet in ["Earth", "Earth Proxima", "Veil Proxima"] {
+        let mut state = palette::EditorState::default();
+        let planet_candidate = catalog
+            .iter()
+            .find(|c| c.id == format!("planet:{planet}"))
+            .unwrap();
+        palette::apply(&mut state, planet_candidate);
+        palette::apply(&mut state, storm_only);
+        assert_eq!(state.rules[0].planets, vec![planet.to_string()]);
+        assert_eq!(state.rules[0].storms, StormMode::Only);
+        assert!(palette::satisfiable(&state.rules[0]));
+    }
 }
 
 #[test]
