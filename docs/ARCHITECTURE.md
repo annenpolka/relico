@@ -48,22 +48,38 @@
 
 判定ロジックはRust側にのみ存在する。フロントエンド(TS)はUI表示専用で、判定を複製しない。
 
-## 設定モデル
+## 設定モデル(ルールOR)
+
+フィルタは監視ルールのリスト。各ルールはAND条件で、亀裂が**どれか1つのルールに合致すれば**通知・表示対象(SPEC: FLT-008/009)。「Axi鋼」と「Requiem何でも」の同時監視ができる。
 
 ```rust
-struct AppConfig {
+struct WatchRule {
     tiers: Vec<String>,            // 空 = 全tier対象
     mission_types: Vec<String>,    // 空 = 全種別対象
     planets: Vec<String>,          // 空 = 全惑星対象
     mode: Mode,                    // Normal | SteelPath | Both
     include_storms: bool,
-    min_remaining_secs: u64,       // 既定300
+}
+
+struct AppConfig {
+    rules: Vec<WatchRule>,         // 既定は全対象ルール1本。空なら何も監視しない
+    min_remaining_secs: u64,       // 既定300(時間軸はルール共通)
     poll_interval_secs: u64,       // 既定60、下限30
     desktop_notification: bool,
     discord_webhook_url: Option<String>,
     paused: bool,
 }
 ```
+
+## ファジーパレット(palette.rs)
+
+どこでも打鍵で開くコマンドパレットからルールを編集する。スコアラ・候補カタログ・適用ロジックはすべてRust側(`palette.rs`)にあり、フロントは表示だけ(SPEC: FZY-001..004)。
+
+- **スコアラ**: fzf風部分列マッチ。先頭一致+12 / 語境界+9 / 連続+8、ギャップと候補長で減点、完全一致は最優先。候補はlabelとalias(日本語・ローマ字・略語)の最良スコア
+- **候補カタログ**: tier / ミッション / 惑星 / モード / ストーム / アクション(NEW RULE, DELETE RULE, CLEAR, PAUSE)。日本語aliasは暫定で、日本語クライアントの正式訳確認が残タスク
+- **上書き解決(SPEC: SAT-001)**: ルール内で両立しない選択(例: Requiem×Sedna)は、ドメイン互換表(Requiem↔クバ要塞、Omnia↔ザリマン、ストーム↔Proxima、鋼ストーム不存在、Railjackミッション↔ストーム)に対する充足可能性検査で検出し、直近の変更を残して古い方を緩める(storms自動ON→mode緩和→非互換メンバー除去→最終手段は他軸全対象)
+- **一発クリア(SPEC: CLR-001)**: CLEARボタン/候補で既定ルール1本に戻す
+- レール(サイドバー)のチェック操作も同じ`apply_candidate`経路を通るため、どこから編集しても上書き解決が働く
 
 保存先: `~/Library/Application Support/com.annenpolka.warframe-fissure-notifier/config.json`。通知済みidも同ディレクトリに永続化し、再起動時の再通知を防ぐ(DED-001の実運用面)。設定変更は `watch` チャネルで即ポーリングタスクへ反映する。
 

@@ -3,16 +3,13 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::filter::{FilterConfig, Mode};
+use crate::filter::{FilterSettings, WatchRule};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
-    pub tiers: Vec<String>,
-    pub mission_types: Vec<String>,
-    pub planets: Vec<String>,
-    pub mode: Mode,
-    pub include_storms: bool,
+    /// 監視ルール(OR)。空なら何も監視しない
+    pub rules: Vec<WatchRule>,
     pub min_remaining_secs: u64,
     pub poll_interval_secs: u64,
     pub desktop_notification: bool,
@@ -23,11 +20,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            tiers: vec![],
-            mission_types: vec![],
-            planets: vec![],
-            mode: Mode::Both,
-            include_storms: false,
+            rules: vec![WatchRule::default()],
             min_remaining_secs: 300,
             poll_interval_secs: 60,
             desktop_notification: true,
@@ -38,13 +31,9 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    pub fn filter(&self) -> FilterConfig {
-        FilterConfig {
-            tiers: self.tiers.clone(),
-            mission_types: self.mission_types.clone(),
-            planets: self.planets.clone(),
-            mode: self.mode,
-            include_storms: self.include_storms,
+    pub fn filter(&self) -> FilterSettings {
+        FilterSettings {
+            rules: self.rules.clone(),
             min_remaining_secs: self.min_remaining_secs,
         }
     }
@@ -54,7 +43,8 @@ impl AppConfig {
         self.poll_interval_secs.max(30)
     }
 
-    /// 読めない・存在しない場合は既定値(起動を止めない)
+    /// 読めない・存在しない場合は既定値(起動を止めない)。
+    /// 旧スキーマ(単一ANDフィルタ)のファイルはrules欠落として既定ルールに落ちる
     pub fn load(path: &Path) -> Self {
         fs::read_to_string(path)
             .ok()

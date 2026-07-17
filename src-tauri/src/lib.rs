@@ -14,12 +14,12 @@ pub mod dedup;
 pub mod filter;
 pub mod model;
 pub mod notify;
+pub mod palette;
 pub mod poller;
 
 use commands::AppState;
 use config::AppConfig;
 use dedup::NotifiedSet;
-use filter::Mode;
 use poller::{PollerState, StatusSnapshot};
 
 /// トレイメニューの動的項目。poller側から更新する
@@ -30,17 +30,11 @@ pub struct TrayHandles {
 }
 
 pub fn watch_line(cfg: &AppConfig) -> String {
-    let tiers = if cfg.tiers.is_empty() {
-        "ALL TIERS".to_string()
-    } else {
-        cfg.tiers.join("+").to_uppercase()
-    };
-    let mode = match cfg.mode {
-        Mode::SteelPath => "HARD",
-        Mode::Normal => "NORMAL",
-        Mode::Both => "BOTH",
-    };
-    format!("WATCH: {tiers} / {mode}")
+    match cfg.rules.len() {
+        0 => "WATCH: NO RULES".to_string(),
+        1 => format!("WATCH: {}", palette::rule_summary(&cfg.rules[0])),
+        n => format!("WATCH: {n} RULES"),
+    }
 }
 
 fn next_line(snap: &StatusSnapshot) -> String {
@@ -186,7 +180,10 @@ pub fn run() {
             commands::get_status,
             commands::test_notification,
             commands::get_autostart,
-            commands::set_autostart
+            commands::set_autostart,
+            commands::query_candidates,
+            commands::apply_candidate,
+            commands::clear_filter
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

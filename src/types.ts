@@ -1,14 +1,19 @@
-// Rust側(config.rs / model.rs / poller.rs)のserde camelCase表現をミラーする。
-// 判定ロジックはRust側にのみ存在する。ここは型だけ。
+// Rust側(config.rs / model.rs / poller.rs / commands.rs)のserde camelCase表現をミラーする。
+// 判定・スコアリングのロジックはRust側にのみ存在する。ここは型だけ。
 
 export type Mode = "Normal" | "SteelPath" | "Both";
+export type Facet = "tier" | "mission" | "planet" | "mode" | "toggle" | "action";
 
-export interface AppConfig {
+export interface WatchRule {
   tiers: string[];
   missionTypes: string[];
   planets: string[];
   mode: Mode;
   includeStorms: boolean;
+}
+
+export interface AppConfig {
+  rules: WatchRule[];
   minRemainingSecs: number;
   pollIntervalSecs: number;
   desktopNotification: boolean;
@@ -30,7 +35,7 @@ export interface Fissure {
 }
 
 export interface StatusSnapshot {
-  /** フィルタ合致亀裂のみ(SPEC: VIS-001)。消滅が近い順 */
+  /** いずれかのルールに合致する亀裂のみ(SPEC: VIS-001)。消滅が近い順 */
   fissures: Fissure[];
   apiOk: boolean;
   lastError: string | null;
@@ -40,58 +45,17 @@ export interface StatusSnapshot {
   paused: boolean;
 }
 
-export const TIERS = ["Lith", "Meso", "Neo", "Axi", "Requiem", "Omnia"] as const;
+/** パレット候補(on状態はアクティブルール基準) */
+export interface CandView {
+  id: string;
+  label: string;
+  facet: Facet;
+  on: boolean;
+  indices: number[];
+  via: string | null;
+}
 
-export const KNOWN_MISSIONS = [
-  "Capture",
-  "Extermination",
-  "Sabotage",
-  "Rescue",
-  "Spy",
-  "Survival",
-  "Defense",
-  "Mobile Defense",
-  "Excavation",
-  "Disruption",
-  "Interception",
-  "Hijack",
-  "Assault",
-  "Defection",
-  "Infested Salvage",
-  "Void Flood",
-  "Void Cascade",
-  "Void Armageddon",
-  "Alchemy",
-  "Hive",
-  "Skirmish",
-  "Volatile",
-  "Orphix",
-] as const;
-
-export const KNOWN_PLANETS = [
-  "Mercury",
-  "Venus",
-  "Earth",
-  "Lua",
-  "Mars",
-  "Phobos",
-  "Deimos",
-  "Ceres",
-  "Jupiter",
-  "Europa",
-  "Saturn",
-  "Uranus",
-  "Neptune",
-  "Pluto",
-  "Sedna",
-  "Eris",
-  "Void",
-  "Kuva Fortress",
-  "Zariman",
-  "Earth Proxima",
-  "Venus Proxima",
-  "Saturn Proxima",
-  "Neptune Proxima",
-  "Pluto Proxima",
-  "Veil Proxima",
-] as const;
+export interface ApplyResult {
+  config: AppConfig;
+  active: number;
+}

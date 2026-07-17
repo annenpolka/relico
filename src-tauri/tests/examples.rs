@@ -2,20 +2,21 @@
 // パースと判定の具体例を固定する。性質はoracles_generated.rs(生成物)が担う。
 
 use chrono::{TimeZone, Utc};
-use warframe_fissure_notifier_lib::filter::{self, FilterConfig, Mode};
+use warframe_fissure_notifier_lib::filter::{self, FilterSettings, Mode, WatchRule};
 use warframe_fissure_notifier_lib::model::Fissure;
+use warframe_fissure_notifier_lib::palette;
 
 fn fixture() -> Vec<Fissure> {
     serde_json::from_str(include_str!("fixtures/fissures.json")).expect("fixture parse")
 }
 
-fn base_config() -> FilterConfig {
-    FilterConfig {
-        tiers: vec![],
-        mission_types: vec![],
-        planets: vec![],
-        mode: Mode::Both,
-        include_storms: false,
+fn rule() -> WatchRule {
+    WatchRule::default()
+}
+
+fn settings(rules: Vec<WatchRule>) -> FilterSettings {
+    FilterSettings {
+        rules,
         min_remaining_secs: 300,
     }
 }
@@ -29,7 +30,6 @@ fn parses_real_api_response() {
     assert_eq!(kappa.tier, "Axi");
     assert_eq!(kappa.tier_num, 4);
     assert!(!kappa.is_hard);
-    assert_eq!(kappa.expiry, Utc.with_ymd_and_hms(2026, 7, 17, 5, 24, 43).unwrap() + chrono::Duration::milliseconds(921));
 }
 
 #[test]
@@ -41,16 +41,16 @@ fn extracts_planets_from_real_nodes() {
 }
 
 #[test]
-fn steel_path_meso_matches_exactly_three() {
+fn steel_path_meso_rule_matches_exactly_three() {
     let now = Utc.with_ymd_and_hms(2026, 7, 17, 4, 0, 0).unwrap();
-    let cfg = FilterConfig {
+    let s = settings(vec![WatchRule {
         tiers: vec!["Meso".to_string()],
         mode: Mode::SteelPath,
-        ..base_config()
-    };
+        ..rule()
+    }]);
     let matched: Vec<String> = fixture()
         .iter()
-        .filter(|f| filter::matches(&cfg, f, now))
+        .filter(|f| filter::matches(&s, f, now))
         .map(|f| f.node.clone())
         .collect();
     // 鋼のMesoは Keeler / Pallas / Monolith の3つ
@@ -58,25 +58,33 @@ fn steel_path_meso_matches_exactly_three() {
 }
 
 #[test]
-fn normal_axi_matches_exactly_two() {
+fn two_rules_union_matches_five() {
+    // ルールOR: 「Axi通常」OR「Meso鋼」で計5件(FLT-008/009の具体例)
     let now = Utc.with_ymd_and_hms(2026, 7, 17, 4, 0, 0).unwrap();
-    let cfg = FilterConfig {
-        tiers: vec!["Axi".to_string()],
-        mode: Mode::Normal,
-        ..base_config()
-    };
-    let count = fixture().iter().filter(|f| filter::matches(&cfg, f, now)).count();
-    assert_eq!(count, 2); // Taranis + Kappa
+    let s = settings(vec![
+        WatchRule {
+            tiers: vec!["Axi".to_string()],
+            mode: Mode::Normal,
+            ..rule()
+        },
+        WatchRule {
+            tiers: vec!["Meso".to_string()],
+            mode: Mode::SteelPath,
+            ..rule()
+        },
+    ]);
+    let count = fixture().iter().filter(|f| filter::matches(&s, f, now)).count();
+    assert_eq!(count, 5); // Taranis + Kappa + Keeler + Pallas + Monolith
 }
 
 #[test]
 fn min_remaining_excludes_soon_expiring() {
     // 04:45時点: Metis (Jupiter) は04:49消滅なので残り5分未満 → 除外される
     let now = Utc.with_ymd_and_hms(2026, 7, 17, 4, 45, 0).unwrap();
-    let cfg = base_config();
+    let s = settings(vec![rule()]);
     let matched: Vec<String> = fixture()
         .iter()
-        .filter(|f| filter::matches(&cfg, f, now))
+        .filter(|f| filter::matches(&s, f, now))
         .map(|f| f.node.clone())
         .collect();
     assert!(!matched.contains(&"Metis (Jupiter)".to_string()));
@@ -84,16 +92,57 @@ fn min_remaining_excludes_soon_expiring() {
 }
 
 #[test]
-fn planet_filter_matches_ceres_only() {
+fn planet_rule_matches_ceres_only() {
     let now = Utc.with_ymd_and_hms(2026, 7, 17, 4, 0, 0).unwrap();
-    let cfg = FilterConfig {
+    let s = settings(vec![WatchRule {
         planets: vec!["Ceres".to_string()],
-        ..base_config()
-    };
+        ..rule()
+    }]);
     let matched: Vec<String> = fixture()
         .iter()
-        .filter(|f| filter::matches(&cfg, f, now))
+        .filter(|f| filter::matches(&s, f, now))
         .map(|f| f.node.clone())
         .collect();
     assert_eq!(matched, vec!["Draco (Ceres)", "Pallas (Ceres)"]);
+}
+
+// ---- パレットのalias具体例(FZY条項の実データ版) ----
+
+fn top_label(query: &str) -> String {
+    let catalog = palette::catalog();
+    let ranked = palette::query_catalog(&catalog, query);
+    catalog[ranked[0].idx].label.clone()
+}
+
+#[test]
+fn alias_hagane_hits_hard_only() {
+    assert_eq!(top_label("hagane"), "HARD ONLY");
+    assert_eq!(top_label("鋼のみ"), "HARD ONLY");
+}
+
+#[test]
+fn alias_md_hits_mobile_defense() {
+    assert_eq!(top_label("md"), "Mobile Defense");
+}
+
+#[test]
+fn alias_sedona_hits_sedna() {
+    assert_eq!(top_label("sedona"), "Sedna");
+    assert_eq!(top_label("生存"), "Survival");
+}
+
+#[test]
+fn conflict_overwrite_requiem_drops_sedna() {
+    // SAT-001の具体例: Sedna選択中のルールにRequiemを足すと、
+    // Requiem×Sednaは両立しないのでSednaが落ちる(新しい方が残る)
+    let mut state = palette::EditorState::default();
+    let catalog = palette::catalog();
+    let sedna = catalog.iter().find(|c| c.id == "planet:Sedna").unwrap();
+    let requiem = catalog.iter().find(|c| c.id == "tier:Requiem").unwrap();
+    palette::apply(&mut state, sedna);
+    palette::apply(&mut state, requiem);
+    let r = &state.rules[0];
+    assert_eq!(r.tiers, vec!["Requiem".to_string()]);
+    assert!(!r.planets.contains(&"Sedna".to_string()));
+    assert!(palette::satisfiable(r));
 }

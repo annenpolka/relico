@@ -1,8 +1,11 @@
 /// パターン語彙のスキーマ定義。
 /// dspec方式の「対応するパターンだけを書ける狭い語彙」。全域表現は意図的に捨てる。
 ///
-/// Rustスニペット(configOverride / fissureOverride)内で使える束縛:
-///   cfg: FilterConfig(mut) / f: Fissure(mut) / now: DateTime<Utc>
+/// フィルタの意味論はルールOR: 設定は WatchRule のリストで、亀裂がどれか1つの
+/// ルールに合致すれば全体として合致する。ルール内はAND。
+///
+/// Rustスニペット(ruleOverride / fissureOverride)内で使える束縛:
+///   rule: WatchRule(mut) / s: FilterSettings(mut) / f: Fissure(mut) / now: DateTime<Utc>
 module patterns
 
 abstract class Clause {
@@ -19,23 +22,42 @@ abstract class Clause {
   label: "property-tested" | "example-tested" | "manual"
 }
 
-/// config述語 ∧ fissure述語 → 通知されない
-class RejectWhen extends Clause {
-  pattern = "reject_when"
+/// rule述語 ∧ fissure述語 → そのルールは合致しない(ルール単位の棄却)
+class RuleRejectWhen extends Clause {
+  pattern = "rule_reject_when"
   label = "property-tested"
-  configOverride: String = ""
+  ruleOverride: String = ""
   fissureOverride: String = ""
 }
 
-/// フィルタ軸が空のとき、その軸を理由に棄却されない。
-/// 検証形: matches(軸=[], f) == matches(軸=[fに合致する値], f)
-class PassWhenEmpty extends Clause {
-  pattern = "pass_when_empty"
+/// ルールの軸が空のとき、その軸を理由にそのルールが棄却しない。
+/// 検証形: rule_matches(軸=[], f) == rule_matches(軸=[fに合致する値], f)
+class RulePassWhenEmpty extends Clause {
+  pattern = "rule_pass_when_empty"
   label = "property-tested"
-  /// FilterConfigのフィールド名
+  /// WatchRuleのフィールド名
   axisField: "tiers" | "mission_types" | "planets"
   /// fに合致する値を作るRust式
   matchExpr: String
+}
+
+/// 設定全体の述語 ∧ fissure述語 → 全体として合致しない(ルール構成に依らない棄却)
+class SettingsRejectWhen extends Clause {
+  pattern = "settings_reject_when"
+  label = "property-tested"
+  fissureOverride: String = ""
+}
+
+/// ルール1つの設定では、全体合致 = (残り時間OK ∧ そのルールが合致)
+class SingleRuleEmbedding extends Clause {
+  pattern = "single_rule_embedding"
+  label = "property-tested"
+}
+
+/// ルールを追加しても、それまで合致していた亀裂は合致し続ける(OR単調性)
+class RuleAdditivity extends Clause {
+  pattern = "rule_additivity"
+  label = "property-tested"
 }
 
 /// 同一idは任意の操作列で高々1回しか通知されない
@@ -75,6 +97,44 @@ class SeedSilent extends Clause {
 /// 合致する亀裂を1件も取りこぼさない(完全性)
 class FilteredView extends Clause {
   pattern = "filtered_view"
+  label = "property-tested"
+}
+
+/// ファジーマッチの健全性: マッチ成立時、クエリ文字は候補文字列に
+/// 順序保存の部分列として(大文字小文字無視で)現れる
+class FuzzySubsequence extends Clause {
+  pattern = "fuzzy_subsequence"
+  label = "property-tested"
+}
+
+/// 空クエリは候補全件を返す(完全性)
+class FuzzyEmptyQuery extends Clause {
+  pattern = "fuzzy_empty_query"
+  label = "property-tested"
+}
+
+/// クエリと完全一致する候補(label/alias)が存在すれば、先頭候補は完全一致である
+class FuzzyExactFirst extends Clause {
+  pattern = "fuzzy_exact_first"
+  label = "property-tested"
+}
+
+/// 同一クエリ・同一候補集合に対する結果順序は決定的
+class FuzzyDeterministic extends Clause {
+  pattern = "fuzzy_deterministic"
+  label = "property-tested"
+}
+
+/// パレット操作列をどう並べても、適用後の全ルールがドメイン互換表に関して
+/// 充足可能(ルール内で両立しない選択は新しい方を残して上書き解決)
+class SatisfiableAfterOps extends Clause {
+  pattern = "satisfiable_after_ops"
+  label = "property-tested"
+}
+
+/// クリア操作は1回でルール構成を既定(全対象ルール1本)に戻す
+class ClearResets extends Clause {
+  pattern = "clear_resets"
   label = "property-tested"
 }
 

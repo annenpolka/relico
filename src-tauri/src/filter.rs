@@ -11,50 +11,68 @@ pub enum Mode {
     Both,
 }
 
-/// 通知判定の条件。各Vecは空なら「その軸は全対象」
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilterConfig {
+/// 監視ルール1本。各Vecは空なら「その軸は全対象」。ルール内はAND
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WatchRule {
     pub tiers: Vec<String>,
     pub mission_types: Vec<String>,
     pub planets: Vec<String>,
     pub mode: Mode,
     pub include_storms: bool,
+}
+
+impl Default for WatchRule {
+    fn default() -> Self {
+        Self {
+            tiers: vec![],
+            mission_types: vec![],
+            planets: vec![],
+            mode: Mode::Both,
+            include_storms: false,
+        }
+    }
+}
+
+/// フィルタ全体 = ルールのOR + 残り時間しきい値
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterSettings {
+    pub rules: Vec<WatchRule>,
     pub min_remaining_secs: u64,
 }
 
-/// 亀裂が通知条件に合致するか。純粋関数(nowを外から渡す)
-pub fn matches(cfg: &FilterConfig, fissure: &Fissure, now: DateTime<Utc>) -> bool {
-    // SPEC: FLT-007(期限切れ・残り時間不足の棄却)
-    let remaining = fissure.expiry.signed_duration_since(now).num_seconds();
-    if remaining < cfg.min_remaining_secs as i64 {
-        return false;
-    }
-    // SPEC: FLT-001 / FLT-002(鋼と通常の区別)
-    match cfg.mode {
+/// 亀裂が1本のルールに合致するか(時間軸は見ない)。SPEC: FLT-001..006
+pub fn rule_matches(rule: &WatchRule, fissure: &Fissure) -> bool {
+    match rule.mode {
         Mode::Normal if fissure.is_hard => return false,
         Mode::SteelPath if !fissure.is_hard => return false,
         _ => {}
     }
-    // SPEC: FLT-003(ボイドストーム)
-    if fissure.is_storm && !cfg.include_storms {
+    if fissure.is_storm && !rule.include_storms {
         return false;
     }
-    // SPEC: FLT-004(空=全対象)
-    if !cfg.tiers.is_empty() && !cfg.tiers.contains(&fissure.tier) {
+    if !rule.tiers.is_empty() && !rule.tiers.contains(&fissure.tier) {
         return false;
     }
-    // SPEC: FLT-005
-    if !cfg.mission_types.is_empty() && !cfg.mission_types.contains(&fissure.mission_type) {
+    if !rule.mission_types.is_empty() && !rule.mission_types.contains(&fissure.mission_type) {
         return false;
     }
-    // SPEC: FLT-006
-    if !cfg.planets.is_empty() {
+    if !rule.planets.is_empty() {
         match extract_planet(&fissure.node) {
-            Some(planet) if cfg.planets.contains(&planet) => {}
+            Some(planet) if rule.planets.contains(&planet) => {}
             _ => return false,
         }
     }
     true
+}
+
+/// 全体判定: 残り時間OK ∧ いずれかのルールに合致。SPEC: FLT-007..009
+pub fn matches(settings: &FilterSettings, fissure: &Fissure, now: DateTime<Utc>) -> bool {
+    let remaining = fissure.expiry.signed_duration_since(now).num_seconds();
+    if remaining < settings.min_remaining_secs as i64 {
+        return false;
+    }
+    settings.rules.iter().any(|rule| rule_matches(rule, fissure))
 }
 
 /// node "Kappa (Sedna)" から惑星名 "Sedna" を抽出する。

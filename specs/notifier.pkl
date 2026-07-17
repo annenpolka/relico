@@ -1,6 +1,9 @@
 /// 亀裂通知アプリの仕様正本。
 /// このファイル(と patterns.pkl)だけが手編集対象。docs/SPEC.md と
 /// src-tauri/tests/oracles_generated.rs はここから生成される。
+///
+/// フィルタの意味論: 設定は監視ルール(WatchRule)のリスト。各ルールはAND条件で、
+/// 亀裂がどれか1つのルールに合致すれば通知・表示対象になる(ルールOR)。
 module notifier
 
 import "patterns.pkl"
@@ -8,46 +11,54 @@ import "patterns.pkl"
 title = "Warframe Fissure Notifier 仕様"
 
 clauses: Listing<patterns.Clause> = new {
-  new patterns.RejectWhen {
+  new patterns.RuleRejectWhen {
     id = "FLT-001"
-    desc = "mode=鋼のみ のとき、isHard=false の亀裂はどんな入力でも通知されない"
-    configOverride = "cfg.mode = Mode::SteelPath;"
+    desc = "mode=鋼のみ のルールは、isHard=false の亀裂にどんな入力でも合致しない"
+    ruleOverride = "rule.mode = Mode::SteelPath;"
     fissureOverride = "f.is_hard = false;"
   }
-  new patterns.RejectWhen {
+  new patterns.RuleRejectWhen {
     id = "FLT-002"
-    desc = "mode=通常のみ のとき、isHard=true の亀裂はどんな入力でも通知されない"
-    configOverride = "cfg.mode = Mode::Normal;"
+    desc = "mode=通常のみ のルールは、isHard=true の亀裂にどんな入力でも合致しない"
+    ruleOverride = "rule.mode = Mode::Normal;"
     fissureOverride = "f.is_hard = true;"
   }
-  new patterns.RejectWhen {
+  new patterns.RuleRejectWhen {
     id = "FLT-003"
-    desc = "include_storms=false のとき、isStorm=true の亀裂(ボイドストーム)は通知されない"
-    configOverride = "cfg.include_storms = false;"
+    desc = "include_storms=false のルールは、isStorm=true の亀裂(ボイドストーム)に合致しない"
+    ruleOverride = "rule.include_storms = false;"
     fissureOverride = "f.is_storm = true;"
   }
-  new patterns.PassWhenEmpty {
+  new patterns.RulePassWhenEmpty {
     id = "FLT-004"
-    desc = "tiersが空のとき、tierを理由に棄却されない(空=全tier対象)"
+    desc = "ルールのtiersが空のとき、tierを理由に棄却しない(空=全tier対象)"
     axisField = "tiers"
     matchExpr = "vec![f.tier.clone()]"
   }
-  new patterns.PassWhenEmpty {
+  new patterns.RulePassWhenEmpty {
     id = "FLT-005"
-    desc = "mission_typesが空のとき、ミッション種別を理由に棄却されない(空=全種別対象)"
+    desc = "ルールのmission_typesが空のとき、ミッション種別を理由に棄却しない(空=全種別対象)"
     axisField = "mission_types"
     matchExpr = "vec![f.mission_type.clone()]"
   }
-  new patterns.PassWhenEmpty {
+  new patterns.RulePassWhenEmpty {
     id = "FLT-006"
-    desc = "planetsが空のとき、惑星を理由に棄却されない(空=全惑星対象)"
+    desc = "ルールのplanetsが空のとき、惑星を理由に棄却しない(空=全惑星対象)"
     axisField = "planets"
     matchExpr = "filter::extract_planet(&f.node).into_iter().collect()"
   }
-  new patterns.RejectWhen {
+  new patterns.SettingsRejectWhen {
     id = "FLT-007"
-    desc = "残り時間がmin_remaining_secs未満の亀裂は通知されない(期限切れ含む)"
-    fissureOverride = "f.expiry = now + Duration::seconds((cfg.min_remaining_secs as i64) - 1);"
+    desc = "残り時間がmin_remaining_secs未満の亀裂は、ルール構成に依らず合致しない(期限切れ含む)"
+    fissureOverride = "f.expiry = now + Duration::seconds((s.min_remaining_secs as i64) - 1);"
+  }
+  new patterns.SingleRuleEmbedding {
+    id = "FLT-008"
+    desc = "ルール1つの設定では、全体合致 = (残り時間OK ∧ そのルールが合致)"
+  }
+  new patterns.RuleAdditivity {
+    id = "FLT-009"
+    desc = "ルールを追加しても、それまで合致していた亀裂は合致し続ける(OR単調性)"
   }
   new patterns.AtMostOnce {
     id = "DED-001"
@@ -73,7 +84,31 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.FilteredView {
     id = "VIS-001"
-    desc = "一覧に表示されるのはフィルタ合致亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない"
+    desc = "一覧に表示されるのはいずれかのルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない"
+  }
+  new patterns.FuzzySubsequence {
+    id = "FZY-001"
+    desc = "パレットのファジーマッチが成立するのは、クエリ文字が候補文字列(またはalias)に順序どおり現れる場合に限る(健全性)"
+  }
+  new patterns.FuzzyEmptyQuery {
+    id = "FZY-002"
+    desc = "空クエリはパレット候補の全件を返す(完全性)"
+  }
+  new patterns.FuzzyExactFirst {
+    id = "FZY-003"
+    desc = "クエリと完全一致する候補(label/alias)が存在すれば、先頭候補は完全一致である"
+  }
+  new patterns.FuzzyDeterministic {
+    id = "FZY-004"
+    desc = "同一クエリ・同一候補集合に対するパレットの結果順序は決定的"
+  }
+  new patterns.SatisfiableAfterOps {
+    id = "SAT-001"
+    desc = "パレット操作列をどう並べても、適用後のすべてのルールはドメイン互換表(Requiem↔クバ要塞、Omnia↔ザリマン、ストーム↔Proxima、鋼ストーム不存在等)に関して充足可能。ルール内で両立しない選択は新しい方を残して上書き解決される"
+  }
+  new patterns.ClearResets {
+    id = "CLR-001"
+    desc = "クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す"
   }
   new patterns.Manual {
     id = "MAN-001"
@@ -84,5 +119,10 @@ clauses: Listing<patterns.Clause> = new {
     id = "MAN-002"
     desc = "Discord Webhook通知がスマホのDiscordアプリに届く"
     procedure = "Webhook URLを設定し「テスト送信」を押す。スマホのDiscordアプリでプッシュ通知とembedの内容(tier/node/鋼マーク/残り時間の相対表示)を確認する。"
+  }
+  new patterns.Manual {
+    id = "MAN-003"
+    desc = "ファジーパレットのUX: どこでも打鍵で開き、連続トグルでき、日本語aliasが引ける"
+    procedure = "1) 入力欄以外にフォーカスがある状態で英数キーを打鍵→パレットが開き1文字目が引き継がれる。2) axi⏎ hagane⏎ のように連続トグルできeskで閉じる。3) IMEで「鋼」「生存」などの日本語aliasがヒットする。4) NEW RULE/DELETE RULE/CLEARが候補から実行できる。5) CLEARボタン1回でルールが既定1本に戻る。"
   }
 }

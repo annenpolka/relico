@@ -10,7 +10,7 @@ type Clause = {
   pattern: string;
   desc: string;
   label: string;
-  configOverride?: string;
+  ruleOverride?: string;
   fissureOverride?: string;
   axisField?: string;
   matchExpr?: string;
@@ -38,7 +38,6 @@ for (const c of spec.clauses) {
 const fnName = (id: string, suffix = "") =>
   id.toLowerCase().replace(/-/g, "_") + (suffix ? `_${suffix}` : "");
 
-// ---- オラクル生成 ----
 const indent = (code: string, n: number) =>
   code
     .split("\n")
@@ -49,32 +48,64 @@ function genClause(c: Clause): string {
   const name = fnName(c.id);
   const msg = `SPEC ${c.id} 違反: ${c.desc.replace(/"/g, '\\"')}`;
   switch (c.pattern) {
-    case "reject_when":
+    case "rule_reject_when":
       return `
     /// ${c.id}: ${c.desc}
     #[test]
-    fn ${name}(mut cfg in arb_config(), mut f in arb_fissure()) {
-        let now = base_now();
-        let _ = &now;
-${indent(c.configOverride ?? "", 8)}
+    fn ${name}(mut rule in arb_rule(), mut f in arb_fissure()) {
+${indent(c.ruleOverride ?? "", 8)}
 ${indent(c.fissureOverride ?? "", 8)}
-        prop_assert!(!filter::matches(&cfg, &f, now), "${msg}");
+        prop_assert!(!filter::rule_matches(&rule, &f), "${msg}");
     }`;
-    case "pass_when_empty":
+    case "rule_pass_when_empty":
       return `
     /// ${c.id}: ${c.desc}
     #[test]
-    fn ${name}(cfg in arb_config(), f in arb_fissure()) {
-        let now = base_now();
-        let mut empty_cfg = cfg.clone();
-        empty_cfg.${c.axisField} = vec![];
-        let mut pinned_cfg = cfg;
-        pinned_cfg.${c.axisField} = ${c.matchExpr};
+    fn ${name}(rule in arb_rule(), f in arb_fissure()) {
+        let mut empty_rule = rule.clone();
+        empty_rule.${c.axisField} = vec![];
+        let mut pinned_rule = rule;
+        pinned_rule.${c.axisField} = ${c.matchExpr};
         prop_assert_eq!(
-            filter::matches(&empty_cfg, &f, now),
-            filter::matches(&pinned_cfg, &f, now),
+            filter::rule_matches(&empty_rule, &f),
+            filter::rule_matches(&pinned_rule, &f),
             "${msg}"
         );
+    }`;
+    case "settings_reject_when":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(s in arb_settings(), mut f in arb_fissure()) {
+        let now = base_now();
+${indent(c.fissureOverride ?? "", 8)}
+        prop_assert!(!filter::matches(&s, &f, now), "${msg}");
+    }`;
+    case "single_rule_embedding":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(rule in arb_rule(), f in arb_fissure(), min in 0u64..1800) {
+        let now = base_now();
+        let s = FilterSettings { rules: vec![rule.clone()], min_remaining_secs: min };
+        let remaining_ok = f.expiry.signed_duration_since(now).num_seconds() >= min as i64;
+        prop_assert_eq!(
+            filter::matches(&s, &f, now),
+            remaining_ok && filter::rule_matches(&rule, &f),
+            "${msg}"
+        );
+    }`;
+    case "rule_additivity":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(s in arb_settings(), extra in arb_rule(), f in arb_fissure()) {
+        let now = base_now();
+        if filter::matches(&s, &f, now) {
+            let mut bigger = s.clone();
+            bigger.rules.push(extra);
+            prop_assert!(filter::matches(&bigger, &f, now), "${msg}");
+        }
     }`;
     case "at_most_once":
       return `
@@ -151,15 +182,103 @@ ${indent(c.fissureOverride ?? "", 8)}
       return `
     /// ${c.id}: ${c.desc}
     #[test]
-    fn ${name}(cfg in arb_config(), fs in proptest::collection::vec(arb_fissure(), 0..30)) {
+    fn ${name}(s in arb_settings(), fs in proptest::collection::vec(arb_fissure(), 0..30)) {
         let now = base_now();
-        let visible = poller::visible_fissures(&cfg, &fs, now);
+        let visible = poller::visible_fissures(&s, &fs, now);
         for f in &visible {
-            prop_assert!(filter::matches(&cfg, f, now), "${msg} (対象外が表示された)");
+            prop_assert!(filter::matches(&s, f, now), "${msg} (対象外が表示された)");
         }
-        for f in fs.iter().filter(|f| filter::matches(&cfg, f, now)) {
+        for f in fs.iter().filter(|f| filter::matches(&s, f, now)) {
             prop_assert!(visible.iter().any(|v| v.id == f.id), "${msg} (合致亀裂が欠落した)");
         }
+    }`;
+    case "fuzzy_subsequence":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(q in ".{0,12}", text in ".{0,24}") {
+        if let Some((_score, idx)) = palette::fuzzy_score(&q, &text) {
+            let tc: Vec<char> = text.chars().collect();
+            let qc: Vec<char> = q.chars().collect();
+            prop_assert_eq!(idx.len(), qc.len(), "${msg}");
+            for w in idx.windows(2) {
+                prop_assert!(w[0] < w[1], "${msg} (順序が保存されていない)");
+            }
+            for (k, &i) in idx.iter().enumerate() {
+                let a = tc[i];
+                let b = qc[k];
+                prop_assert!(a == b || a.to_lowercase().eq(b.to_lowercase()), "${msg} (文字不一致)");
+            }
+        }
+    }`;
+    case "fuzzy_empty_query":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(labels in proptest::collection::vec("[A-Za-z ]{1,12}", 0..20)) {
+        let catalog = mk_catalog(labels);
+        prop_assert_eq!(palette::query_catalog(&catalog, "").len(), catalog.len(), "${msg}");
+    }`;
+    case "fuzzy_exact_first":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(labels in proptest::collection::vec("[a-z]{1,8}", 1..15), pick in any::<prop::sample::Index>()) {
+        let q = labels[pick.index(labels.len())].clone();
+        let catalog = mk_catalog(labels);
+        let res = palette::query_catalog(&catalog, &q);
+        prop_assert!(!res.is_empty(), "${msg} (結果が空)");
+        let top = &catalog[res[0].idx];
+        let exact = top.label.eq_ignore_ascii_case(&q)
+            || top.aliases.iter().any(|a| a.eq_ignore_ascii_case(&q));
+        prop_assert!(exact, "${msg} (先頭が完全一致でない: {})", top.label);
+    }`;
+    case "fuzzy_deterministic":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(labels in proptest::collection::vec("[A-Za-z ]{1,10}", 0..15), q in "[a-z]{0,6}") {
+        let catalog = mk_catalog(labels);
+        let a: Vec<usize> = palette::query_catalog(&catalog, &q).into_iter().map(|r| r.idx).collect();
+        let b: Vec<usize> = palette::query_catalog(&catalog, &q).into_iter().map(|r| r.idx).collect();
+        prop_assert_eq!(a, b, "${msg}");
+    }`;
+    case "satisfiable_after_ops":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(ops in proptest::collection::vec(any::<prop::sample::Index>(), 0..40)) {
+        let catalog = palette::filter_catalog();
+        let mut state = palette::EditorState::default();
+        for op in ops {
+            let cand = &catalog[op.index(catalog.len())];
+            palette::apply(&mut state, cand);
+            for rule in &state.rules {
+                prop_assert!(
+                    palette::satisfiable(rule),
+                    "${msg} ({} 適用後に充足不能: {:?})", cand.id, rule
+                );
+            }
+        }
+    }`;
+    case "clear_resets":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(rules in proptest::collection::vec(arb_rule(), 0..4), pick in any::<prop::sample::Index>()) {
+        let active = if rules.is_empty() { 0 } else { pick.index(rules.len()) };
+        let mut state = palette::EditorState { rules, active };
+        palette::clear(&mut state);
+        prop_assert_eq!(state.rules.len(), 1, "${msg}");
+        prop_assert_eq!(state.active, 0, "${msg}");
+        let r = &state.rules[0];
+        prop_assert!(
+            r.tiers.is_empty() && r.mission_types.is_empty() && r.planets.is_empty(),
+            "${msg} (軸が既定でない)"
+        );
+        prop_assert!(matches!(r.mode, Mode::Both), "${msg} (modeが既定でない)");
+        prop_assert!(!r.include_storms, "${msg} (stormsが既定でない)");
+        prop_assert!(palette::satisfiable(r), "${msg} (既定ルールが充足不能)");
     }`;
     case "manual":
       return ""; // 機械検証なし。SPEC.mdのみ
@@ -180,14 +299,15 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use proptest::prelude::*;
 use warframe_fissure_notifier_lib::backoff::Backoff;
 use warframe_fissure_notifier_lib::dedup::NotifiedSet;
-use warframe_fissure_notifier_lib::filter::{self, FilterConfig, Mode};
+use warframe_fissure_notifier_lib::filter::{self, FilterSettings, Mode, WatchRule};
 use warframe_fissure_notifier_lib::model::Fissure;
+use warframe_fissure_notifier_lib::palette::{self, Candidate, Facet};
 use warframe_fissure_notifier_lib::poller;
 
 const TIERS: &[&str] = &["Lith", "Meso", "Neo", "Axi", "Requiem", "Omnia"];
 const MISSIONS: &[&str] = &[
     "Defense", "Survival", "Capture", "Extermination", "Rescue",
-    "Disruption", "Mobile Defense", "Void Flood", "Sabotage",
+    "Disruption", "Mobile Defense", "Void Flood", "Void Cascade", "Volatile",
 ];
 const PLANETS: &[&str] = &[
     "Mars", "Ceres", "Sedna", "Void", "Saturn", "Phobos",
@@ -208,27 +328,29 @@ fn arb_subset(pool: &'static [&'static str]) -> impl Strategy<Value = Vec<String
         .prop_map(|v| v.into_iter().map(String::from).collect())
 }
 
-fn arb_config() -> impl Strategy<Value = FilterConfig> {
+fn arb_rule() -> impl Strategy<Value = WatchRule> {
     (
         arb_subset(TIERS),
         arb_subset(MISSIONS),
         arb_subset(PLANETS),
         arb_mode(),
         any::<bool>(),
-        0u64..1800,
     )
-        .prop_map(
-            |(tiers, mission_types, planets, mode, include_storms, min_remaining_secs)| {
-                FilterConfig {
-                    tiers,
-                    mission_types,
-                    planets,
-                    mode,
-                    include_storms,
-                    min_remaining_secs,
-                }
-            },
-        )
+        .prop_map(|(tiers, mission_types, planets, mode, include_storms)| WatchRule {
+            tiers,
+            mission_types,
+            planets,
+            mode,
+            include_storms,
+        })
+}
+
+fn arb_settings() -> impl Strategy<Value = FilterSettings> {
+    (proptest::collection::vec(arb_rule(), 0..4), 0u64..1800)
+        .prop_map(|(rules, min_remaining_secs)| FilterSettings {
+            rules,
+            min_remaining_secs,
+        })
 }
 
 fn arb_fissure() -> impl Strategy<Value = Fissure> {
@@ -258,6 +380,20 @@ fn arb_fissure() -> impl Strategy<Value = Fissure> {
         })
 }
 
+fn mk_catalog(labels: Vec<String>) -> Vec<Candidate> {
+    labels
+        .into_iter()
+        .enumerate()
+        .map(|(i, label)| Candidate {
+            id: format!("test:{i}"),
+            value: label.clone(),
+            label,
+            aliases: vec![],
+            facet: Facet::Mission,
+        })
+        .collect()
+}
+
 proptest! {
 ${tests}
 }
@@ -285,6 +421,9 @@ const specMd = `# ${spec.title}
 >
 > 保証の勾配: このプロジェクトの機械保証の最上位は property-based test である。
 > proven(証明) / model-checked(モデル検査) の条項は存在しない。勾配を平らに見せない。
+>
+> フィルタの意味論はルールOR: 設定は監視ルール(WatchRule)のリストで、亀裂が
+> どれか1つのルールに合致すれば通知・表示対象になる。ルール内はAND。
 
 ## 条項一覧
 

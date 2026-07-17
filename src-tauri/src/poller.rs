@@ -10,7 +10,7 @@ use tokio::sync::watch;
 use crate::backoff::Backoff;
 use crate::config::AppConfig;
 use crate::dedup::NotifiedSet;
-use crate::filter::{self, FilterConfig};
+use crate::filter::{self, FilterSettings};
 use crate::model::Fissure;
 use crate::notify;
 
@@ -56,15 +56,15 @@ pub fn http_client() -> reqwest::Client {
         .expect("http client")
 }
 
-/// 一覧に出す亀裂 = フィルタ合致のみ(対象外は非表示)。消滅が近い順。SPEC: VIS-001
+/// 一覧に出す亀裂 = いずれかのルールに合致するもののみ。消滅が近い順。SPEC: VIS-001
 pub fn visible_fissures(
-    cfg: &FilterConfig,
+    settings: &FilterSettings,
     fissures: &[Fissure],
     now: DateTime<Utc>,
 ) -> Vec<Fissure> {
     let mut visible: Vec<Fissure> = fissures
         .iter()
-        .filter(|f| filter::matches(cfg, f, now))
+        .filter(|f| filter::matches(settings, f, now))
         .cloned()
         .collect();
     visible.sort_by_key(|f| f.expiry);

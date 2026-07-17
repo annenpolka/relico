@@ -2,12 +2,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, Utc};
+use serde::Serialize;
 use tauri::{AppHandle, State};
 use tokio::sync::watch;
 
 use crate::config::AppConfig;
+use crate::filter::Mode;
 use crate::model::Fissure;
 use crate::notify;
+use crate::palette::{self, Facet};
 use crate::poller::{PollerState, StatusSnapshot};
 
 pub struct AppState {
@@ -17,6 +20,12 @@ pub struct AppState {
     pub client: reqwest::Client,
 }
 
+fn persist(app: &AppHandle, state: &State<AppState>, cfg: AppConfig) -> Result<(), String> {
+    cfg.save(&state.config_path).map_err(|e| e.to_string())?;
+    let _ = tauri::Emitter::emit(app, "config", &cfg);
+    state.cfg_tx.send(cfg).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn get_config(state: State<AppState>) -> AppConfig {
     state.cfg_tx.borrow().clone()
@@ -24,9 +33,108 @@ pub fn get_config(state: State<AppState>) -> AppConfig {
 
 #[tauri::command]
 pub fn set_config(app: AppHandle, state: State<AppState>, config: AppConfig) -> Result<(), String> {
-    config.save(&state.config_path).map_err(|e| e.to_string())?;
-    let _ = tauri::Emitter::emit(&app, "config", &config);
-    state.cfg_tx.send(config).map_err(|e| e.to_string())
+    persist(&app, &state, config)
+}
+
+/// パレット候補のビュー(on状態はアクティブルール基準)
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CandView {
+    pub id: String,
+    pub label: String,
+    pub facet: Facet,
+    pub on: bool,
+    pub indices: Vec<usize>,
+    pub via: Option<String>,
+}
+
+#[tauri::command]
+pub fn query_candidates(state: State<AppState>, q: String, active: usize) -> Vec<CandView> {
+    let cfg = state.cfg_tx.borrow().clone();
+    let rule = cfg.rules.get(active.min(cfg.rules.len().saturating_sub(1)));
+    let catalog = palette::catalog();
+    palette::query_catalog(&catalog, &q)
+        .into_iter()
+        .map(|r| {
+            let c = &catalog[r.idx];
+            let on = match c.facet {
+                Facet::Tier => rule.is_some_and(|ru| ru.tiers.contains(&c.value)),
+                Facet::Mission => rule.is_some_and(|ru| ru.mission_types.contains(&c.value)),
+                Facet::Planet => rule.is_some_and(|ru| ru.planets.contains(&c.value)),
+                Facet::Mode => rule.is_some_and(|ru| {
+                    matches!(
+                        (&ru.mode, c.value.as_str()),
+                        (Mode::Normal, "Normal") | (Mode::SteelPath, "SteelPath") | (Mode::Both, "Both")
+                    )
+                }),
+                Facet::Toggle => rule.is_some_and(|ru| ru.include_storms),
+                Facet::Action => c.value == "pause" && cfg.paused,
+            };
+            CandView {
+                id: c.id.clone(),
+                label: c.label.clone(),
+                facet: c.facet,
+                on,
+                indices: r.indices,
+                via: r.via.map(|ai| c.aliases[ai].clone()),
+            }
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyResult {
+    pub config: AppConfig,
+    pub active: usize,
+}
+
+/// パレット候補を適用(アクティブルールの編集/アクション実行)。SPEC: SAT-001
+#[tauri::command]
+pub fn apply_candidate(
+    app: AppHandle,
+    state: State<AppState>,
+    id: String,
+    active: usize,
+) -> Result<ApplyResult, String> {
+    let mut cfg = state.cfg_tx.borrow().clone();
+    let catalog = palette::catalog();
+    let cand = catalog
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| format!("未知の候補id: {id}"))?;
+
+    let new_active = if cand.id == "action:pause" {
+        cfg.paused = !cfg.paused;
+        active
+    } else {
+        let mut editor = palette::EditorState {
+            active: active.min(cfg.rules.len().saturating_sub(1)),
+            rules: cfg.rules.clone(),
+        };
+        palette::apply(&mut editor, cand);
+        cfg.rules = editor.rules;
+        editor.active
+    };
+    persist(&app, &state, cfg.clone())?;
+    Ok(ApplyResult {
+        config: cfg,
+        active: new_active,
+    })
+}
+
+/// フィルタの一発クリア。SPEC: CLR-001
+#[tauri::command]
+pub fn clear_filter(app: AppHandle, state: State<AppState>) -> Result<AppConfig, String> {
+    let mut cfg = state.cfg_tx.borrow().clone();
+    let mut editor = palette::EditorState {
+        rules: cfg.rules.clone(),
+        active: 0,
+    };
+    palette::clear(&mut editor);
+    cfg.rules = editor.rules;
+    persist(&app, &state, cfg.clone())?;
+    Ok(cfg)
 }
 
 #[tauri::command]

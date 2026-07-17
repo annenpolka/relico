@@ -8,14 +8,15 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use proptest::prelude::*;
 use warframe_fissure_notifier_lib::backoff::Backoff;
 use warframe_fissure_notifier_lib::dedup::NotifiedSet;
-use warframe_fissure_notifier_lib::filter::{self, FilterConfig, Mode};
+use warframe_fissure_notifier_lib::filter::{self, FilterSettings, Mode, WatchRule};
 use warframe_fissure_notifier_lib::model::Fissure;
+use warframe_fissure_notifier_lib::palette::{self, Candidate, Facet};
 use warframe_fissure_notifier_lib::poller;
 
 const TIERS: &[&str] = &["Lith", "Meso", "Neo", "Axi", "Requiem", "Omnia"];
 const MISSIONS: &[&str] = &[
     "Defense", "Survival", "Capture", "Extermination", "Rescue",
-    "Disruption", "Mobile Defense", "Void Flood", "Sabotage",
+    "Disruption", "Mobile Defense", "Void Flood", "Void Cascade", "Volatile",
 ];
 const PLANETS: &[&str] = &[
     "Mars", "Ceres", "Sedna", "Void", "Saturn", "Phobos",
@@ -36,27 +37,29 @@ fn arb_subset(pool: &'static [&'static str]) -> impl Strategy<Value = Vec<String
         .prop_map(|v| v.into_iter().map(String::from).collect())
 }
 
-fn arb_config() -> impl Strategy<Value = FilterConfig> {
+fn arb_rule() -> impl Strategy<Value = WatchRule> {
     (
         arb_subset(TIERS),
         arb_subset(MISSIONS),
         arb_subset(PLANETS),
         arb_mode(),
         any::<bool>(),
-        0u64..1800,
     )
-        .prop_map(
-            |(tiers, mission_types, planets, mode, include_storms, min_remaining_secs)| {
-                FilterConfig {
-                    tiers,
-                    mission_types,
-                    planets,
-                    mode,
-                    include_storms,
-                    min_remaining_secs,
-                }
-            },
-        )
+        .prop_map(|(tiers, mission_types, planets, mode, include_storms)| WatchRule {
+            tiers,
+            mission_types,
+            planets,
+            mode,
+            include_storms,
+        })
+}
+
+fn arb_settings() -> impl Strategy<Value = FilterSettings> {
+    (proptest::collection::vec(arb_rule(), 0..4), 0u64..1800)
+        .prop_map(|(rules, min_remaining_secs)| FilterSettings {
+            rules,
+            min_remaining_secs,
+        })
 }
 
 fn arb_fissure() -> impl Strategy<Value = Fissure> {
@@ -86,91 +89,118 @@ fn arb_fissure() -> impl Strategy<Value = Fissure> {
         })
 }
 
+fn mk_catalog(labels: Vec<String>) -> Vec<Candidate> {
+    labels
+        .into_iter()
+        .enumerate()
+        .map(|(i, label)| Candidate {
+            id: format!("test:{i}"),
+            value: label.clone(),
+            label,
+            aliases: vec![],
+            facet: Facet::Mission,
+        })
+        .collect()
+}
+
 proptest! {
 
-    /// FLT-001: mode=鋼のみ のとき、isHard=false の亀裂はどんな入力でも通知されない
+    /// FLT-001: mode=鋼のみ のルールは、isHard=false の亀裂にどんな入力でも合致しない
     #[test]
-    fn flt_001(mut cfg in arb_config(), mut f in arb_fissure()) {
-        let now = base_now();
-        let _ = &now;
-        cfg.mode = Mode::SteelPath;
+    fn flt_001(mut rule in arb_rule(), mut f in arb_fissure()) {
+        rule.mode = Mode::SteelPath;
         f.is_hard = false;
-        prop_assert!(!filter::matches(&cfg, &f, now), "SPEC FLT-001 違反: mode=鋼のみ のとき、isHard=false の亀裂はどんな入力でも通知されない");
+        prop_assert!(!filter::rule_matches(&rule, &f), "SPEC FLT-001 違反: mode=鋼のみ のルールは、isHard=false の亀裂にどんな入力でも合致しない");
     }
 
-    /// FLT-002: mode=通常のみ のとき、isHard=true の亀裂はどんな入力でも通知されない
+    /// FLT-002: mode=通常のみ のルールは、isHard=true の亀裂にどんな入力でも合致しない
     #[test]
-    fn flt_002(mut cfg in arb_config(), mut f in arb_fissure()) {
-        let now = base_now();
-        let _ = &now;
-        cfg.mode = Mode::Normal;
+    fn flt_002(mut rule in arb_rule(), mut f in arb_fissure()) {
+        rule.mode = Mode::Normal;
         f.is_hard = true;
-        prop_assert!(!filter::matches(&cfg, &f, now), "SPEC FLT-002 違反: mode=通常のみ のとき、isHard=true の亀裂はどんな入力でも通知されない");
+        prop_assert!(!filter::rule_matches(&rule, &f), "SPEC FLT-002 違反: mode=通常のみ のルールは、isHard=true の亀裂にどんな入力でも合致しない");
     }
 
-    /// FLT-003: include_storms=false のとき、isStorm=true の亀裂(ボイドストーム)は通知されない
+    /// FLT-003: include_storms=false のルールは、isStorm=true の亀裂(ボイドストーム)に合致しない
     #[test]
-    fn flt_003(mut cfg in arb_config(), mut f in arb_fissure()) {
-        let now = base_now();
-        let _ = &now;
-        cfg.include_storms = false;
+    fn flt_003(mut rule in arb_rule(), mut f in arb_fissure()) {
+        rule.include_storms = false;
         f.is_storm = true;
-        prop_assert!(!filter::matches(&cfg, &f, now), "SPEC FLT-003 違反: include_storms=false のとき、isStorm=true の亀裂(ボイドストーム)は通知されない");
+        prop_assert!(!filter::rule_matches(&rule, &f), "SPEC FLT-003 違反: include_storms=false のルールは、isStorm=true の亀裂(ボイドストーム)に合致しない");
     }
 
-    /// FLT-004: tiersが空のとき、tierを理由に棄却されない(空=全tier対象)
+    /// FLT-004: ルールのtiersが空のとき、tierを理由に棄却しない(空=全tier対象)
     #[test]
-    fn flt_004(cfg in arb_config(), f in arb_fissure()) {
-        let now = base_now();
-        let mut empty_cfg = cfg.clone();
-        empty_cfg.tiers = vec![];
-        let mut pinned_cfg = cfg;
-        pinned_cfg.tiers = vec![f.tier.clone()];
+    fn flt_004(rule in arb_rule(), f in arb_fissure()) {
+        let mut empty_rule = rule.clone();
+        empty_rule.tiers = vec![];
+        let mut pinned_rule = rule;
+        pinned_rule.tiers = vec![f.tier.clone()];
         prop_assert_eq!(
-            filter::matches(&empty_cfg, &f, now),
-            filter::matches(&pinned_cfg, &f, now),
-            "SPEC FLT-004 違反: tiersが空のとき、tierを理由に棄却されない(空=全tier対象)"
+            filter::rule_matches(&empty_rule, &f),
+            filter::rule_matches(&pinned_rule, &f),
+            "SPEC FLT-004 違反: ルールのtiersが空のとき、tierを理由に棄却しない(空=全tier対象)"
         );
     }
 
-    /// FLT-005: mission_typesが空のとき、ミッション種別を理由に棄却されない(空=全種別対象)
+    /// FLT-005: ルールのmission_typesが空のとき、ミッション種別を理由に棄却しない(空=全種別対象)
     #[test]
-    fn flt_005(cfg in arb_config(), f in arb_fissure()) {
-        let now = base_now();
-        let mut empty_cfg = cfg.clone();
-        empty_cfg.mission_types = vec![];
-        let mut pinned_cfg = cfg;
-        pinned_cfg.mission_types = vec![f.mission_type.clone()];
+    fn flt_005(rule in arb_rule(), f in arb_fissure()) {
+        let mut empty_rule = rule.clone();
+        empty_rule.mission_types = vec![];
+        let mut pinned_rule = rule;
+        pinned_rule.mission_types = vec![f.mission_type.clone()];
         prop_assert_eq!(
-            filter::matches(&empty_cfg, &f, now),
-            filter::matches(&pinned_cfg, &f, now),
-            "SPEC FLT-005 違反: mission_typesが空のとき、ミッション種別を理由に棄却されない(空=全種別対象)"
+            filter::rule_matches(&empty_rule, &f),
+            filter::rule_matches(&pinned_rule, &f),
+            "SPEC FLT-005 違反: ルールのmission_typesが空のとき、ミッション種別を理由に棄却しない(空=全種別対象)"
         );
     }
 
-    /// FLT-006: planetsが空のとき、惑星を理由に棄却されない(空=全惑星対象)
+    /// FLT-006: ルールのplanetsが空のとき、惑星を理由に棄却しない(空=全惑星対象)
     #[test]
-    fn flt_006(cfg in arb_config(), f in arb_fissure()) {
-        let now = base_now();
-        let mut empty_cfg = cfg.clone();
-        empty_cfg.planets = vec![];
-        let mut pinned_cfg = cfg;
-        pinned_cfg.planets = filter::extract_planet(&f.node).into_iter().collect();
+    fn flt_006(rule in arb_rule(), f in arb_fissure()) {
+        let mut empty_rule = rule.clone();
+        empty_rule.planets = vec![];
+        let mut pinned_rule = rule;
+        pinned_rule.planets = filter::extract_planet(&f.node).into_iter().collect();
         prop_assert_eq!(
-            filter::matches(&empty_cfg, &f, now),
-            filter::matches(&pinned_cfg, &f, now),
-            "SPEC FLT-006 違反: planetsが空のとき、惑星を理由に棄却されない(空=全惑星対象)"
+            filter::rule_matches(&empty_rule, &f),
+            filter::rule_matches(&pinned_rule, &f),
+            "SPEC FLT-006 違反: ルールのplanetsが空のとき、惑星を理由に棄却しない(空=全惑星対象)"
         );
     }
 
-    /// FLT-007: 残り時間がmin_remaining_secs未満の亀裂は通知されない(期限切れ含む)
+    /// FLT-007: 残り時間がmin_remaining_secs未満の亀裂は、ルール構成に依らず合致しない(期限切れ含む)
     #[test]
-    fn flt_007(mut cfg in arb_config(), mut f in arb_fissure()) {
+    fn flt_007(s in arb_settings(), mut f in arb_fissure()) {
         let now = base_now();
-        let _ = &now;
+        f.expiry = now + Duration::seconds((s.min_remaining_secs as i64) - 1);
+        prop_assert!(!filter::matches(&s, &f, now), "SPEC FLT-007 違反: 残り時間がmin_remaining_secs未満の亀裂は、ルール構成に依らず合致しない(期限切れ含む)");
+    }
 
-        f.expiry = now + Duration::seconds((cfg.min_remaining_secs as i64) - 1);
-        prop_assert!(!filter::matches(&cfg, &f, now), "SPEC FLT-007 違反: 残り時間がmin_remaining_secs未満の亀裂は通知されない(期限切れ含む)");
+    /// FLT-008: ルール1つの設定では、全体合致 = (残り時間OK ∧ そのルールが合致)
+    #[test]
+    fn flt_008(rule in arb_rule(), f in arb_fissure(), min in 0u64..1800) {
+        let now = base_now();
+        let s = FilterSettings { rules: vec![rule.clone()], min_remaining_secs: min };
+        let remaining_ok = f.expiry.signed_duration_since(now).num_seconds() >= min as i64;
+        prop_assert_eq!(
+            filter::matches(&s, &f, now),
+            remaining_ok && filter::rule_matches(&rule, &f),
+            "SPEC FLT-008 違反: ルール1つの設定では、全体合致 = (残り時間OK ∧ そのルールが合致)"
+        );
+    }
+
+    /// FLT-009: ルールを追加しても、それまで合致していた亀裂は合致し続ける(OR単調性)
+    #[test]
+    fn flt_009(s in arb_settings(), extra in arb_rule(), f in arb_fissure()) {
+        let now = base_now();
+        if filter::matches(&s, &f, now) {
+            let mut bigger = s.clone();
+            bigger.rules.push(extra);
+            prop_assert!(filter::matches(&bigger, &f, now), "SPEC FLT-009 違反: ルールを追加しても、それまで合致していた亀裂は合致し続ける(OR単調性)");
+        }
     }
 
     /// DED-001: 同一亀裂idは任意のポーリング列で高々1回しか通知されない
@@ -239,16 +269,98 @@ proptest! {
         }
     }
 
-    /// VIS-001: 一覧に表示されるのはフィルタ合致亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない
+    /// VIS-001: 一覧に表示されるのはいずれかのルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない
     #[test]
-    fn vis_001(cfg in arb_config(), fs in proptest::collection::vec(arb_fissure(), 0..30)) {
+    fn vis_001(s in arb_settings(), fs in proptest::collection::vec(arb_fissure(), 0..30)) {
         let now = base_now();
-        let visible = poller::visible_fissures(&cfg, &fs, now);
+        let visible = poller::visible_fissures(&s, &fs, now);
         for f in &visible {
-            prop_assert!(filter::matches(&cfg, f, now), "SPEC VIS-001 違反: 一覧に表示されるのはフィルタ合致亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない (対象外が表示された)");
+            prop_assert!(filter::matches(&s, f, now), "SPEC VIS-001 違反: 一覧に表示されるのはいずれかのルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない (対象外が表示された)");
         }
-        for f in fs.iter().filter(|f| filter::matches(&cfg, f, now)) {
-            prop_assert!(visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 一覧に表示されるのはフィルタ合致亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない (合致亀裂が欠落した)");
+        for f in fs.iter().filter(|f| filter::matches(&s, f, now)) {
+            prop_assert!(visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 一覧に表示されるのはいずれかのルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない (合致亀裂が欠落した)");
         }
+    }
+
+    /// FZY-001: パレットのファジーマッチが成立するのは、クエリ文字が候補文字列(またはalias)に順序どおり現れる場合に限る(健全性)
+    #[test]
+    fn fzy_001(q in ".{0,12}", text in ".{0,24}") {
+        if let Some((_score, idx)) = palette::fuzzy_score(&q, &text) {
+            let tc: Vec<char> = text.chars().collect();
+            let qc: Vec<char> = q.chars().collect();
+            prop_assert_eq!(idx.len(), qc.len(), "SPEC FZY-001 違反: パレットのファジーマッチが成立するのは、クエリ文字が候補文字列(またはalias)に順序どおり現れる場合に限る(健全性)");
+            for w in idx.windows(2) {
+                prop_assert!(w[0] < w[1], "SPEC FZY-001 違反: パレットのファジーマッチが成立するのは、クエリ文字が候補文字列(またはalias)に順序どおり現れる場合に限る(健全性) (順序が保存されていない)");
+            }
+            for (k, &i) in idx.iter().enumerate() {
+                let a = tc[i];
+                let b = qc[k];
+                prop_assert!(a == b || a.to_lowercase().eq(b.to_lowercase()), "SPEC FZY-001 違反: パレットのファジーマッチが成立するのは、クエリ文字が候補文字列(またはalias)に順序どおり現れる場合に限る(健全性) (文字不一致)");
+            }
+        }
+    }
+
+    /// FZY-002: 空クエリはパレット候補の全件を返す(完全性)
+    #[test]
+    fn fzy_002(labels in proptest::collection::vec("[A-Za-z ]{1,12}", 0..20)) {
+        let catalog = mk_catalog(labels);
+        prop_assert_eq!(palette::query_catalog(&catalog, "").len(), catalog.len(), "SPEC FZY-002 違反: 空クエリはパレット候補の全件を返す(完全性)");
+    }
+
+    /// FZY-003: クエリと完全一致する候補(label/alias)が存在すれば、先頭候補は完全一致である
+    #[test]
+    fn fzy_003(labels in proptest::collection::vec("[a-z]{1,8}", 1..15), pick in any::<prop::sample::Index>()) {
+        let q = labels[pick.index(labels.len())].clone();
+        let catalog = mk_catalog(labels);
+        let res = palette::query_catalog(&catalog, &q);
+        prop_assert!(!res.is_empty(), "SPEC FZY-003 違反: クエリと完全一致する候補(label/alias)が存在すれば、先頭候補は完全一致である (結果が空)");
+        let top = &catalog[res[0].idx];
+        let exact = top.label.eq_ignore_ascii_case(&q)
+            || top.aliases.iter().any(|a| a.eq_ignore_ascii_case(&q));
+        prop_assert!(exact, "SPEC FZY-003 違反: クエリと完全一致する候補(label/alias)が存在すれば、先頭候補は完全一致である (先頭が完全一致でない: {})", top.label);
+    }
+
+    /// FZY-004: 同一クエリ・同一候補集合に対するパレットの結果順序は決定的
+    #[test]
+    fn fzy_004(labels in proptest::collection::vec("[A-Za-z ]{1,10}", 0..15), q in "[a-z]{0,6}") {
+        let catalog = mk_catalog(labels);
+        let a: Vec<usize> = palette::query_catalog(&catalog, &q).into_iter().map(|r| r.idx).collect();
+        let b: Vec<usize> = palette::query_catalog(&catalog, &q).into_iter().map(|r| r.idx).collect();
+        prop_assert_eq!(a, b, "SPEC FZY-004 違反: 同一クエリ・同一候補集合に対するパレットの結果順序は決定的");
+    }
+
+    /// SAT-001: パレット操作列をどう並べても、適用後のすべてのルールはドメイン互換表(Requiem↔クバ要塞、Omnia↔ザリマン、ストーム↔Proxima、鋼ストーム不存在等)に関して充足可能。ルール内で両立しない選択は新しい方を残して上書き解決される
+    #[test]
+    fn sat_001(ops in proptest::collection::vec(any::<prop::sample::Index>(), 0..40)) {
+        let catalog = palette::filter_catalog();
+        let mut state = palette::EditorState::default();
+        for op in ops {
+            let cand = &catalog[op.index(catalog.len())];
+            palette::apply(&mut state, cand);
+            for rule in &state.rules {
+                prop_assert!(
+                    palette::satisfiable(rule),
+                    "SPEC SAT-001 違反: パレット操作列をどう並べても、適用後のすべてのルールはドメイン互換表(Requiem↔クバ要塞、Omnia↔ザリマン、ストーム↔Proxima、鋼ストーム不存在等)に関して充足可能。ルール内で両立しない選択は新しい方を残して上書き解決される ({} 適用後に充足不能: {:?})", cand.id, rule
+                );
+            }
+        }
+    }
+
+    /// CLR-001: クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す
+    #[test]
+    fn clr_001(rules in proptest::collection::vec(arb_rule(), 0..4), pick in any::<prop::sample::Index>()) {
+        let active = if rules.is_empty() { 0 } else { pick.index(rules.len()) };
+        let mut state = palette::EditorState { rules, active };
+        palette::clear(&mut state);
+        prop_assert_eq!(state.rules.len(), 1, "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す");
+        prop_assert_eq!(state.active, 0, "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す");
+        let r = &state.rules[0];
+        prop_assert!(
+            r.tiers.is_empty() && r.mission_types.is_empty() && r.planets.is_empty(),
+            "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す (軸が既定でない)"
+        );
+        prop_assert!(matches!(r.mode, Mode::Both), "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す (modeが既定でない)");
+        prop_assert!(!r.include_storms, "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す (stormsが既定でない)");
+        prop_assert!(palette::satisfiable(r), "SPEC CLR-001 違反: クリア操作は1回でルール構成を既定(全対象ルール1本、ストーム除外、両方モード)に戻す (既定ルールが充足不能)");
     }
 }

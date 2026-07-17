@@ -228,6 +228,156 @@ input:focus-visible {
   color: var(--amber);
 }
 
+/* ---- ルール一覧 ---- */
+#rules-list .rule {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#rules-list .rule.on {
+  border-color: var(--line);
+  color: var(--ink);
+  background: rgba(255, 180, 84, 0.08);
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+#rules-list .rule .rno {
+  color: var(--amber);
+  margin-right: 4px;
+}
+
+.norules {
+  color: var(--dim);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  margin: 2px 0;
+}
+
+/* ---- ファジーパレット ---- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 7, 6, 0.6);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10vh;
+  z-index: 10;
+}
+
+.overlay[hidden] {
+  display: none;
+}
+
+.palette {
+  width: min(520px, 92vw);
+  background: var(--bg);
+  border: 1px solid var(--amber);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+}
+
+.qline {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.qline .prompt {
+  color: var(--amber);
+}
+
+#palette-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  font: inherit;
+  letter-spacing: 0.04em;
+  caret-color: var(--amber);
+}
+
+.p-rule {
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+}
+
+.cands {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.cand {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.cand.sel {
+  background: rgba(255, 180, 84, 0.1);
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.cand .box {
+  color: var(--amber);
+}
+
+.cand.off .box {
+  color: var(--dim);
+}
+
+.cand .via {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.cand .facet {
+  margin-left: auto;
+  color: var(--dim);
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+}
+
+.cand .hl {
+  color: var(--amber);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.cand.none {
+  color: var(--dim);
+  cursor: default;
+  letter-spacing: 0.12em;
+}
+
+.hint {
+  border-top: 1px solid var(--line);
+  padding: 6px 12px;
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
 /* ---- ステータスバー ---- */
 .statusbar {
   grid-column: 1 / -1;

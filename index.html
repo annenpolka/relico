@@ -29,12 +29,19 @@
       </section>
 
       <aside class="rail">
+        <h3>RULES (OR)</h3>
+        <div id="rules-list"></div>
+        <div class="rowbtns">
+          <button id="rule-new" class="action">NEW</button>
+          <button id="rule-del" class="action">DEL</button>
+          <button id="clear-btn" class="action">CLEAR</button>
+        </div>
+        <hr />
         <h3>TIER FILTER</h3>
         <div id="tier-checks"></div>
         <hr />
         <h3>MODE</h3>
         <div id="mode-checks"></div>
-        <button class="check" id="storm-check"><span class="box">[ ]</span> INCL. STORMS</button>
         <hr />
         <h3>MISSION</h3>
         <div id="mission-checks" class="scrolllist"></div>
@@ -63,5 +70,19 @@
         <span id="sb-watch" class="grow"></span>
       </footer>
     </main>
+
+    <div class="overlay" id="palette-overlay" hidden>
+      <div class="palette">
+        <div class="qline">
+          <span class="prompt">&gt;</span>
+          <input id="palette-input" autocomplete="off" spellcheck="false" />
+          <span class="p-rule" id="palette-rule"></span>
+        </div>
+        <div class="cands" id="palette-cands"></div>
+        <div class="hint">
+          <span>↑↓ 選択</span><span>⏎ トグル(連続入力)</span><span>esc 閉じる</span><span>TYPE ANYWHERE</span>
+        </div>
+      </div>
+    </div>
   </body>
 </html>

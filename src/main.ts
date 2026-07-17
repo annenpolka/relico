@@ -1,16 +1,24 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AppConfig, Fissure, StatusSnapshot } from "./types";
-import { KNOWN_MISSIONS, KNOWN_PLANETS, TIERS } from "./types";
+import type { AppConfig, ApplyResult, CandView, Facet, StatusSnapshot, WatchRule } from "./types";
 
 let config: AppConfig | null = null;
 let status: StatusSnapshot | null = null;
-let nextRefresh = 0;
 let autostart = false;
+let active = 0;
+let catalogView: CandView[] = []; // q="" の全候補(レール描画用)
+let nextRefresh = 0;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 
-// ---- 設定の保存(300msデバウンス) ----
+function railMsg(text: string, kind: "ok" | "err" | "" = "") {
+  const el = $("rail-msg");
+  el.textContent = text;
+  el.className = kind;
+}
+
+// ---- 設定の保存(パレット外の項目: 通知先・間隔など) ----
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 function save() {
   if (!config) return;
@@ -25,90 +33,69 @@ function save() {
   }, 300);
 }
 
-function railMsg(text: string, kind: "ok" | "err" | "" = "") {
-  const el = $("rail-msg");
-  el.textContent = text;
-  el.className = kind;
+// ---- パレット候補の適用(ルール編集はすべてこの経路 = SAT-001の解決を通る) ----
+async function refreshCatalog() {
+  catalogView = await invoke<CandView[]>("query_candidates", { q: "", active });
 }
 
-// ---- チェックリスト描画 ----
-function renderChecklist(
-  containerId: string,
-  items: string[],
-  selected: string[],
-  onToggle: (item: string, on: boolean) => void,
-) {
+async function applyCand(id: string) {
+  try {
+    const res = await invoke<ApplyResult>("apply_candidate", { id, active });
+    config = res.config;
+    active = res.active;
+    await refreshCatalog();
+    renderRail();
+    renderStatusbar();
+  } catch (e) {
+    railMsg(String(e), "err");
+  }
+}
+
+// ---- ルール一覧 ----
+function summarize(r: WatchRule): string {
+  const tiers = r.tiers.length ? r.tiers.map((t) => t.toUpperCase()).join("+") : "ALL";
+  const mode = r.mode === "SteelPath" ? "鋼" : r.mode === "Normal" ? "通常" : "両方";
+  let s = `${tiers}/${mode}`;
+  if (r.missionTypes.length) s += `/M${r.missionTypes.length}`;
+  if (r.planets.length) s += `/P${r.planets.length}`;
+  if (r.includeStorms) s += "/STORM";
+  return s;
+}
+
+function renderRules() {
+  const box = $("rules-list");
+  const rules = config?.rules ?? [];
+  if (!rules.length) {
+    box.innerHTML = `<p class="norules">NO RULES</p>`;
+    return;
+  }
+  box.replaceChildren(
+    ...rules.map((r, i) => {
+      const btn = document.createElement("button");
+      btn.className = `rule${i === active ? " on" : ""}`;
+      btn.innerHTML = `<span class="rno">R${i + 1}</span> ${esc(summarize(r))}`;
+      btn.addEventListener("click", async () => {
+        active = i;
+        await refreshCatalog();
+        renderRail();
+      });
+      return btn;
+    }),
+  );
+}
+
+function renderChecksFromCatalog(containerId: string, facets: Facet[]) {
   const container = $(containerId);
+  const items = catalogView.filter((c) => facets.includes(c.facet));
   container.replaceChildren(
-    ...items.map((item) => {
-      const on = selected.includes(item);
+    ...items.map((c) => {
       const btn = document.createElement("button");
-      btn.className = `check${on ? "" : " off"}`;
-      btn.innerHTML = `<span class="box">[${on ? "x" : " "}]</span> ${item.toUpperCase()}`;
-      btn.addEventListener("click", () => {
-        onToggle(item, !on);
-        save(); // 表示の絞り込みは設定反映後の次回スナップショットで更新される
-        renderRail();
-      });
+      btn.className = `check${c.on ? "" : " off"}`;
+      btn.innerHTML = `<span class="box">[${c.on ? "x" : " "}]</span> ${esc(c.label.toUpperCase())}`;
+      btn.addEventListener("click", () => applyCand(c.id));
       return btn;
     }),
   );
-}
-
-const MODES: { key: AppConfig["mode"]; label: string }[] = [
-  { key: "Normal", label: "NORMAL ONLY" },
-  { key: "SteelPath", label: "HARD ONLY" },
-  { key: "Both", label: "BOTH" },
-];
-
-function renderRail() {
-  if (!config) return;
-  const cfg = config;
-
-  renderChecklist("tier-checks", [...TIERS], cfg.tiers, (t, on) => {
-    cfg.tiers = on ? [...cfg.tiers, t] : cfg.tiers.filter((x) => x !== t);
-  });
-
-  // MODEはラジオ動作
-  const modeBox = $("mode-checks");
-  modeBox.replaceChildren(
-    ...MODES.map(({ key, label }) => {
-      const on = cfg.mode === key;
-      const btn = document.createElement("button");
-      btn.className = `check${on ? "" : " off"}`;
-      btn.innerHTML = `<span class="box">[${on ? "x" : " "}]</span> ${label}`;
-      btn.addEventListener("click", () => {
-        cfg.mode = key;
-        save();
-        renderRail();
-      });
-      return btn;
-    }),
-  );
-
-  setCheck("storm-check", cfg.includeStorms);
-  setCheck("desktop-check", cfg.desktopNotification);
-  setCheck("autostart-check", autostart);
-
-  const missions = union(KNOWN_MISSIONS, observed((f) => f.missionType), cfg.missionTypes);
-  renderChecklist("mission-checks", missions, cfg.missionTypes, (m, on) => {
-    cfg.missionTypes = on ? [...cfg.missionTypes, m] : cfg.missionTypes.filter((x) => x !== m);
-  });
-
-  const planets = union(KNOWN_PLANETS, observed(planetOf), cfg.planets);
-  renderChecklist("planet-checks", planets, cfg.planets, (p, on) => {
-    cfg.planets = on ? [...cfg.planets, p] : cfg.planets.filter((x) => x !== p);
-  });
-
-  ($("webhook-input") as HTMLInputElement).value = cfg.discordWebhookUrl ?? "";
-  ($("minremain-input") as HTMLInputElement).value = String(cfg.minRemainingSecs);
-  ($("poll-input") as HTMLInputElement).value = String(cfg.pollIntervalSecs);
-
-  const pauseBtn = $("pause-btn");
-  pauseBtn.textContent = cfg.paused ? "RESUME" : "PAUSE";
-  pauseBtn.classList.toggle("hot", cfg.paused);
-
-  renderWatchLine();
 }
 
 function setCheck(id: string, on: boolean) {
@@ -118,22 +105,29 @@ function setCheck(id: string, on: boolean) {
   if (box) box.textContent = `[${on ? "x" : " "}]`;
 }
 
-function union(...lists: readonly (readonly string[])[]): string[] {
-  return [...new Set(lists.flat())];
+function renderRail() {
+  if (!config) return;
+  renderRules();
+  renderChecksFromCatalog("tier-checks", ["tier"]);
+  renderChecksFromCatalog("mode-checks", ["mode", "toggle"]);
+  renderChecksFromCatalog("mission-checks", ["mission"]);
+  renderChecksFromCatalog("planet-checks", ["planet"]);
+
+  setCheck("desktop-check", config.desktopNotification);
+  setCheck("autostart-check", autostart);
+
+  ($("webhook-input") as HTMLInputElement).value = config.discordWebhookUrl ?? "";
+  ($("minremain-input") as HTMLInputElement).value = String(config.minRemainingSecs);
+  ($("poll-input") as HTMLInputElement).value = String(config.pollIntervalSecs);
+
+  const pauseBtn = $("pause-btn");
+  pauseBtn.textContent = config.paused ? "RESUME" : "PAUSE";
+  pauseBtn.classList.toggle("hot", config.paused);
+
+  renderWatchLine();
 }
 
-function observed(pick: (f: Fissure) => string | null): string[] {
-  return (status?.fissures ?? []).map(pick).filter((x): x is string => !!x);
-}
-
-// Rust側 filter::extract_planet と同じ「最後の括弧」規則(表示専用の複製)
-function planetOf(f: Fissure): string | null {
-  const m = f.node.match(/\(([^)]*)\)[^(]*$/);
-  const p = m?.[1]?.trim();
-  return p ? p : null;
-}
-
-// ---- テーブル描画 ----
+// ---- テーブル ----
 function renderTable() {
   const rows = $("fissure-rows");
   // 表示されるのは合致亀裂のみ(SPEC: VIS-001)
@@ -143,7 +137,7 @@ function renderTable() {
       status?.apiOk === false
         ? "API UNREACHABLE — BACKING OFF"
         : status?.lastPoll
-          ? "NO MATCHING FISSURES — ADJUST FILTER"
+          ? "NO MATCHING FISSURES — ADJUST RULES"
           : "WAITING FOR WORLDSTATE…";
     rows.innerHTML = `<tr><td colspan="6" class="empty">${msg}</td></tr>`;
     return;
@@ -158,10 +152,10 @@ function renderTable() {
         .filter(Boolean)
         .join(" ");
       tr.innerHTML = `
-        <td class="t-tier">${f.tier.toUpperCase()}</td>
-        <td>${f.node}</td>
-        <td>${f.missionType.toUpperCase()}</td>
-        <td class="t-mute">${f.enemy.toUpperCase()}</td>
+        <td class="t-tier">${esc(f.tier.toUpperCase())}</td>
+        <td>${esc(f.node)}</td>
+        <td>${esc(f.missionType.toUpperCase())}</td>
+        <td class="t-mute">${esc(f.enemy.toUpperCase())}</td>
         <td class="t-timer" data-expiry="${f.expiry}">--:--</td>
         <td>${flags}</td>`;
       return tr;
@@ -206,9 +200,9 @@ function renderStatusbar() {
 
 function renderWatchLine() {
   if (!config) return;
-  const tiers = config.tiers.length ? config.tiers.join("+") : "ALL TIERS";
-  const mode = config.mode === "SteelPath" ? "HARD" : config.mode === "Normal" ? "NORMAL" : "BOTH";
-  $("sb-watch").textContent = `WATCH: ${tiers.toUpperCase()} / ${mode}`;
+  const n = config.rules.length;
+  $("sb-watch").textContent =
+    n === 0 ? "WATCH: NO RULES" : n === 1 ? `WATCH: ${summarize(config.rules[0])}` : `WATCH: ${n} RULES`;
 }
 
 function tickStatusbar() {
@@ -221,11 +215,83 @@ function tickStatusbar() {
   el.textContent = `NEXT REFRESH ${nextRefresh}s`;
 }
 
+// ---- ファジーパレット ----
+let paletteOpen = false;
+let paletteSel = 0;
+let paletteResults: CandView[] = [];
+const PALETTE_MAX = 12;
+
+function hl(text: string, indices: number[]): string {
+  const set = new Set(indices);
+  return Array.from(text)
+    .map((ch, i) => (set.has(i) ? `<span class="hl">${esc(ch)}</span>` : esc(ch)))
+    .join("");
+}
+
+async function paletteQuery() {
+  const q = ($("palette-input") as HTMLInputElement).value;
+  paletteResults = await invoke<CandView[]>("query_candidates", { q, active });
+  paletteSel = Math.min(paletteSel, Math.max(0, Math.min(paletteResults.length, PALETTE_MAX) - 1));
+  renderPalette();
+}
+
+function renderPalette() {
+  const rules = config?.rules ?? [];
+  $("palette-rule").textContent = rules.length ? `RULE ${Math.min(active, rules.length - 1) + 1}/${rules.length}` : "NO RULES";
+  const box = $("palette-cands");
+  if (!paletteResults.length) {
+    box.innerHTML = `<div class="cand none">NO MATCH</div>`;
+    return;
+  }
+  box.replaceChildren(
+    ...paletteResults.slice(0, PALETTE_MAX).map((c, i) => {
+      const div = document.createElement("div");
+      div.className = `cand${c.on ? "" : " off"}${i === paletteSel ? " sel" : ""}`;
+      const label = c.via ? esc(c.label) : hl(c.label, c.indices);
+      const via = c.via ? `<span class="via">⌁ ${hl(c.via, c.indices)}</span>` : "";
+      div.innerHTML = `<span class="box">[${c.on ? "x" : " "}]</span><span class="label">${label}</span>${via}<span class="facet">${c.facet.toUpperCase()}</span>`;
+      div.addEventListener("click", () => {
+        paletteSel = i;
+        paletteApply();
+      });
+      return div;
+    }),
+  );
+}
+
+async function paletteApply() {
+  const c = paletteResults[paletteSel];
+  if (!c) return;
+  await applyCand(c.id);
+  const input = $("palette-input") as HTMLInputElement;
+  input.value = ""; // 連続入力: 開いたままクエリだけリセット
+  paletteSel = 0;
+  await paletteQuery();
+}
+
+function openPalette(seed: string) {
+  paletteOpen = true;
+  $("palette-overlay").hidden = false;
+  const input = $("palette-input") as HTMLInputElement;
+  input.value = seed;
+  paletteSel = 0;
+  input.focus();
+  paletteQuery();
+}
+
+function closePalette() {
+  paletteOpen = false;
+  $("palette-overlay").hidden = true;
+  ($("palette-input") as HTMLInputElement).blur();
+}
+
 // ---- 初期化 ----
 async function init() {
   config = await invoke<AppConfig>("get_config");
   status = await invoke<StatusSnapshot>("get_status");
   autostart = await invoke<boolean>("get_autostart").catch(() => false);
+  active = 0;
+  await refreshCatalog();
   nextRefresh = status.nextPollSecs;
   renderRail();
   renderTable();
@@ -236,22 +302,33 @@ async function init() {
     nextRefresh = status.nextPollSecs;
     renderTable();
     renderStatusbar();
-    renderRail(); // observed惑星/ミッションの選択肢を追随
   });
 
   // トレイのPAUSE等、フロント外からの設定変更に追随する
-  await listen<AppConfig>("config", (event) => {
+  await listen<AppConfig>("config", async (event) => {
     config = event.payload;
+    active = Math.max(0, Math.min(active, config.rules.length - 1));
+    await refreshCatalog();
     renderRail();
     renderStatusbar();
   });
 
-  $("storm-check").addEventListener("click", () => {
-    if (!config) return;
-    config.includeStorms = !config.includeStorms;
-    save();
-    renderRail();
+  $("rule-new").addEventListener("click", () => applyCand("action:new-rule"));
+  $("rule-del").addEventListener("click", () => applyCand("action:delete-rule"));
+  $("clear-btn").addEventListener("click", async () => {
+    try {
+      config = await invoke<AppConfig>("clear_filter");
+      active = 0;
+      await refreshCatalog();
+      renderRail();
+      renderStatusbar();
+      railMsg("ルールを既定に戻した", "ok");
+    } catch (e) {
+      railMsg(String(e), "err");
+    }
   });
+  $("pause-btn").addEventListener("click", () => applyCand("action:pause"));
+
   $("desktop-check").addEventListener("click", () => {
     if (!config) return;
     config.desktopNotification = !config.desktopNotification;
@@ -266,12 +343,6 @@ async function init() {
     } catch (e) {
       railMsg(`AUTOSTART失敗: ${e}`, "err");
     }
-  });
-  $("pause-btn").addEventListener("click", () => {
-    if (!config) return;
-    config.paused = !config.paused;
-    save();
-    renderRail();
   });
   $("test-btn").addEventListener("click", async () => {
     railMsg("SENDING…");
@@ -297,6 +368,41 @@ async function init() {
     config.pollIntervalSecs = Math.max(30, Number((e.target as HTMLInputElement).value) || 60);
     save();
     renderStatusbar();
+  });
+
+  // どこでも打鍵でパレット起動(入力欄フォーカス時を除く)。MAN-003
+  document.addEventListener("keydown", (e) => {
+    if (!paletteOpen) {
+      const t = e.target as HTMLElement;
+      const inField = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement;
+      if (!inField && !e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1 && e.key !== " ") {
+        e.preventDefault();
+        openPalette(e.key);
+      }
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closePalette();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      paletteApply();
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      paletteSel = Math.min(paletteSel + 1, Math.max(0, Math.min(paletteResults.length, PALETTE_MAX) - 1));
+      renderPalette();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      paletteSel = Math.max(0, paletteSel - 1);
+      renderPalette();
+    }
+  });
+  $("palette-input").addEventListener("input", () => {
+    paletteSel = 0;
+    paletteQuery();
+  });
+  $("palette-overlay").addEventListener("click", (e) => {
+    if (e.target === $("palette-overlay")) closePalette();
   });
 
   setInterval(() => {
