@@ -179,7 +179,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.StaticCheck {
     id = "STA-001"
-    desc = "配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない"
+    desc = "配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない"
     scenario = "bundle_identity"
   }
   new patterns.StaticCheck {
@@ -234,6 +234,16 @@ clauses: Listing<patterns.Clause> = new {
     desc = "亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合)"
     scenario = "compact_table"
   }
+  new patterns.E2eScenario {
+    id = "E2E-001"
+    desc = "実アプリでパレット打鍵→候補適用が本物のquery_candidates/apply_candidateを往復し、ルールsummaryとwatch行へ反映される(WDIO Tauri E2E、専用identity)"
+    scenario = "palette_apply_ipc"
+  }
+  new patterns.E2eScenario {
+    id = "E2E-002"
+    desc = "実アプリで通知先を全て無効にしたTEST DELIVERYが、本物のset_config・test_notificationを通り、NTF-001の失敗理由(通知先なし)をrailへ表示する(WDIO Tauri E2E)"
+    scenario = "delivery_error_surface"
+  }
   new patterns.Manual {
     id = "MAN-001"
     desc = "通知テスト専用bundleと配布bundleの各名義で、macOSの初回権限許可とバナー表示を人が知覚できる"
@@ -248,8 +258,8 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.Manual {
     id = "MAN-003"
-    desc = "ファジーパレットで、macOSの実IMEを使った日本語alias入力と、実アプリでの一連の操作ができる"
-    procedure = "リリース前に実アプリで短く確認する。1) IME有効のまま打鍵しても即確定せず、「鋼」「耐久」「分裂」などの日本語aliasを変換して入力できる(実IMEはWebDriverやsynthetic eventで代替できない — docs/E2E.md)。2) 実IPC経由でaxi⏎ hagane⏎の連続トグルとNEW RULE/DELETE RULE/CLEARの実行ができる。打鍵起動・Esc・変換中Enterの無視・連続適用の結線はRND-001で、alias解決とローマ字揺れはRustのFZY条項とexampleテストで機械検証済み。"
+    desc = "ファジーパレットで、macOSの実IMEを使った日本語alias入力ができる"
+    procedure = "リリース前に実アプリで短く確認する: IME有効のまま打鍵しても即確定せず、「鋼」「耐久」「分裂」などの日本語aliasを変換して入力できる(実IMEはWebDriverやsynthetic eventで代替できない — docs/E2E.md)。打鍵起動・Esc・変換中Enterの無視・連続適用の結線はRND-001、実IPCでの候補適用はE2E-001、alias解決とローマ字揺れはRustのFZY条項とexampleテストで機械検証済み。"
   }
   new patterns.Manual {
     id = "MAN-004"
@@ -276,8 +286,8 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.Manual {
     id = "MAN-008"
-    desc = "ルール一覧のtoggleとedit focusが視覚的に区別でき、実アプリで複数有効ルールのOR監視とTEST DELIVERYのルールバイパスが機能する"
-    procedure = "リリース前に実アプリで短く確認する。1) toggleとedit本体が視覚的に区別できる(誤操作しない)。2) 実IPC経由で複数ルールをenabledにするとそのORが一覧・通知対象になる。3) 全ルールdisabledでもTEST DELIVERYはルールをバイパスし、選択した配送経路のテストだけを実行する。OR・dedup・edit独立の意味論はFLT-013/014・DED-003・EDT-001/002で、UI結線(toggle/edit分離・NO ENABLED表示)はRND-003で機械検証済み。"
+    desc = "ルール一覧のtoggleとedit focusが視覚的に区別でき、実アプリで複数有効ルールのOR監視が機能する"
+    procedure = "リリース前に実アプリで短く確認する。1) toggleとedit本体が視覚的に区別できる(誤操作しない)。2) 実ワールドステートで複数ルールをenabledにするとそのORが一覧・通知対象になる。OR・dedup・edit独立の意味論はFLT-013/014・DED-003・EDT-001/002で、UI結線(toggle/edit分離・NO ENABLED表示)はRND-003で、実IPCの設定変更とTEST DELIVERYの実backend経路はE2E-001/002で機械検証済み(TEST DELIVERYがルールに依存しないことはtest_notificationの実装がルールを参照しないことによる)。"
   }
   new patterns.Manual {
     id = "MAN-009"

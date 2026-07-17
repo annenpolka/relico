@@ -1,0 +1,8 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "RELICO E2E",
+  "identifier": "com.annenpolka.relico.e2e",
+  "build": {
+    "beforeBuildCommand": "VITE_E2E=1 bun run build"
+  }
+}

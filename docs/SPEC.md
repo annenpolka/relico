@@ -50,7 +50,7 @@
 | NTF-002 | `notification_example` | example-tested | desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める |
 | NTF-003 | `notification_example` | example-tested | 未バンドルのraw devでdesktop通知を利用できない場合は、失敗詳細を保持し、デバッグbundle .appを使う just notification-test を案内する |
 | NTF-004 | `notification_example` | example-tested | Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する |
-| STA-001 | `static_check` | example-tested | 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない |
+| STA-001 | `static_check` | example-tested | 配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない |
 | STA-002 | `static_check` | example-tested | トレイは専用tray-icon.pngをテンプレート画像として登録する配線を持ち、PNGはモノクロ(+アルファ)形式である |
 | AST-001 | `approved_asset` | example-tested | メニューバー用tray-icon.pngは目視承認済みの内容から変わっていない(変えたらMAN-005の手順で再承認しsha256を更新する) |
 | AST-002 | `approved_asset` | example-tested | 配布用アプリアイコンicon.icnsは目視承認済みの内容から変わっていない(変えたらMAN-006の手順で再承認しsha256を更新する) |
@@ -61,14 +61,16 @@
 | RND-003 | `renderer_scenario` | example-tested | ルール行のenabled切替はset_rule_enabledだけを呼びedit focus表示を変えず、行本体はパレットを開くだけで切替を呼ばない。全ルール無効では一覧とステータスバーにNO ENABLED表示が出る(renderer統合) |
 | RND-004 | `renderer_scenario` | example-tested | 最小720x480でも右サイドバーは縦スクロールなしでルールnavigator・NEW/DEL/CLEAR・5軸launcher・配送設定・TEST/PAUSE・時間設定へ到達でき、launcherはパレットをその軸に絞って開く(renderer統合) |
 | RND-005 | `renderer_scenario` | example-tested | 亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合) |
+| E2E-001 | `e2e_scenario` | example-tested | 実アプリでパレット打鍵→候補適用が本物のquery_candidates/apply_candidateを往復し、ルールsummaryとwatch行へ反映される(WDIO Tauri E2E、専用identity) |
+| E2E-002 | `e2e_scenario` | example-tested | 実アプリで通知先を全て無効にしたTEST DELIVERYが、本物のset_config・test_notificationを通り、NTF-001の失敗理由(通知先なし)をrailへ表示する(WDIO Tauri E2E) |
 | MAN-001 | `manual` | manual | 通知テスト専用bundleと配布bundleの各名義で、macOSの初回権限許可とバナー表示を人が知覚できる |
 | MAN-002 | `manual` | manual | Discord Webhook通知がスマホのDiscordアプリでpush表示される |
-| MAN-003 | `manual` | manual | ファジーパレットで、macOSの実IMEを使った日本語alias入力と、実アプリでの一連の操作ができる |
+| MAN-003 | `manual` | manual | ファジーパレットで、macOSの実IMEを使った日本語alias入力ができる |
 | MAN-004 | `manual` | manual | SVGアイコンが小サイズでも判別でき、HARD+STORMの併記が読める |
 | MAN-005 | `manual` | manual | メニューバーのRELICOテンプレートアイコンがライト/ダーク外観で判別できる |
 | MAN-006 | `manual` | manual | 配布バンドルのRELICOアプリアイコンが通常・小サイズ表示で判別できる |
 | MAN-007 | `manual` | manual | macOSではコンソール表示中だけ通常アプリとしてDockとウィンドウ切替ツールに現れ、閉じるとメニューバー常駐へ戻る |
-| MAN-008 | `manual` | manual | ルール一覧のtoggleとedit focusが視覚的に区別でき、実アプリで複数有効ルールのOR監視とTEST DELIVERYのルールバイパスが機能する |
+| MAN-008 | `manual` | manual | ルール一覧のtoggleとedit focusが視覚的に区別でき、実アプリで複数有効ルールのOR監視が機能する |
 | MAN-009 | `manual` | manual | 配布版・通知テスト版・DMG一時mountがLaunchServicesで競合せず、配布版のcanonical appだけがcom.annenpolka.relicoとして残る |
 | MAN-010 | `manual` | manual | 右サイドバーの要約が読みやすく、情報の優先順位が視覚的に自然である |
 | MAN-011 | `manual` | manual | compact表示が実データで読みやすく、VoiceOverでtable semanticsが自然に読み上げられる |
@@ -77,23 +79,25 @@
 
 オラクルの実行先: `rule_*` 等のRustパターンは `cargo test`(src-tauri/tests/oracles_generated.rs)、
 `renderer_glyphs` は `bun test tests/unit`、`renderer_scenario` は `just renderer-test`
-(Playwright/WebKit、Tauri IPCはmock — Rust commandやOS通知を通った証明にはしない。docs/E2E.md参照)。
+(Playwright/WebKit、Tauri IPCはmock — Rust commandやOS通知を通った証明にはしない。docs/E2E.md参照)、
+`e2e_scenario` は `just e2e`(WDIO Tauri E2E。実IPC・実WKWebViewを通し、専用identity
+com.annenpolka.relico.e2e で実行する)。
 
 ## 手動確認手順(manual条項)
 
 ### 毎リリース実施
 
-#### MAN-003: ファジーパレットで、macOSの実IMEを使った日本語alias入力と、実アプリでの一連の操作ができる
+#### MAN-003: ファジーパレットで、macOSの実IMEを使った日本語alias入力ができる
 
-リリース前に実アプリで短く確認する。1) IME有効のまま打鍵しても即確定せず、「鋼」「耐久」「分裂」などの日本語aliasを変換して入力できる(実IMEはWebDriverやsynthetic eventで代替できない — docs/E2E.md)。2) 実IPC経由でaxi⏎ hagane⏎の連続トグルとNEW RULE/DELETE RULE/CLEARの実行ができる。打鍵起動・Esc・変換中Enterの無視・連続適用の結線はRND-001で、alias解決とローマ字揺れはRustのFZY条項とexampleテストで機械検証済み。
+リリース前に実アプリで短く確認する: IME有効のまま打鍵しても即確定せず、「鋼」「耐久」「分裂」などの日本語aliasを変換して入力できる(実IMEはWebDriverやsynthetic eventで代替できない — docs/E2E.md)。打鍵起動・Esc・変換中Enterの無視・連続適用の結線はRND-001、実IPCでの候補適用はE2E-001、alias解決とローマ字揺れはRustのFZY条項とexampleテストで機械検証済み。
 
 #### MAN-007: macOSではコンソール表示中だけ通常アプリとしてDockとウィンドウ切替ツールに現れ、閉じるとメニューバー常駐へ戻る
 
 just devと配布.appの両方で確認する。1) コンソール表示中はDockにRELICOアイコンが現れ、PaneruとRaycastのSwitch Windowsからウィンドウを選択・フォーカスできる。2) 閉じるとプロセスとメニューバー監視は継続したままコンソールとDockアイコンが消える。3) トレイのOPEN CONSOLE、またはアプリの再オープンでコンソールが再表示・フォーカスされ、Dockと各ウィンドウ切替ツールに再び現れる。
 
-#### MAN-008: ルール一覧のtoggleとedit focusが視覚的に区別でき、実アプリで複数有効ルールのOR監視とTEST DELIVERYのルールバイパスが機能する
+#### MAN-008: ルール一覧のtoggleとedit focusが視覚的に区別でき、実アプリで複数有効ルールのOR監視が機能する
 
-リリース前に実アプリで短く確認する。1) toggleとedit本体が視覚的に区別できる(誤操作しない)。2) 実IPC経由で複数ルールをenabledにするとそのORが一覧・通知対象になる。3) 全ルールdisabledでもTEST DELIVERYはルールをバイパスし、選択した配送経路のテストだけを実行する。OR・dedup・edit独立の意味論はFLT-013/014・DED-003・EDT-001/002で、UI結線(toggle/edit分離・NO ENABLED表示)はRND-003で機械検証済み。
+リリース前に実アプリで短く確認する。1) toggleとedit本体が視覚的に区別できる(誤操作しない)。2) 実ワールドステートで複数ルールをenabledにするとそのORが一覧・通知対象になる。OR・dedup・edit独立の意味論はFLT-013/014・DED-003・EDT-001/002で、UI結線(toggle/edit分離・NO ENABLED表示)はRND-003で、実IPCの設定変更とTEST DELIVERYの実backend経路はE2E-001/002で機械検証済み(TEST DELIVERYがルールに依存しないことはtest_notificationの実装がルールを参照しないことによる)。
 
 #### MAN-009: 配布版・通知テスト版・DMG一時mountがLaunchServicesで競合せず、配布版のcanonical appだけがcom.annenpolka.relicoとして残る
 

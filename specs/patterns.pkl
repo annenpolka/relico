@@ -11,8 +11,8 @@
 module patterns
 
 abstract class Clause {
-  /// 条項id。例: FLT-001
-  id: String(matches(Regex(#"[A-Z]{3}-\d{3}"#)))
+  /// 条項id。例: FLT-001, E2E-001
+  id: String(matches(Regex(#"[A-Z][A-Z0-9]{2}-\d{3}"#)))
 
   /// 生成器が分岐するパターン名(サブクラスが固定値を与える)
   pattern: String
@@ -248,6 +248,15 @@ class RendererScenario extends Clause {
   pattern = "renderer_scenario"
   label = "example-tested"
   scenario: "palette_keyboard" | "delivery_flush" | "rule_row_controls" | "sidebar_fit" | "compact_table"
+}
+
+/// 実アプリ(実IPC・実WKWebView)を通すWDIO Tauri E2E。renderer統合(RendererScenario)が
+/// 担うDOM結線の再検証はせず、「本物のRust commandを往復する」ことの証明に絞る。
+/// 生成先: tests/e2e/oracles_generated.e2e.ts、実行は just e2e
+class E2eScenario extends Clause {
+  pattern = "e2e_scenario"
+  label = "example-tested"
+  scenario: "palette_apply_ipc" | "delivery_error_surface"
 }
 
 /// 機械検証しない残余。手動確認手順をSPEC.mdに列挙する

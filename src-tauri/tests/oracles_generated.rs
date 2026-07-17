@@ -902,7 +902,7 @@ fn ntf_004() {
     }
 }
 
-/// STA-001: 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない
+/// STA-001: 配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない
 #[test]
 fn sta_001() {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -919,19 +919,32 @@ fn sta_001() {
 
     assert_eq!(
         release["identifier"], "com.annenpolka.relico",
-        "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (配布identifier)"
+        "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (配布identifier)"
     );
-    assert_eq!(release["productName"], "relico", "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (配布productName)");
+    assert_eq!(release["productName"], "relico", "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (配布productName)");
     assert_eq!(
         test["identifier"], "com.annenpolka.relico.notification-test",
-        "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (通知テストidentifier)"
+        "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (通知テストidentifier)"
     );
     assert_eq!(
         test["productName"], "RELICO Notification Test",
-        "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (通知テストproductName)"
+        "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (通知テストproductName)"
     );
-    assert_ne!(release["identifier"], test["identifier"], "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (identifier衝突)");
-    assert_ne!(release["productName"], test["productName"], "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (productName衝突)");
+    let e2e: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(manifest.join("tauri.e2e.conf.json"))
+            .expect("tauri.e2e.conf.jsonを読めること"),
+    )
+    .expect("tauri.e2e.conf.jsonがJSONであること");
+    assert_eq!(
+        e2e["identifier"], "com.annenpolka.relico.e2e",
+        "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (E2E identifier)"
+    );
+    assert_eq!(e2e["productName"], "RELICO E2E", "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (E2E productName)");
+
+    for (left, right) in [(&release, &test), (&release, &e2e), (&test, &e2e)] {
+        assert_ne!(left["identifier"], right["identifier"], "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (identifier衝突)");
+        assert_ne!(left["productName"], right["productName"], "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (productName衝突)");
+    }
 }
 
 /// STA-002: トレイは専用tray-icon.pngをテンプレート画像として登録する配線を持ち、PNGはモノクロ(+アルファ)形式である

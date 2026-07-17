@@ -1,0 +1,6 @@
+{
+  "identifier": "e2e",
+  "description": "WDIO E2E専用: frontendのwdio pluginコマンドを許可する。just e2eがビルド中だけcapabilities/e2e.jsonへコピーする(常設するとe2e feature無効ビルドがACLエラーになる)",
+  "windows": ["main"],
+  "permissions": ["wdio:default"]
+}

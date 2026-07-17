@@ -1,5 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+
+// WDIO E2Eビルド(VITE_E2E=1)だけwdio frontend pluginを読み込む。通常ビルドでは除去される
+if (import.meta.env.VITE_E2E) {
+  void import("@wdio/tauri-plugin");
+}
 import { candidateGlyphHtml, glyphHtml, planetForFissure } from "./icons";
 import type { AppConfig, ApplyResult, CandView, Facet, StatusSnapshot, WatchRule } from "./types";
 

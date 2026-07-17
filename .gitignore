@@ -16,6 +16,10 @@ dist-ssr
 test-results
 playwright-report
 
+# WDIO E2E (just e2eがビルド中だけ配置する)
+src-tauri/capabilities/e2e.json
+wdio-logs
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

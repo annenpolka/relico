@@ -8,7 +8,7 @@ spec-gen:
 spec-check:
     #!/usr/bin/env bash
     set -euo pipefail
-    generated="docs/SPEC.md src-tauri/tests/oracles_generated.rs tests/unit/oracles_generated.test.ts tests/renderer/oracles_generated.spec.ts"
+    generated="docs/SPEC.md src-tauri/tests/oracles_generated.rs tests/unit/oracles_generated.test.ts tests/renderer/oracles_generated.spec.ts tests/e2e/oracles_generated.e2e.ts"
     before=$(shasum $generated 2>/dev/null || true)
     bun tools/spec-gen.ts
     after=$(shasum $generated)
@@ -27,6 +27,19 @@ renderer-test:
 # MAN-009の機械検査部分(macOS)。build/notification-test後に実行し、残余だけを目視する
 macos-smoke:
     bash tools/macos-smoke.sh
+
+# WDIO Tauri E2E。e2e featureビルド(WebDriverサーバ内蔵・専用identity)で実IPCを検査する。
+# wdio capabilityはe2e feature無効ビルドでACLエラーになるため、ビルド中だけ配置する
+e2e:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bundle_root="$PWD/src-tauri/target.noindex"
+    cap="src-tauri/capabilities/e2e.json"
+    cp tools/e2e-capability.json "$cap"
+    cleanup() { rm -f "$cap"; }
+    trap cleanup EXIT
+    CARGO_TARGET_DIR="$bundle_root" bun tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json
+    bunx wdio run wdio.conf.ts
 
 dev:
     bun tauri dev
