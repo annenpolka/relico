@@ -23,9 +23,27 @@ pub fn get_config(state: State<AppState>) -> AppConfig {
 }
 
 #[tauri::command]
-pub fn set_config(state: State<AppState>, config: AppConfig) -> Result<(), String> {
+pub fn set_config(app: AppHandle, state: State<AppState>, config: AppConfig) -> Result<(), String> {
     config.save(&state.config_path).map_err(|e| e.to_string())?;
+    let _ = tauri::Emitter::emit(&app, "config", &config);
     state.cfg_tx.send(config).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_autostart(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let launcher = app.autolaunch();
+    if enabled {
+        launcher.enable().map_err(|e| e.to_string())
+    } else {
+        launcher.disable().map_err(|e| e.to_string())
+    }
 }
 
 #[tauri::command]

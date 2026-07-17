@@ -6,6 +6,7 @@ import { KNOWN_MISSIONS, KNOWN_PLANETS, TIERS } from "./types";
 let config: AppConfig | null = null;
 let status: StatusSnapshot | null = null;
 let nextRefresh = 0;
+let autostart = false;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -88,6 +89,7 @@ function renderRail() {
 
   setCheck("storm-check", cfg.includeStorms);
   setCheck("desktop-check", cfg.desktopNotification);
+  setCheck("autostart-check", autostart);
 
   const missions = union(KNOWN_MISSIONS, observed((f) => f.missionType), cfg.missionTypes);
   renderChecklist("mission-checks", missions, cfg.missionTypes, (m, on) => {
@@ -221,6 +223,7 @@ function tickStatusbar() {
 async function init() {
   config = await invoke<AppConfig>("get_config");
   status = await invoke<StatusSnapshot>("get_status");
+  autostart = await invoke<boolean>("get_autostart").catch(() => false);
   nextRefresh = status.nextPollSecs;
   renderRail();
   renderTable();
@@ -234,6 +237,13 @@ async function init() {
     renderRail(); // observed惑星/ミッションの選択肢を追随
   });
 
+  // トレイのPAUSE等、フロント外からの設定変更に追随する
+  await listen<AppConfig>("config", (event) => {
+    config = event.payload;
+    renderRail();
+    renderStatusbar();
+  });
+
   $("storm-check").addEventListener("click", () => {
     if (!config) return;
     config.includeStorms = !config.includeStorms;
@@ -245,6 +255,15 @@ async function init() {
     config.desktopNotification = !config.desktopNotification;
     save();
     renderRail();
+  });
+  $("autostart-check").addEventListener("click", async () => {
+    try {
+      await invoke("set_autostart", { enabled: !autostart });
+      autostart = !autostart;
+      renderRail();
+    } catch (e) {
+      railMsg(`AUTOSTART失敗: ${e}`, "err");
+    }
   });
   $("pause-btn").addEventListener("click", () => {
     if (!config) return;

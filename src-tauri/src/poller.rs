@@ -88,7 +88,7 @@ pub async fn run(
     loop {
         let cfg = cfg_rx.borrow().clone();
         let sleep_secs = if cfg.paused {
-            emit_snapshot(&app, &state, |snap| {
+            emit_snapshot(&app, &cfg, &state, |snap| {
                 snap.paused = true;
                 snap.next_poll_secs = 0;
             });
@@ -103,7 +103,7 @@ pub async fn run(
                 Err(err) => {
                     eprintln!("poll failed: {err}");
                     let delay = backoff.on_failure();
-                    emit_snapshot(&app, &state, |snap| {
+                    emit_snapshot(&app, &cfg, &state, |snap| {
                         snap.api_ok = false;
                         snap.last_error = Some(err);
                         snap.paused = false;
@@ -179,7 +179,7 @@ async fn poll_once(
         to_notify
     };
 
-    emit_snapshot(app, state, |_| {});
+    emit_snapshot(app, cfg, state, |_| {});
 
     for f in &to_notify {
         notify::send(app, client, cfg, f).await;
@@ -189,6 +189,7 @@ async fn poll_once(
 
 fn emit_snapshot(
     app: &AppHandle,
+    cfg: &AppConfig,
     state: &Arc<Mutex<PollerState>>,
     mutate: impl FnOnce(&mut StatusSnapshot),
 ) {
@@ -198,4 +199,5 @@ fn emit_snapshot(
         st.snapshot.clone()
     };
     let _ = app.emit("status", &snap);
+    crate::update_tray(app, cfg, &snap);
 }
