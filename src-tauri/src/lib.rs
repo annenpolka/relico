@@ -44,10 +44,9 @@ pub fn watch_line(cfg: &AppConfig) -> String {
 }
 
 fn next_line(snap: &StatusSnapshot) -> String {
+    // snapshot.fissuresは合致のみ・消滅が近い順(VIS-001)なので先頭が次の対象
     snap.fissures
-        .iter()
-        .filter(|f| snap.matched_ids.contains(&f.id))
-        .min_by_key(|f| f.expiry)
+        .first()
         .map(|f| format!("NEXT: {} {}", f.tier.to_uppercase(), f.node))
         .unwrap_or_else(|| "NEXT: --".to_string())
 }

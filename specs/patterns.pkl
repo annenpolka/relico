@@ -71,6 +71,13 @@ class SeedSilent extends Clause {
   label = "property-tested"
 }
 
+/// 表示リストはフィルタ合致亀裂のみを含み(健全性)、
+/// 合致する亀裂を1件も取りこぼさない(完全性)
+class FilteredView extends Clause {
+  pattern = "filtered_view"
+  label = "property-tested"
+}
+
 /// 機械検証しない残余。手動確認手順をSPEC.mdに列挙する
 class Manual extends Clause {
   pattern = "manual"

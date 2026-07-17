@@ -10,7 +10,7 @@ use tokio::sync::watch;
 use crate::backoff::Backoff;
 use crate::config::AppConfig;
 use crate::dedup::NotifiedSet;
-use crate::filter;
+use crate::filter::{self, FilterConfig};
 use crate::model::Fissure;
 use crate::notify;
 
@@ -20,8 +20,8 @@ pub const API_URL: &str = "https://api.warframestat.us/pc/fissures";
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusSnapshot {
+    /// フィルタ合致亀裂のみ(SPEC: VIS-001)。消滅が近い順
     pub fissures: Vec<Fissure>,
-    pub matched_ids: Vec<String>,
     pub api_ok: bool,
     pub last_error: Option<String>,
     pub last_poll: Option<DateTime<Utc>>,
@@ -54,6 +54,21 @@ pub fn http_client() -> reqwest::Client {
         .timeout(Duration::from_secs(20))
         .build()
         .expect("http client")
+}
+
+/// 一覧に出す亀裂 = フィルタ合致のみ(対象外は非表示)。消滅が近い順。SPEC: VIS-001
+pub fn visible_fissures(
+    cfg: &FilterConfig,
+    fissures: &[Fissure],
+    now: DateTime<Utc>,
+) -> Vec<Fissure> {
+    let mut visible: Vec<Fissure> = fissures
+        .iter()
+        .filter(|f| filter::matches(cfg, f, now))
+        .cloned()
+        .collect();
+    visible.sort_by_key(|f| f.expiry);
+    visible
 }
 
 /// 合致亀裂のうち未通知のものを記録し、通知対象を返す。
@@ -146,30 +161,19 @@ async fn poll_once(
 
     let now = Utc::now();
     let fcfg = cfg.filter();
+    let visible = visible_fissures(&fcfg, &fissures, now);
 
     let to_notify: Vec<Fissure> = {
         let mut st = state.lock().expect("poller state");
         st.notified.prune(now);
 
-        let matching: Vec<Fissure> = fissures
-            .iter()
-            .filter(|f| filter::matches(&fcfg, f, now))
-            .cloned()
-            .collect();
-        let to_notify = select_notifications(&mut st.notified, matching, seed_only);
+        let to_notify = select_notifications(&mut st.notified, visible.clone(), seed_only);
 
         if let Err(e) = st.notified.save(notified_path) {
             eprintln!("notified set save failed: {e}");
         }
 
-        let mut sorted = fissures.clone();
-        sorted.sort_by_key(|f| f.expiry);
-        st.snapshot.matched_ids = fissures
-            .iter()
-            .filter(|f| filter::matches(&fcfg, f, now))
-            .map(|f| f.id.clone())
-            .collect();
-        st.snapshot.fissures = sorted;
+        st.snapshot.fissures = visible;
         st.snapshot.api_ok = true;
         st.snapshot.last_error = None;
         st.snapshot.last_poll = Some(now);

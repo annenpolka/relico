@@ -147,6 +147,20 @@ ${indent(c.fissureOverride ?? "", 8)}
             prop_assert!(set.contains(&f.id), "${msg} (シードされていないidがある)");
         }
     }`;
+    case "filtered_view":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(cfg in arb_config(), fs in proptest::collection::vec(arb_fissure(), 0..30)) {
+        let now = base_now();
+        let visible = poller::visible_fissures(&cfg, &fs, now);
+        for f in &visible {
+            prop_assert!(filter::matches(&cfg, f, now), "${msg} (対象外が表示された)");
+        }
+        for f in fs.iter().filter(|f| filter::matches(&cfg, f, now)) {
+            prop_assert!(visible.iter().any(|v| v.id == f.id), "${msg} (合致亀裂が欠落した)");
+        }
+    }`;
     case "manual":
       return ""; // 機械検証なし。SPEC.mdのみ
     default:

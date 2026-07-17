@@ -47,9 +47,8 @@ function renderChecklist(
       btn.innerHTML = `<span class="box">[${on ? "x" : " "}]</span> ${item.toUpperCase()}`;
       btn.addEventListener("click", () => {
         onToggle(item, !on);
-        save();
+        save(); // 表示の絞り込みは設定反映後の次回スナップショットで更新される
         renderRail();
-        renderTable(); // 合致ハイライトは次回ポーリングで正になるが、見た目の即時性を優先
       });
       return btn;
     }),
@@ -137,18 +136,21 @@ function planetOf(f: Fissure): string | null {
 // ---- テーブル描画 ----
 function renderTable() {
   const rows = $("fissure-rows");
+  // 表示されるのは合致亀裂のみ(SPEC: VIS-001)
   const fissures = status?.fissures ?? [];
   if (fissures.length === 0) {
-    rows.innerHTML = `<tr><td colspan="6" class="empty">${
-      status?.apiOk === false ? "API UNREACHABLE — BACKING OFF" : "WAITING FOR WORLDSTATE…"
-    }</td></tr>`;
+    const msg =
+      status?.apiOk === false
+        ? "API UNREACHABLE — BACKING OFF"
+        : status?.lastPoll
+          ? "NO MATCHING FISSURES — ADJUST FILTER"
+          : "WAITING FOR WORLDSTATE…";
+    rows.innerHTML = `<tr><td colspan="6" class="empty">${msg}</td></tr>`;
     return;
   }
-  const matched = new Set(status?.matchedIds ?? []);
   rows.replaceChildren(
     ...fissures.map((f) => {
       const tr = document.createElement("tr");
-      if (matched.has(f.id)) tr.className = "match";
       const flags = [
         f.isHard ? `<span class="t-hard">HARD</span>` : "",
         f.isStorm ? `<span class="t-storm">STORM</span>` : "",

@@ -238,4 +238,17 @@ proptest! {
             prop_assert!(set.contains(&f.id), "SPEC POL-002 違反: 起動直後の初回ポーリングはシードのみ: 既存の合致亀裂を通知済みとして記録するが、通知は1件も発火しない(起動時の通知洪水を防ぐ) (シードされていないidがある)");
         }
     }
+
+    /// VIS-001: 一覧に表示されるのはフィルタ合致亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない
+    #[test]
+    fn vis_001(cfg in arb_config(), fs in proptest::collection::vec(arb_fissure(), 0..30)) {
+        let now = base_now();
+        let visible = poller::visible_fissures(&cfg, &fs, now);
+        for f in &visible {
+            prop_assert!(filter::matches(&cfg, f, now), "SPEC VIS-001 違反: 一覧に表示されるのはフィルタ合致亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない (対象外が表示された)");
+        }
+        for f in fs.iter().filter(|f| filter::matches(&cfg, f, now)) {
+            prop_assert!(visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 一覧に表示されるのはフィルタ合致亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない (合致亀裂が欠落した)");
+        }
+    }
 }

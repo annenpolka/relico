@@ -30,8 +30,8 @@ export interface Fissure {
 }
 
 export interface StatusSnapshot {
+  /** フィルタ合致亀裂のみ(SPEC: VIS-001)。消滅が近い順 */
   fissures: Fissure[];
-  matchedIds: string[];
   apiOk: boolean;
   lastError: string | null;
   lastPoll: string | null;

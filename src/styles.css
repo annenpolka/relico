@@ -73,14 +73,6 @@ td.empty {
   text-align: center;
 }
 
-tr.match td {
-  background: rgba(255, 180, 84, 0.08);
-}
-
-tr.match td:first-child {
-  box-shadow: inset 3px 0 0 var(--amber);
-}
-
 .t-tier {
   color: var(--amber);
 }

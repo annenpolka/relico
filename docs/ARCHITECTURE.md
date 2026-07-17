@@ -89,7 +89,7 @@ Discordはembedで送る。残り時間は動的タイムスタンプ `<t:unix:R
 - パレット: 地 `#0C0E0C` / アンバー `#FFB454`(主色) / 減光アンバー `#8A6A3A`(ラベル) / 文字 `#E8E2D4` / 赤 `#FF6B5E`(鋼・残り10分未満) / シアン `#6ECFDB`(ストーム)
 - 書体: すべて `ui-monospace, "SF Mono", Menlo`。ラベルは大文字 + letter-spacing
 - レイアウト: 左=亀裂テーブル(TIER/NODE/MISSION/FACTION/T-REMAIN/FLAGS)、右=フィルタレール(`[x]`チェック)、下=ステータスバー(ポーリング間隔・API状態・次回更新・当日通知数)
-- フィルタ合致行はアンバーのインセットボーダー+背景8%で強調。残り時間は `tabular-nums`、10分未満で赤
+- テーブルにはフィルタ合致亀裂のみ表示する(SPEC: VIS-001。対象外は非表示)。合致0件時は「NO MATCHING FISSURES」を表示。残り時間は `tabular-nums`、10分未満で赤
 - トレイ: 状態2行(WATCH条件 / NEXT対象と残り時間)+ PAUSE / OPEN CONSOLE / QUIT
 
 ## macOS常駐の実装メモ

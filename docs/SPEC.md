@@ -21,6 +21,7 @@
 | PRS-001 | `parse_total` | property-tested | 惑星抽出は任意文字列でパニックせず、"Node (Planet)" 形式でPlanetを返す |
 | POL-001 | `bounded` | property-tested | APIバックオフの遅延は失敗・成功がどう並んでも常に[60s, 600s]に収まる |
 | POL-002 | `seed_silent` | property-tested | 起動直後の初回ポーリングはシードのみ: 既存の合致亀裂を通知済みとして記録するが、通知は1件も発火しない(起動時の通知洪水を防ぐ) |
+| VIS-001 | `filtered_view` | property-tested | 一覧に表示されるのはフィルタ合致亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない |
 | MAN-001 | `manual` | manual | デスクトップ通知がmacOS通知センターに実際に表示される |
 | MAN-002 | `manual` | manual | Discord Webhook通知がスマホのDiscordアプリに届く |
 
