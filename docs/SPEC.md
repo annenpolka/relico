@@ -50,64 +50,81 @@
 | NTF-002 | `notification_example` | example-tested | desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める |
 | NTF-003 | `notification_example` | example-tested | 未バンドルのraw devでdesktop通知を利用できない場合は、失敗詳細を保持し、デバッグbundle .appを使う just notification-test を案内する |
 | NTF-004 | `notification_example` | example-tested | Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する |
+| STA-001 | `static_check` | example-tested | 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない |
+| STA-002 | `static_check` | example-tested | トレイは専用tray-icon.pngをテンプレート画像として登録する配線を持ち、PNGはモノクロ(+アルファ)形式である |
+| AST-001 | `approved_asset` | example-tested | メニューバー用tray-icon.pngは目視承認済みの内容から変わっていない(変えたらMAN-005の手順で再承認しsha256を更新する) |
+| AST-002 | `approved_asset` | example-tested | 配布用アプリアイコンicon.icnsは目視承認済みの内容から変わっていない(変えたらMAN-006の手順で再承認しsha256を更新する) |
+| ICN-001 | `renderer_glyphs` | example-tested | 既知のTier・惑星・ミッション・ファクション・難易度・VOID嵐・アクション値には汎用と区別できる専用SVGグリフが割り当てられ、未知値はカテゴリ別の汎用グリフへフォールバックし、グリフは装飾(aria-hidden)である |
+| ICN-002 | `renderer_glyphs` | example-tested | 表示用惑星名はVOID嵐のときだけEarth/Venus/Saturn/Neptune/Pluto/VeilをProxima表記へ寄せ、通常亀裂・その他の惑星・欠損値はそのまま返す |
+| RND-001 | `renderer_scenario` | example-tested | パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは条件クリアを呼び、IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力できる(renderer統合) |
+| RND-002 | `renderer_scenario` | example-tested | Webhook URL入力直後のTEST DELIVERYは、遅延保存を先にflushしてから通知テストを実行する(renderer統合) |
+| RND-003 | `renderer_scenario` | example-tested | ルール行のenabled切替はset_rule_enabledだけを呼びedit focus表示を変えず、行本体はパレットを開くだけで切替を呼ばない。全ルール無効では一覧とステータスバーにNO ENABLED表示が出る(renderer統合) |
+| RND-004 | `renderer_scenario` | example-tested | 最小720x480でも右サイドバーは縦スクロールなしでルールnavigator・NEW/DEL/CLEAR・5軸launcher・配送設定・TEST/PAUSE・時間設定へ到達でき、launcherはパレットをその軸に絞って開く(renderer統合) |
+| RND-005 | `renderer_scenario` | example-tested | 亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合) |
 | MAN-001 | `manual` | manual | 通知テスト専用bundleと配布bundleの各名義で、macOSの初回権限許可とバナー表示を人が知覚できる |
 | MAN-002 | `manual` | manual | Discord Webhook通知がスマホのDiscordアプリでpush表示される |
-| MAN-003 | `manual` | manual | ファジーパレットのUX: どこでも打鍵で開き、連続トグルでき、日本語aliasが引ける |
-| MAN-004 | `manual` | manual | Tier・惑星・ミッション種別・ファクション・難易度・VOID嵐を、文字ラベルを保ったまま識別用SVGアイコンでも表示する |
-| MAN-005 | `manual` | manual | macOSメニューバーにRELICO専用のモノクロテンプレートアイコンを表示する |
-| MAN-006 | `manual` | manual | 配布バンドルにRELICO専用アプリアイコンを使用する |
+| MAN-003 | `manual` | manual | ファジーパレットで、macOSの実IMEを使った日本語alias入力と、実アプリでの一連の操作ができる |
+| MAN-004 | `manual` | manual | SVGアイコンが小サイズでも判別でき、HARD+STORMの併記が読める |
+| MAN-005 | `manual` | manual | メニューバーのRELICOテンプレートアイコンがライト/ダーク外観で判別できる |
+| MAN-006 | `manual` | manual | 配布バンドルのRELICOアプリアイコンが通常・小サイズ表示で判別できる |
 | MAN-007 | `manual` | manual | macOSではコンソール表示中だけ通常アプリとしてDockとウィンドウ切替ツールに現れ、閉じるとメニューバー常駐へ戻る |
-| MAN-008 | `manual` | manual | ルール一覧でruntime有効化とedit focusを別々に操作でき、複数の有効ルールをORとして監視できる |
+| MAN-008 | `manual` | manual | ルール一覧のtoggleとedit focusが視覚的に区別でき、実アプリで複数有効ルールのOR監視とTEST DELIVERYのルールバイパスが機能する |
 | MAN-009 | `manual` | manual | 配布版・通知テスト版・DMG一時mountがLaunchServicesで競合せず、配布版のcanonical appだけがcom.annenpolka.relicoとして残る |
-| MAN-010 | `manual` | manual | 右サイドバーは最小ウィンドウでも縦スクロールを必要とせず、現在の通知ルールと全編集入口を常時表示する |
-| MAN-011 | `manual` | manual | 亀裂表の利用幅が740px未満では各亀裂を2段compact rowで表示し、横スクロールせず全7項目を比較できる |
+| MAN-010 | `manual` | manual | 右サイドバーの要約が読みやすく、情報の優先順位が視覚的に自然である |
+| MAN-011 | `manual` | manual | compact表示が実データで読みやすく、VoiceOverでtable semanticsが自然に読み上げられる |
 
 保証ラベルの意味: **property-tested** = proptestオラクルで機械検証 / **example-tested** = 具体例テストで機械検証 / **manual** = 手動確認(残余)
 
+オラクルの実行先: `rule_*` 等のRustパターンは `cargo test`(src-tauri/tests/oracles_generated.rs)、
+`renderer_glyphs` は `bun test tests/unit`、`renderer_scenario` は `just renderer-test`
+(Playwright/WebKit、Tauri IPCはmock — Rust commandやOS通知を通った証明にはしない。docs/E2E.md参照)。
+
 ## 手動確認手順(manual条項)
 
-リリース前に以下を実施する。
+### 毎リリース実施
 
-### MAN-001: 通知テスト専用bundleと配布bundleの各名義で、macOSの初回権限許可とバナー表示を人が知覚できる
+#### MAN-003: ファジーパレットで、macOSの実IMEを使った日本語alias入力と、実アプリでの一連の操作ができる
 
-just notification-testでRELICO Notification Test bundleを起動し、同名義に対するmacOS初回通知許可を承認してバナーを目視確認する。配布bundle .appではRELICO名義の権限とバナーを別途目視確認する。両bundleは権限・設定・重複排除状態を共有しない。title/body生成と結果表示はNTF-001〜003で機械検証し、この条項には各名義の初回権限UIと人間によるバナー知覚だけを残す。
+リリース前に実アプリで短く確認する。1) IME有効のまま打鍵しても即確定せず、「鋼」「耐久」「分裂」などの日本語aliasを変換して入力できる(実IMEはWebDriverやsynthetic eventで代替できない — docs/E2E.md)。2) 実IPC経由でaxi⏎ hagane⏎の連続トグルとNEW RULE/DELETE RULE/CLEARの実行ができる。打鍵起動・Esc・変換中Enterの無視・連続適用の結線はRND-001で、alias解決とローマ字揺れはRustのFZY条項とexampleテストで機械検証済み。
 
-### MAN-002: Discord Webhook通知がスマホのDiscordアプリでpush表示される
-
-専用Webhookへテスト通知を送り、スマホのDiscordアプリでpush通知が表示されることだけを目視確認する。HTTP送信結果やpayload内容はこのmanual残余に含めない。
-
-### MAN-003: ファジーパレットのUX: どこでも打鍵で開き、連続トグルでき、日本語aliasが引ける
-
-1) どこにもフォーカスがない状態で打鍵→パレットが開き入力が引き継がれる。2) axi⏎ hagane⏎ のように連続トグルでき、escで閉じる。3) IME有効のまま打鍵しても即確定せず、「鋼」「耐久」「分裂」などの日本語aliasを変換して入力できる。4) taikyu/taikyuu のようなローマ字読み揺れでもヒットする。5) NEW RULE/DELETE RULE/CLEARが候補から実行できる。6) パレットが閉じた一覧画面でesc→条件が一発クリアされる(CLR-001と同じ挙動)。
-
-### MAN-004: Tier・惑星・ミッション種別・ファクション・難易度・VOID嵐を、文字ラベルを保ったまま識別用SVGアイコンでも表示する
-
-一覧・フィルタレール・ファジーパレットを開き、各カテゴリの既知値に対応する小型SVGアイコンが文字ラベルと並んで表示されることを目視確認する。一覧では難易度をMODE列、VOID嵐をSTORM列へ分離し、HARDかつSTORMのような組合せも独立に読めることを確認する。未知のAPI値でも一覧が壊れず、カテゴリ別の汎用アイコンへフォールバックすること、アイコンを非表示にしても文字だけで意味が失われないことも確認する。
-
-### MAN-005: macOSメニューバーにRELICO専用のモノクロテンプレートアイコンを表示する
-
-アプリを起動し、メニューバーに既定のTauriアイコンではなくRELICO専用アイコンが表示されることを確認する。macOSのライト/ダーク外観を切り替え、テンプレートアイコンとして自動反転し、輪郭が欠けず判別できることを目視確認する。
-
-### MAN-006: 配布バンドルにRELICO専用アプリアイコンを使用する
-
-just buildで生成した.appをFinderで表示し、既定のTauriアイコンではなくRELICO専用アプリアイコンが通常表示と小サイズ表示の両方で判別できることを確認する。
-
-### MAN-007: macOSではコンソール表示中だけ通常アプリとしてDockとウィンドウ切替ツールに現れ、閉じるとメニューバー常駐へ戻る
+#### MAN-007: macOSではコンソール表示中だけ通常アプリとしてDockとウィンドウ切替ツールに現れ、閉じるとメニューバー常駐へ戻る
 
 just devと配布.appの両方で確認する。1) コンソール表示中はDockにRELICOアイコンが現れ、PaneruとRaycastのSwitch Windowsからウィンドウを選択・フォーカスできる。2) 閉じるとプロセスとメニューバー監視は継続したままコンソールとDockアイコンが消える。3) トレイのOPEN CONSOLE、またはアプリの再オープンでコンソールが再表示・フォーカスされ、Dockと各ウィンドウ切替ツールに再び現れる。
 
-### MAN-008: ルール一覧でruntime有効化とedit focusを別々に操作でき、複数の有効ルールをORとして監視できる
+#### MAN-008: ルール一覧のtoggleとedit focusが視覚的に区別でき、実アプリで複数有効ルールのOR監視とTEST DELIVERYのルールバイパスが機能する
 
-異なる条件のルールを3本作成して確認する。1) ルール行本体を選ぶとedit focusだけが移り、enabled checkboxは変わらない。2) checkboxを切り替えてもedit focusと条件は変わらない。3) disabledルールを選択して条件を編集してもdisabledのまま保持される。4) 複数ルールをenabledにするとそのORが一覧・通知対象になり、同じ亀裂が複数ルールへ合致しても1件だけ表示・通知される。5) 全ルールをdisabledにするとNO ENABLED RULES相当の状態が明示され、一覧・通知対象は0件になる。6) 全ルールdisabledでもTEST DELIVERYはルールをバイパスし、選択した配送経路のテストだけを実行する。
+リリース前に実アプリで短く確認する。1) toggleとedit本体が視覚的に区別できる(誤操作しない)。2) 実IPC経由で複数ルールをenabledにするとそのORが一覧・通知対象になる。3) 全ルールdisabledでもTEST DELIVERYはルールをバイパスし、選択した配送経路のテストだけを実行する。OR・dedup・edit独立の意味論はFLT-013/014・DED-003・EDT-001/002で、UI結線(toggle/edit分離・NO ENABLED表示)はRND-003で機械検証済み。
 
-### MAN-009: 配布版・通知テスト版・DMG一時mountがLaunchServicesで競合せず、配布版のcanonical appだけがcom.annenpolka.relicoとして残る
+#### MAN-009: 配布版・通知テスト版・DMG一時mountがLaunchServicesで競合せず、配布版のcanonical appだけがcom.annenpolka.relicoとして残る
 
-1) 配布版はproductName=relico / identifier=com.annenpolka.relico、通知テスト版はproductName=RELICO Notification Test / identifier=com.annenpolka.relico.notification-testであることを各Info.plistで確認する。2) just notification-testを続けて実行しても通知テスト版のプロセスを複数起動しない。3) just build前後のLaunchServices dumpを比較し、存在しない/Volumes/dmg.*/relico.app登録が増えないことを確認する。4) 配布版を~/Applications/relico.appへ配置後、同identifierの登録がcanonical app 1件だけで、コンソール表示中のウィンドウをDock・Paneru・Raycast Switch Windowsから選択できることを確認する。
+機械検査部分は just macos-smoke で実行する(ビルド済みInfo.plistのproductName/identifier、通知テスト版プロセスが複数起動していないこと、/Volumes/dmg.*の残留登録がないこと、canonical登録が実在する1件だけであること。設定ファイル上のidentity分離はSTA-001で常時検証)。人間に残るのは、~/Applications/relico.appのコンソール表示中ウィンドウをDock・Paneru・Raycast Switch Windowsから選択できることの確認だけ。
 
-### MAN-010: 右サイドバーは最小ウィンドウでも縦スクロールを必要とせず、現在の通知ルールと全編集入口を常時表示する
+#### MAN-010: 右サイドバーの要約が読みやすく、情報の優先順位が視覚的に自然である
 
-Paneru等の外部ウィンドウマネージャがサイズを再適用しない状態(停止、またはRELICOをfloating化して保存済み管理状態も解除)で、ウィンドウを設定上の最小720x480へ縮めて確認する。1) 右サイドバー自身が縦スクロールせず、FILTERS/DELIVERYタブだけでルール切替・有効化・NEW/DEL/CLEAR、Tier/Mode/VOID嵐/Mission/Planet、配送先、TEST/PAUSE、残り時間、poll間隔へ到達できる。2) ルールは件数に比例して縦へ伸ばさず、前後移動できるcompact navigatorでedit focusだけを切り替え、enabled toggleは独立している。3) 各filter軸は現在値の要約を1行で表示し、押すと既存パレットをその軸に絞って開く。候補数の多いMission/Planetは検索して選べる。4) 候補の増加はsidebarの高さを変えず、亀裂表と一時的な検索パレットだけが必要に応じて独立スクロールする。5) 960x620の既定サイズでも要約が判読でき、選択値の文字とアイコンを併記する。
+リリース前に、Paneru等の外部ウィンドウマネージャがサイズを再適用しない状態で720x480と960x620を目視し、filter軸の要約1行(文字+アイコン併記)が判読でき、情報の優先順位が自然であることを確認する。縦スクロール不要・全編集入口への到達・launcherの軸絞り・empty表示はRND-004で機械検証済み(IPC mockのrenderer統合であり、実ウィンドウマネージャ環境の挙動はこの目視に残る)。
 
-### MAN-011: 亀裂表の利用幅が740px未満では各亀裂を2段compact rowで表示し、横スクロールせず全7項目を比較できる
+#### MAN-011: compact表示が実データで読みやすく、VoiceOverでtable semanticsが自然に読み上げられる
 
-代表的な長い値(Requiem、Taveuni (Kuva Fortress)、Mobile Defense、Corrupted、HARD、STORM)を含むfixtureで確認する。1) 亀裂表の利用幅が740px以上ではTIER/NODE/MISSION/FACTION/T-REMAIN/MODE/STORMの7列1段表示を維持する。2) 740px未満では1段目をTIER/NODE/T-REMAIN、2段目をMISSION/FACTION/MODE/STORMのgridへ切り替え、MODEとSTORMは別セル・別ラベル・別アイコンのまま表示する。3) 最小720x480(表領域約510px)と800px幅でtablewrapのscrollWidthがclientWidth以下となり、横スクロールを必要としない。4) 長いNODE/MISSIONは行幅を拡張せずellipsisし、DOM/アクセシビリティ上の全文と行tooltipを保持する。5) 0件・全ルール無効・API失敗のempty rowは2段gridでも全幅に表示する。6) 右サイドバーとstatusbarの操作・表示は狭幅化によって失われない。
+リリース前に、実データ(実ワールドステート)で狭幅表示の情報密度と読みやすさを目視し、WKWebView/VoiceOverでtable semantics(7項目の見出しと値)が自然に読み上げられることを確認する。1段/2段の切替幅・横スクロール禁止・MODE/STORM独立・ellipsis時の全文とtooltip保持・empty row全幅・stickyヘッダ・th[scope=col]はRND-005で機械検証済み。
+
+### 一回限りの受入(対象が変わったときだけ再実施)
+
+#### MAN-001: 通知テスト専用bundleと配布bundleの各名義で、macOSの初回権限許可とバナー表示を人が知覚できる
+
+各名義の初回セットアップ時に1回だけ実施する。just notification-testでRELICO Notification Test bundleを起動し、同名義に対するmacOS初回通知許可を承認してバナーを目視確認する。配布bundle .appではRELICO名義の権限とバナーを別途確認する。両bundleは権限・設定・重複排除状態を共有しない。payload生成・結果表示・identity分離はNTF-001〜003とSTA-001で機械検証済みのため、この条項に残るのは各名義の初回権限UIと人間によるバナー知覚だけであり、identifierを変えたときだけ再実施する。
+
+#### MAN-002: Discord Webhook通知がスマホのDiscordアプリでpush表示される
+
+Webhook設定の初回セットアップ時に1回だけ、専用Webhookへテスト通知を送り、スマホのDiscordアプリでpush通知が表示されることを目視確認する。HTTP要求の構築とサーバー受理判定はNTF-004で機械検証済み。受理以降のpush配達はDiscord基盤の責務であり、本アプリの保証範囲はサーバー受理で終端する(リリースごとの再確認は不要)。
+
+#### MAN-004: SVGアイコンが小サイズでも判別でき、HARD+STORMの併記が読める
+
+icons.tsのグリフ形状を追加・変更したときだけ、一覧・フィルタレール・パレットで該当アイコンが文字ラベルと並んで判別できること、HARDかつSTORMのような組合せが独立に読めることを目視確認する。既知値→専用グリフの写像・未知値のフォールバック・装飾扱い(aria-hidden)はICN-001/002で、MODE/STORM列の独立はRND-005で機械検証済み。
+
+#### MAN-005: メニューバーのRELICOテンプレートアイコンがライト/ダーク外観で判別できる
+
+tray-icon.pngを変更したときだけ、メニューバーでライト/ダーク外観を切り替えて自動反転と輪郭を目視確認し、承認としてAST-001のsha256を更新する。テンプレート形式(モノクロ+アルファ)と配線はSTA-002で、内容の凍結はAST-001で機械検証済み。
+
+#### MAN-006: 配布バンドルのRELICOアプリアイコンが通常・小サイズ表示で判別できる
+
+icon.icnsを変更したときだけ、just buildで生成した.appをFinderの通常表示と小サイズ表示で目視確認し、承認としてAST-002のsha256を更新する。内容の凍結はAST-002で機械検証済み。

@@ -1,6 +1,8 @@
 // specs/notifier.pkl(正本) から以下を生成する:
-//   - src-tauri/tests/oracles_generated.rs  (proptestオラクル。手編集禁止)
-//   - docs/SPEC.md                          (可読ドキュメント。手編集禁止)
+//   - src-tauri/tests/oracles_generated.rs       (proptest/exampleオラクル。手編集禁止)
+//   - tests/unit/oracles_generated.test.ts       (bun testオラクル。手編集禁止)
+//   - tests/renderer/oracles_generated.spec.ts   (Playwright rendererオラクル。手編集禁止)
+//   - docs/SPEC.md                               (可読ドキュメント。手編集禁止)
 // 実行: bun tools/spec-gen.ts
 
 import { spawnSync } from "bun";
@@ -20,9 +22,40 @@ type Clause = {
     | "outcomes"
     | "desktop_payload"
     | "desktop_unavailable"
-    | "discord_receipt";
+    | "discord_receipt"
+    | "bundle_identity"
+    | "tray_template_icon"
+    | "glyph_known_values"
+    | "planet_proxima_view"
+    | "palette_keyboard"
+    | "delivery_flush"
+    | "rule_row_controls"
+    | "sidebar_fit"
+    | "compact_table";
+  path?: string;
+  sha256?: string;
+  cadence?: "per-release" | "one-time";
   procedure?: string;
 };
+
+// ---- 語彙プール(Rustオラクルの生成器とTSグリフ検査で共有する既知値) ----
+const TIER_POOL = ["Lith", "Meso", "Neo", "Axi", "Requiem", "Omnia"];
+const MISSION_POOL = [
+  "Defense", "Survival", "Capture", "Extermination", "Rescue",
+  "Disruption", "Mobile Defense", "Void Flood", "Void Cascade", "Volatile",
+];
+const PLANET_POOL = [
+  "Mars", "Ceres", "Sedna", "Void", "Saturn", "Phobos",
+  "Zariman", "Veil Proxima", "Kuva Fortress", "Lua",
+];
+const FACTION_POOL = ["Grineer", "Corpus", "Infested", "Orokin", "Corrupted", "Murmur"];
+const DIFFICULTY_POOL = ["Normal", "SteelPath", "Both"];
+const STORM_POOL = ["Exclude", "Include", "Only"];
+const ACTION_POOL = ["new-rule", "delete-rule", "clear", "pause"];
+const PROXIMA_PLANETS = ["Earth", "Venus", "Saturn", "Neptune", "Pluto", "Veil"];
+
+const rustStrArray = (pool: string[]) => pool.map((s) => `"${s}"`).join(", ");
+const tsStrArray = (pool: string[]) => JSON.stringify(pool);
 
 const root = new URL("..", import.meta.url).pathname;
 
@@ -682,6 +715,92 @@ fn ${name}() {
     assert!(!round_trip.enabled, "${msg} (round-tripで明示falseを失った)");
 }`;
   }
+  if (c.pattern === "static_check") {
+    switch (c.scenario) {
+      case "bundle_identity":
+        return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let release: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(manifest.join("tauri.conf.json"))
+            .expect("tauri.conf.jsonを読めること"),
+    )
+    .expect("tauri.conf.jsonがJSONであること");
+    let test: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(manifest.join("tauri.notification-test.conf.json"))
+            .expect("tauri.notification-test.conf.jsonを読めること"),
+    )
+    .expect("tauri.notification-test.conf.jsonがJSONであること");
+
+    assert_eq!(
+        release["identifier"], "com.annenpolka.relico",
+        "${msg} (配布identifier)"
+    );
+    assert_eq!(release["productName"], "relico", "${msg} (配布productName)");
+    assert_eq!(
+        test["identifier"], "com.annenpolka.relico.notification-test",
+        "${msg} (通知テストidentifier)"
+    );
+    assert_eq!(
+        test["productName"], "RELICO Notification Test",
+        "${msg} (通知テストproductName)"
+    );
+    assert_ne!(release["identifier"], test["identifier"], "${msg} (identifier衝突)");
+    assert_ne!(release["productName"], test["productName"], "${msg} (productName衝突)");
+}`;
+      case "tray_template_icon":
+        return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bytes = std::fs::read(manifest.join("icons/tray-icon.png"))
+        .expect("icons/tray-icon.pngを読めること");
+    assert_eq!(
+        &bytes[..8],
+        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        "${msg} (PNGシグネチャ)"
+    );
+    // IHDRのcolor type: 0=grayscale / 4=grayscale+alpha だけをテンプレート互換とする
+    let color_type = bytes[25];
+    assert!(
+        color_type == 0 || color_type == 4,
+        "${msg} (colortype={color_type}: モノクロ+アルファのPNGであること)"
+    );
+
+    let lib_rs = std::fs::read_to_string(manifest.join("src/lib.rs"))
+        .expect("src/lib.rsを読めること");
+    assert!(
+        lib_rs.contains("tray-icon.png"),
+        "${msg} (専用tray-icon.pngを使う配線が失われた)"
+    );
+    assert!(
+        lib_rs.contains(".icon_as_template("),
+        "${msg} (テンプレート登録の配線が失われた)"
+    );
+}`;
+      default:
+        throw new Error(`未知のstatic checkシナリオ: ${c.scenario} (${c.id})`);
+    }
+  }
+  if (c.pattern === "approved_asset") {
+    return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    use sha2::{Digest, Sha256};
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bytes = std::fs::read(manifest.join("${c.path}"))
+        .expect("承認済みアセット ${c.path} を読めること");
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    assert_eq!(
+        digest, "${c.sha256}",
+        "${msg} — ${c.path} が承認済み内容から変わった。見た目を目視で再承認し、specs/notifier.pkl のsha256を更新して just spec-gen すること"
+    );
+}`;
+  }
   if (c.pattern !== "notification_example") {
     throw new Error(`未知のexampleパターン: ${c.pattern} (${c.id})`);
   }
@@ -843,14 +962,254 @@ fn ${name}() {
   }
 }
 
+// ---- bun test(icons.ts写像)の生成 ----
+function genGlyphClause(c: Clause): string {
+  const name = fnName(c.id);
+  switch (c.scenario) {
+    case "glyph_known_values":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} ${name}", () => {
+  const pools: Array<[GlyphKind, string[]]> = [
+    ["tier", ${tsStrArray(TIER_POOL)}],
+    ["planet", ${tsStrArray(PLANET_POOL)}],
+    ["mission", ${tsStrArray(MISSION_POOL)}],
+    ["faction", ${tsStrArray(FACTION_POOL)}],
+    ["difficulty", ${tsStrArray(DIFFICULTY_POOL)}],
+    ["storm", ${tsStrArray(STORM_POOL)}],
+    ["action", ${tsStrArray(ACTION_POOL)}],
+  ];
+  for (const [kind, values] of pools) {
+    // 未知値はカテゴリ別の汎用グリフへフォールバックし、例外を出さない
+    const generic = glyphHtml(kind, "__unknown-value__");
+    expect(generic).toContain('aria-hidden="true"');
+    expect(generic).toContain("viewBox");
+    for (const value of values) {
+      const html = glyphHtml(kind, value);
+      // 既知値には汎用と区別できる専用グリフが割り当てられている
+      expect(html).toContain('aria-hidden="true"');
+      expect(html).not.toBe(generic);
+    }
+  }
+  // パレット候補のfacet→グリフ種の写像(modeはdifficultyグリフを使う)
+  expect(candidateGlyphHtml("mode", "mode:SteelPath")).toBe(glyphHtml("difficulty", "SteelPath"));
+  expect(candidateGlyphHtml("tier", "tier:Axi")).toBe(glyphHtml("tier", "Axi"));
+  expect(candidateGlyphHtml("storm", "storm:Only")).toBe(glyphHtml("storm", "Only"));
+});`;
+    case "planet_proxima_view":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} ${name}", () => {
+  for (const planet of ${tsStrArray(PROXIMA_PLANETS)}) {
+    expect(planetForFissure(planet, true)).toBe(planet + " Proxima");
+    expect(planetForFissure(planet, false)).toBe(planet);
+  }
+  expect(planetForFissure("Mars", true)).toBe("Mars");
+  expect(planetForFissure("  Earth  ", true)).toBe("Earth Proxima");
+  expect(planetForFissure(null, true)).toBe("");
+  expect(planetForFissure(null, false)).toBe("");
+});`;
+    default:
+      throw new Error(`未知のglyphシナリオ: ${c.scenario} (${c.id})`);
+  }
+}
+
+// ---- Playwright renderer統合テスト(IPC mock)の生成 ----
+function genRendererClause(c: Clause): string {
+  switch (c.scenario) {
+    case "palette_keyboard":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} palette keyboard", async ({ page }) => {
+  await bootConsole(page);
+  // どこでも打鍵で開き、入力を引き継ぐ
+  await page.keyboard.press("s");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await expect(page.locator("#palette-input")).toHaveValue("s");
+  // Escで閉じる
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#palette-overlay")).toBeHidden();
+  // パレットが閉じた一覧画面のEscは条件クリア(CLR-001の結線)
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#rail-msg")).toHaveText("ルールを既定に戻した");
+  expect((await calls(page)).some((entry) => entry.cmd === "clear_filter")).toBe(true);
+  // IME変換中(composition中)のEnterは候補を適用しない
+  await page.keyboard.press("a");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await page.locator("#palette-input").dispatchEvent("compositionstart");
+  const appliedBefore = (await calls(page)).filter((entry) => entry.cmd === "apply_candidate").length;
+  await page.keyboard.press("Enter");
+  expect((await calls(page)).filter((entry) => entry.cmd === "apply_candidate").length).toBe(appliedBefore);
+  await page.locator("#palette-input").dispatchEvent("compositionend");
+  // 確定後のEnterは候補を適用し、開いたままクエリだけリセット(連続入力)
+  await page.locator("#palette-input").fill("axi");
+  await page.keyboard.press("Enter");
+  const applied = (await calls(page)).filter((entry) => entry.cmd === "apply_candidate");
+  expect(applied.length).toBe(appliedBefore + 1);
+  expect(applied[applied.length - 1].args.id).toBe("tier:Axi");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await expect(page.locator("#palette-input")).toHaveValue("");
+});`;
+    case "delivery_flush":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} delivery flush", async ({ page }) => {
+  await bootConsole(page);
+  await page.locator("#delivery-tab").click();
+  await page.locator("#webhook-input").fill("https://discord.com/api/webhooks/1/tok");
+  await page.locator("#test-btn").click();
+  await expect(page.locator("#rail-msg")).toHaveText(/通知要求/);
+  const sequence = await calls(page);
+  const saveIndex = sequence.findIndex(
+    (entry) =>
+      entry.cmd === "set_config" &&
+      entry.args.config.discordWebhookUrl === "https://discord.com/api/webhooks/1/tok",
+  );
+  const testIndex = sequence.findIndex((entry) => entry.cmd === "test_notification");
+  expect(saveIndex).toBeGreaterThanOrEqual(0);
+  expect(testIndex).toBeGreaterThan(saveIndex);
+});`;
+    case "rule_row_controls":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} toggle vs edit focus", async ({ page }) => {
+  await bootConsole(page);
+  const editingBefore = await page.locator("#editing-meta").textContent();
+  // enabled切替はset_rule_enabledだけを呼び、edit focus表示もパレットも動かさない
+  await page.locator(".rule-toggle").click();
+  const toggles = (await calls(page)).filter((entry) => entry.cmd === "set_rule_enabled");
+  expect(toggles.length).toBe(1);
+  expect(toggles[0].args).toEqual({ index: 0, enabled: false });
+  await expect(page.locator("#editing-meta")).toHaveText(editingBefore ?? "");
+  await expect(page.locator("#palette-overlay")).toBeHidden();
+  // 行本体はパレットを開くだけで切替を呼ばない
+  await page.locator(".rule-edit").click();
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  expect((await calls(page)).filter((entry) => entry.cmd === "set_rule_enabled").length).toBe(1);
+});
+
+// ${c.id}: ${c.desc} (全ルール無効の明示)
+test("${c.id} all rules disabled", async ({ page }) => {
+  await bootConsole(page, { allRulesDisabled: true });
+  await expect(page.locator("#fissure-rows td.empty")).toHaveText("NO ENABLED NOTIFICATION RULES");
+  await expect(page.locator("#sb-watch")).toHaveText("WATCH: NO ENABLED NOTIFICATION RULES");
+});`;
+    case "sidebar_fit":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} sidebar fits minimum window", async ({ page }) => {
+  await page.setViewportSize({ width: 720, height: 480 });
+  await bootConsole(page);
+  const railFits = () =>
+    page.locator(".rail").evaluate((el) => el.scrollHeight <= el.clientHeight);
+  expect(await railFits()).toBe(true);
+  // FILTERSタブ: ルールnavigator・NEW/DEL/CLEAR・5軸launcherへ到達できる
+  await expect(page.locator(".rule-focus")).toBeVisible();
+  for (const id of ["rule-new", "rule-del", "clear-btn"]) {
+    await expect(page.locator("#" + id)).toBeVisible();
+  }
+  for (const id of ["tier-checks", "mode-checks", "storm-checks", "mission-checks", "planet-checks"]) {
+    await expect(page.locator("#" + id)).toBeVisible();
+  }
+  // launcherは既存パレットをその軸に絞って開く
+  await page.locator("#mission-checks").click();
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await expect(page.locator("#palette-rule")).toContainText("MISSION");
+  const facets = await page.locator("#palette-cands .cand .facet").allTextContents();
+  expect(facets.length).toBeGreaterThan(0);
+  expect(facets.every((facet) => facet === "MISSION")).toBe(true);
+  await page.keyboard.press("Escape");
+  // DELIVERYタブ: 配送先・TEST・時間設定・PAUSEへ到達できる
+  await page.locator("#delivery-tab").click();
+  for (const id of ["desktop-check", "webhook-input", "test-btn", "minremain-input", "poll-input", "pause-btn"]) {
+    await expect(page.locator("#" + id)).toBeVisible();
+  }
+  expect(await railFits()).toBe(true);
+  // 既定サイズでも縦スクロールを必要としない
+  await page.setViewportSize({ width: 960, height: 620 });
+  expect(await railFits()).toBe(true);
+});`;
+    case "compact_table":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} compact table breakpoints", async ({ page }) => {
+  await page.setViewportSize({ width: 950, height: 620 });
+  await bootConsole(page);
+  await expect(page.locator("th[scope=col]")).toHaveCount(7);
+  const firstRow = page.locator("#fissure-rows tr").first();
+  // 950px(表領域740px)では7列1段のtable表示を維持する
+  expect(await firstRow.evaluate((el) => getComputedStyle(el).display)).toBe("table-row");
+  for (const width of [949, 800, 720]) {
+    await page.setViewportSize({ width, height: 620 });
+    // 2段gridへ切り替わる
+    expect(await firstRow.evaluate((el) => getComputedStyle(el).display)).toBe("grid");
+    // 横スクロールを必要としない
+    expect(await page.locator(".tablewrap").evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    // ヘッダはsticky
+    expect(await page.locator("thead").evaluate((el) => getComputedStyle(el).position)).toBe("sticky");
+  }
+  // MODEとSTORMは別セル・別ラベルのまま
+  const stormRow = page.locator("#fissure-rows tr", { hasText: "Nsu Grid" });
+  await expect(stormRow.locator(".col-mode .flag")).toHaveText(/HARD/);
+  await expect(stormRow.locator(".col-storm .flag")).toHaveText(/STORM/);
+  // 長い値はellipsisしてもDOM上の全文と行tooltipを保持する
+  const longRow = page.locator("#fissure-rows tr", { hasText: "Taveuni" });
+  await expect(longRow.locator(".col-node .icon-label > span:last-child")).toHaveText(
+    "Taveuni (Kuva Fortress)",
+  );
+  expect(await longRow.getAttribute("title")).toContain("Taveuni (Kuva Fortress)");
+});
+
+// ${c.id}: ${c.desc} (empty rowの全幅表示)
+test("${c.id} empty row spans full width", async ({ page }) => {
+  await page.setViewportSize({ width: 720, height: 480 });
+  await bootConsole(page, { allRulesDisabled: true });
+  const spansFullWidth = await page.locator("#fissure-rows td.empty").evaluate((el) => {
+    const row = el.closest("tr");
+    if (!row) return false;
+    return Math.abs(el.getBoundingClientRect().width - row.getBoundingClientRect().width) <= 1;
+  });
+  expect(spansFullWidth).toBe(true);
+});`;
+    default:
+      throw new Error(`未知のrendererシナリオ: ${c.scenario} (${c.id})`);
+  }
+}
+
+const RUST_EXAMPLE_PATTERNS = new Set([
+  "legacy_rule_enabled",
+  "notification_example",
+  "static_check",
+  "approved_asset",
+]);
+const TS_EXAMPLE_PATTERNS = new Set(["renderer_glyphs", "renderer_scenario"]);
+for (const c of spec.clauses) {
+  if (
+    c.label === "example-tested" &&
+    !RUST_EXAMPLE_PATTERNS.has(c.pattern) &&
+    !TS_EXAMPLE_PATTERNS.has(c.pattern)
+  ) {
+    throw new Error(`example-testedの出力先が未定義: ${c.pattern} (${c.id})`);
+  }
+}
+
 const propertyTests = spec.clauses
   .filter((c) => c.label === "property-tested")
   .map(genClause)
   .filter(Boolean)
   .join("\n");
 const exampleTests = spec.clauses
-  .filter((c) => c.label === "example-tested")
+  .filter((c) => RUST_EXAMPLE_PATTERNS.has(c.pattern))
   .map(genExampleClause)
+  .join("\n");
+const glyphTests = spec.clauses
+  .filter((c) => c.pattern === "renderer_glyphs")
+  .map(genGlyphClause)
+  .join("\n");
+const rendererTests = spec.clauses
+  .filter((c) => c.pattern === "renderer_scenario")
+  .map(genRendererClause)
   .join("\n");
 
 const oracle = `// @generated by tools/spec-gen.ts from specs/notifier.pkl — DO NOT EDIT
@@ -869,15 +1228,9 @@ use relico_lib::notify::{self, NotificationOutcome};
 use relico_lib::palette::{self, Candidate, Facet};
 use relico_lib::poller;
 
-const TIERS: &[&str] = &["Lith", "Meso", "Neo", "Axi", "Requiem", "Omnia"];
-const MISSIONS: &[&str] = &[
-    "Defense", "Survival", "Capture", "Extermination", "Rescue",
-    "Disruption", "Mobile Defense", "Void Flood", "Void Cascade", "Volatile",
-];
-const PLANETS: &[&str] = &[
-    "Mars", "Ceres", "Sedna", "Void", "Saturn", "Phobos",
-    "Zariman", "Veil Proxima", "Kuva Fortress", "Lua",
-];
+const TIERS: &[&str] = &[${rustStrArray(TIER_POOL)}];
+const MISSIONS: &[&str] = &[${rustStrArray(MISSION_POOL)}];
+const PLANETS: &[&str] = &[${rustStrArray(PLANET_POOL)}];
 
 /// オラクルは純粋関数を対象とするため、現在時刻は固定値でよい
 fn base_now() -> DateTime<Utc> {
@@ -976,6 +1329,26 @@ ${propertyTests}
 ${exampleTests}
 `;
 
+// ---- TSオラクル生成 ----
+const unitOracle = `// @generated by tools/spec-gen.ts from specs/notifier.pkl — DO NOT EDIT
+// テストを直したくなったら specs/ を編集して \`just spec-gen\` を実行する。
+// 実行: bun test tests/unit
+
+import { expect, test } from "bun:test";
+import { candidateGlyphHtml, glyphHtml, planetForFissure, type GlyphKind } from "../../src/icons";
+${glyphTests}
+`;
+
+const rendererOracle = `// @generated by tools/spec-gen.ts from specs/notifier.pkl — DO NOT EDIT
+// テストを直したくなったら specs/ を編集して \`just spec-gen\` を実行する。
+// Tauri IPCをmockしたrenderer統合テスト。Rust commandやOS通知を通った証明にはしない(docs/E2E.md)。
+// 実行: just renderer-test (Playwright / WebKit)
+
+import { expect, test } from "@playwright/test";
+import { bootConsole, calls } from "./harness";
+${rendererTests}
+`;
+
 // ---- SPEC.md生成 ----
 const labelNote: Record<string, string> = {
   "property-tested": "proptestオラクルで機械検証",
@@ -987,10 +1360,14 @@ const rows = spec.clauses
   .map((c) => `| ${c.id} | \`${c.pattern}\` | ${c.label} | ${c.desc} |`)
   .join("\n");
 
-const manuals = spec.clauses
-  .filter((c) => c.pattern === "manual")
-  .map((c) => `### ${c.id}: ${c.desc}\n\n${c.procedure}`)
-  .join("\n\n");
+const manualBlock = (clauses: Clause[]) =>
+  clauses.map((c) => `#### ${c.id}: ${c.desc}\n\n${c.procedure}`).join("\n\n");
+const manualPerRelease = manualBlock(
+  spec.clauses.filter((c) => c.pattern === "manual" && c.cadence !== "one-time"),
+);
+const manualOneTime = manualBlock(
+  spec.clauses.filter((c) => c.pattern === "manual" && c.cadence === "one-time"),
+);
 
 const specMd = `# ${spec.title}
 
@@ -1014,14 +1391,24 @@ ${rows}
   .map(([k, v]) => `**${k}** = ${v}`)
   .join(" / ")}
 
+オラクルの実行先: \`rule_*\` 等のRustパターンは \`cargo test\`(src-tauri/tests/oracles_generated.rs)、
+\`renderer_glyphs\` は \`bun test tests/unit\`、\`renderer_scenario\` は \`just renderer-test\`
+(Playwright/WebKit、Tauri IPCはmock — Rust commandやOS通知を通った証明にはしない。docs/E2E.md参照)。
+
 ## 手動確認手順(manual条項)
 
-リリース前に以下を実施する。
+### 毎リリース実施
 
-${manuals}
+${manualPerRelease}
+
+### 一回限りの受入(対象が変わったときだけ再実施)
+
+${manualOneTime}
 `;
 
 await Bun.write(`${root}src-tauri/tests/oracles_generated.rs`, oracle);
+await Bun.write(`${root}tests/unit/oracles_generated.test.ts`, unitOracle);
+await Bun.write(`${root}tests/renderer/oracles_generated.spec.ts`, rendererOracle);
 await Bun.write(`${root}docs/SPEC.md`, specMd);
 
 const counts = spec.clauses.reduce(
@@ -1034,4 +1421,6 @@ console.log(
     .join(", ")})`,
 );
 console.log("  -> src-tauri/tests/oracles_generated.rs");
+console.log("  -> tests/unit/oracles_generated.test.ts");
+console.log("  -> tests/renderer/oracles_generated.spec.ts");
 console.log("  -> docs/SPEC.md");

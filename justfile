@@ -8,14 +8,25 @@ spec-gen:
 spec-check:
     #!/usr/bin/env bash
     set -euo pipefail
-    before=$(shasum docs/SPEC.md src-tauri/tests/oracles_generated.rs 2>/dev/null || true)
+    generated="docs/SPEC.md src-tauri/tests/oracles_generated.rs tests/unit/oracles_generated.test.ts tests/renderer/oracles_generated.spec.ts"
+    before=$(shasum $generated 2>/dev/null || true)
     bun tools/spec-gen.ts
-    after=$(shasum docs/SPEC.md src-tauri/tests/oracles_generated.rs)
+    after=$(shasum $generated)
     if [ "$before" != "$after" ]; then
         echo "NG: 生成物が specs/ より古かった。just spec-gen の結果を確認してコミットすること" >&2
         exit 1
     fi
+    bun test tests/unit
     cd src-tauri && cargo test
+
+# renderer統合テスト(Playwright/WebKit、Tauri IPCはmock。docs/E2E.mdの線引き)
+# 初回は bunx playwright install webkit が必要
+renderer-test:
+    bunx playwright test
+
+# MAN-009の機械検査部分(macOS)。build/notification-test後に実行し、残余だけを目視する
+macos-smoke:
+    bash tools/macos-smoke.sh
 
 dev:
     bun tauri dev

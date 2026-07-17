@@ -17,7 +17,8 @@ const GENERIC: Record<GlyphKind, string> = {
   mission: `<path d="M4 4h12v12H4zM7 7h6M7 10h6M7 13h3"/>`,
   faction: `<path d="M10 2.5 16 6v7l-6 4.5L4 13V6Z"/><path d="M7 9h6M10 6v7"/>`,
   difficulty: `<path d="M10 2.5 16 5v4.5c0 3.8-2.4 6.3-6 8-3.6-1.7-6-4.2-6-8V5Z"/>`,
-  storm: `<path d="m11.5 2.5-6 8h4l-1 7 6-9h-4z"/>`,
+  // 未知値のフォールバック。既知3値(exclude/include/only)と区別するため破線にする
+  storm: `<path d="m11.5 2.5-6 8h4l-1 7 6-9h-4z" stroke-dasharray="2.5 2"/>`,
   action: `<circle cx="10" cy="10" r="6.5"/><path d="M7 10h6M10 7v6"/>`,
 };
 

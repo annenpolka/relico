@@ -214,9 +214,47 @@ class NotificationExample extends Clause {
   scenario: "outcomes" | "desktop_payload" | "desktop_unavailable" | "discord_receipt"
 }
 
+/// リポジトリ内の静的成果物(設定ファイル・アイコン・配線)を生成テストで検査する。
+/// ビルド成果物や実行時挙動は対象にしない(それらはE2E/manualの領分)。
+class StaticCheck extends Clause {
+  pattern = "static_check"
+  label = "example-tested"
+  scenario: "bundle_identity" | "tray_template_icon"
+}
+
+/// 人間が一度目視承認したアセットをsha256で固定する。
+/// ハッシュ不一致 = 内容が変わったので目視で再承認し、ここのsha256を更新する。
+/// 「毎リリース目視」を「一回承認 + 機械の鮮度監視」へ置き換えるためのパターン。
+class ApprovedAsset extends Clause {
+  pattern = "approved_asset"
+  label = "example-tested"
+  /// src-tauri/ (CARGO_MANIFEST_DIR) からの相対パス
+  path: String
+  sha256: String(matches(Regex(#"[0-9a-f]{64}"#)))
+}
+
+/// フロントエンドの純粋写像(icons.ts)をbun testで検査する。
+/// 生成先: tests/unit/oracles_generated.test.ts
+class RendererGlyphs extends Clause {
+  pattern = "renderer_glyphs"
+  label = "example-tested"
+  scenario: "glyph_known_values" | "planet_proxima_view"
+}
+
+/// Tauri IPCをmockしたWebKit renderer統合テスト(Playwright)。
+/// Rust commandやOS通知を通った証明にはしない(docs/E2E.mdの線引き)。
+/// 生成先: tests/renderer/oracles_generated.spec.ts、実行は just renderer-test
+class RendererScenario extends Clause {
+  pattern = "renderer_scenario"
+  label = "example-tested"
+  scenario: "palette_keyboard" | "delivery_flush" | "rule_row_controls" | "sidebar_fit" | "compact_table"
+}
+
 /// 機械検証しない残余。手動確認手順をSPEC.mdに列挙する
 class Manual extends Clause {
   pattern = "manual"
   label = "manual"
+  /// per-release: 毎リリース実施 / one-time: 一回限りの受入(対象が変わったときだけ再実施)
+  cadence: "per-release" | "one-time" = "per-release"
   procedure: String
 }

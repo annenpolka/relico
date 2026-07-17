@@ -15,14 +15,8 @@ use relico_lib::palette::{self, Candidate, Facet};
 use relico_lib::poller;
 
 const TIERS: &[&str] = &["Lith", "Meso", "Neo", "Axi", "Requiem", "Omnia"];
-const MISSIONS: &[&str] = &[
-    "Defense", "Survival", "Capture", "Extermination", "Rescue",
-    "Disruption", "Mobile Defense", "Void Flood", "Void Cascade", "Volatile",
-];
-const PLANETS: &[&str] = &[
-    "Mars", "Ceres", "Sedna", "Void", "Saturn", "Phobos",
-    "Zariman", "Veil Proxima", "Kuva Fortress", "Lua",
-];
+const MISSIONS: &[&str] = &["Defense", "Survival", "Capture", "Extermination", "Rescue", "Disruption", "Mobile Defense", "Void Flood", "Void Cascade", "Volatile"];
+const PLANETS: &[&str] = &["Mars", "Ceres", "Sedna", "Void", "Saturn", "Phobos", "Zariman", "Veil Proxima", "Kuva Fortress", "Lua"];
 
 /// オラクルは純粋関数を対象とするため、現在時刻は固定値でよい
 fn base_now() -> DateTime<Utc> {
@@ -906,4 +900,94 @@ fn ntf_004() {
             "SPEC NTF-004 違反: Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する (ID欠落・空文字・不正JSONを成功扱いした)"
         );
     }
+}
+
+/// STA-001: 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない
+#[test]
+fn sta_001() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let release: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(manifest.join("tauri.conf.json"))
+            .expect("tauri.conf.jsonを読めること"),
+    )
+    .expect("tauri.conf.jsonがJSONであること");
+    let test: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(manifest.join("tauri.notification-test.conf.json"))
+            .expect("tauri.notification-test.conf.jsonを読めること"),
+    )
+    .expect("tauri.notification-test.conf.jsonがJSONであること");
+
+    assert_eq!(
+        release["identifier"], "com.annenpolka.relico",
+        "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (配布identifier)"
+    );
+    assert_eq!(release["productName"], "relico", "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (配布productName)");
+    assert_eq!(
+        test["identifier"], "com.annenpolka.relico.notification-test",
+        "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (通知テストidentifier)"
+    );
+    assert_eq!(
+        test["productName"], "RELICO Notification Test",
+        "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (通知テストproductName)"
+    );
+    assert_ne!(release["identifier"], test["identifier"], "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (identifier衝突)");
+    assert_ne!(release["productName"], test["productName"], "SPEC STA-001 違反: 配布版(relico / com.annenpolka.relico)と通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない (productName衝突)");
+}
+
+/// STA-002: トレイは専用tray-icon.pngをテンプレート画像として登録する配線を持ち、PNGはモノクロ(+アルファ)形式である
+#[test]
+fn sta_002() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bytes = std::fs::read(manifest.join("icons/tray-icon.png"))
+        .expect("icons/tray-icon.pngを読めること");
+    assert_eq!(
+        &bytes[..8],
+        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        "SPEC STA-002 違反: トレイは専用tray-icon.pngをテンプレート画像として登録する配線を持ち、PNGはモノクロ(+アルファ)形式である (PNGシグネチャ)"
+    );
+    // IHDRのcolor type: 0=grayscale / 4=grayscale+alpha だけをテンプレート互換とする
+    let color_type = bytes[25];
+    assert!(
+        color_type == 0 || color_type == 4,
+        "SPEC STA-002 違反: トレイは専用tray-icon.pngをテンプレート画像として登録する配線を持ち、PNGはモノクロ(+アルファ)形式である (colortype={color_type}: モノクロ+アルファのPNGであること)"
+    );
+
+    let lib_rs = std::fs::read_to_string(manifest.join("src/lib.rs"))
+        .expect("src/lib.rsを読めること");
+    assert!(
+        lib_rs.contains("tray-icon.png"),
+        "SPEC STA-002 違反: トレイは専用tray-icon.pngをテンプレート画像として登録する配線を持ち、PNGはモノクロ(+アルファ)形式である (専用tray-icon.pngを使う配線が失われた)"
+    );
+    assert!(
+        lib_rs.contains(".icon_as_template("),
+        "SPEC STA-002 違反: トレイは専用tray-icon.pngをテンプレート画像として登録する配線を持ち、PNGはモノクロ(+アルファ)形式である (テンプレート登録の配線が失われた)"
+    );
+}
+
+/// AST-001: メニューバー用tray-icon.pngは目視承認済みの内容から変わっていない(変えたらMAN-005の手順で再承認しsha256を更新する)
+#[test]
+fn ast_001() {
+    use sha2::{Digest, Sha256};
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bytes = std::fs::read(manifest.join("icons/tray-icon.png"))
+        .expect("承認済みアセット icons/tray-icon.png を読めること");
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    assert_eq!(
+        digest, "6c467d92f9e08cec513d62012765aebd1807f5d41589c8fabf50c7027096162a",
+        "SPEC AST-001 違反: メニューバー用tray-icon.pngは目視承認済みの内容から変わっていない(変えたらMAN-005の手順で再承認しsha256を更新する) — icons/tray-icon.png が承認済み内容から変わった。見た目を目視で再承認し、specs/notifier.pkl のsha256を更新して just spec-gen すること"
+    );
+}
+
+/// AST-002: 配布用アプリアイコンicon.icnsは目視承認済みの内容から変わっていない(変えたらMAN-006の手順で再承認しsha256を更新する)
+#[test]
+fn ast_002() {
+    use sha2::{Digest, Sha256};
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bytes = std::fs::read(manifest.join("icons/icon.icns"))
+        .expect("承認済みアセット icons/icon.icns を読めること");
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    assert_eq!(
+        digest, "3b5771fafbd7068879d5ed783b7b66c91acb60d75fd922ca8474df56e9edfb97",
+        "SPEC AST-002 違反: 配布用アプリアイコンicon.icnsは目視承認済みの内容から変わっていない(変えたらMAN-006の手順で再承認しsha256を更新する) — icons/icon.icns が承認済み内容から変わった。見た目を目視で再承認し、specs/notifier.pkl のsha256を更新して just spec-gen すること"
+    );
 }
