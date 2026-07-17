@@ -1,0 +1,72 @@
+/// パターン語彙のスキーマ定義。
+/// dspec方式の「対応するパターンだけを書ける狭い語彙」。全域表現は意図的に捨てる。
+///
+/// Rustスニペット(configOverride / fissureOverride)内で使える束縛:
+///   cfg: FilterConfig(mut) / f: Fissure(mut) / now: DateTime<Utc>
+module patterns
+
+abstract class Clause {
+  /// 条項id。例: FLT-001
+  id: String(matches(Regex(#"[A-Z]{3}-\d{3}"#)))
+
+  /// 生成器が分岐するパターン名(サブクラスが固定値を与える)
+  pattern: String
+
+  /// 自然言語での条項内容(SPEC.mdにそのまま出る)
+  desc: String
+
+  /// 保証ラベル。proven / model-checked は存在しない(勾配を平らに見せない)
+  label: "property-tested" | "example-tested" | "manual"
+}
+
+/// config述語 ∧ fissure述語 → 通知されない
+class RejectWhen extends Clause {
+  pattern = "reject_when"
+  label = "property-tested"
+  configOverride: String = ""
+  fissureOverride: String = ""
+}
+
+/// フィルタ軸が空のとき、その軸を理由に棄却されない。
+/// 検証形: matches(軸=[], f) == matches(軸=[fに合致する値], f)
+class PassWhenEmpty extends Clause {
+  pattern = "pass_when_empty"
+  label = "property-tested"
+  /// FilterConfigのフィールド名
+  axisField: "tiers" | "mission_types" | "planets"
+  /// fに合致する値を作るRust式
+  matchExpr: String
+}
+
+/// 同一idは任意の操作列で高々1回しか通知されない
+class AtMostOnce extends Clause {
+  pattern = "at_most_once"
+  label = "property-tested"
+}
+
+/// pruneは生存中idの通知済み状態を保持し、期限切れidを除去する
+class PrunePreservesLive extends Clause {
+  pattern = "prune_preserves_live"
+  label = "property-tested"
+}
+
+/// 惑星抽出が全入力でパニックせず、整形式 "Node (Planet)" でPlanetを返す
+class ParseTotal extends Clause {
+  pattern = "parse_total"
+  label = "property-tested"
+}
+
+/// バックオフの返す遅延が常に[minSecs, maxSecs]に収まる
+class Bounded extends Clause {
+  pattern = "bounded"
+  label = "property-tested"
+  minSecs: Int
+  maxSecs: Int
+}
+
+/// 機械検証しない残余。手動確認手順をSPEC.mdに列挙する
+class Manual extends Clause {
+  pattern = "manual"
+  label = "manual"
+  procedure: String
+}

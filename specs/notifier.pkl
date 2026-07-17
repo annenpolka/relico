@@ -1,0 +1,80 @@
+/// 亀裂通知アプリの仕様正本。
+/// このファイル(と patterns.pkl)だけが手編集対象。docs/SPEC.md と
+/// src-tauri/tests/oracles_generated.rs はここから生成される。
+module notifier
+
+import "patterns.pkl"
+
+title = "Warframe Fissure Notifier 仕様"
+
+clauses: Listing<patterns.Clause> = new {
+  new patterns.RejectWhen {
+    id = "FLT-001"
+    desc = "mode=鋼のみ のとき、isHard=false の亀裂はどんな入力でも通知されない"
+    configOverride = "cfg.mode = Mode::SteelPath;"
+    fissureOverride = "f.is_hard = false;"
+  }
+  new patterns.RejectWhen {
+    id = "FLT-002"
+    desc = "mode=通常のみ のとき、isHard=true の亀裂はどんな入力でも通知されない"
+    configOverride = "cfg.mode = Mode::Normal;"
+    fissureOverride = "f.is_hard = true;"
+  }
+  new patterns.RejectWhen {
+    id = "FLT-003"
+    desc = "include_storms=false のとき、isStorm=true の亀裂(ボイドストーム)は通知されない"
+    configOverride = "cfg.include_storms = false;"
+    fissureOverride = "f.is_storm = true;"
+  }
+  new patterns.PassWhenEmpty {
+    id = "FLT-004"
+    desc = "tiersが空のとき、tierを理由に棄却されない(空=全tier対象)"
+    axisField = "tiers"
+    matchExpr = "vec![f.tier.clone()]"
+  }
+  new patterns.PassWhenEmpty {
+    id = "FLT-005"
+    desc = "mission_typesが空のとき、ミッション種別を理由に棄却されない(空=全種別対象)"
+    axisField = "mission_types"
+    matchExpr = "vec![f.mission_type.clone()]"
+  }
+  new patterns.PassWhenEmpty {
+    id = "FLT-006"
+    desc = "planetsが空のとき、惑星を理由に棄却されない(空=全惑星対象)"
+    axisField = "planets"
+    matchExpr = "filter::extract_planet(&f.node).into_iter().collect()"
+  }
+  new patterns.RejectWhen {
+    id = "FLT-007"
+    desc = "残り時間がmin_remaining_secs未満の亀裂は通知されない(期限切れ含む)"
+    fissureOverride = "f.expiry = now + Duration::seconds((cfg.min_remaining_secs as i64) - 1);"
+  }
+  new patterns.AtMostOnce {
+    id = "DED-001"
+    desc = "同一亀裂idは任意のポーリング列で高々1回しか通知されない"
+  }
+  new patterns.PrunePreservesLive {
+    id = "DED-002"
+    desc = "pruneは生存中idの通知済み状態を保持し、期限切れidを除去する"
+  }
+  new patterns.ParseTotal {
+    id = "PRS-001"
+    desc = "惑星抽出は任意文字列でパニックせず、\"Node (Planet)\" 形式でPlanetを返す"
+  }
+  new patterns.Bounded {
+    id = "POL-001"
+    desc = "APIバックオフの遅延は失敗・成功がどう並んでも常に[60s, 600s]に収まる"
+    minSecs = 60
+    maxSecs = 600
+  }
+  new patterns.Manual {
+    id = "MAN-001"
+    desc = "デスクトップ通知がmacOS通知センターに実際に表示される"
+    procedure = "設定画面の「テスト送信」でデスクトップ通知を発火し、通知センターに表示されることを目視確認する。初回はシステム設定で通知許可が必要。"
+  }
+  new patterns.Manual {
+    id = "MAN-002"
+    desc = "Discord Webhook通知がスマホのDiscordアプリに届く"
+    procedure = "Webhook URLを設定し「テスト送信」を押す。スマホのDiscordアプリでプッシュ通知とembedの内容(tier/node/鋼マーク/残り時間の相対表示)を確認する。"
+  }
+}
