@@ -23,9 +23,11 @@ type Clause = {
     | "desktop_payload"
     | "desktop_unavailable"
     | "discord_receipt"
+    | "localized_backend"
     | "bundle_identity"
     | "tray_template_icon"
     | "autostart_bundle_icon"
+    | "dependency_free_i18n"
     | "glyph_known_values"
     | "planet_proxima_view"
     | "palette_keyboard"
@@ -37,8 +39,12 @@ type Clause = {
     | "rule_naming"
     | "table_sort"
     | "unselected_picker_create"
+    | "content_tabs"
+    | "mute_window"
+    | "locale_display"
     | "palette_apply_ipc"
-    | "delivery_error_surface";
+    | "delivery_error_surface"
+    | "locale_config_roundtrip";
   path?: string;
   sha256?: string;
   cadence?: "per-release" | "one-time";
@@ -414,10 +420,10 @@ ${indent(c.fissureOverride ?? "", 8)}
         prop_assert_eq!(visible.len(), 1, "${msg} (複数ルール合致で一覧が重複した)");
 
         let mut notified = NotifiedSet::new();
-        let first = poller::select_notifications(&mut notified, visible.clone(), false);
+        let first = poller::select_notifications(&mut notified, visible.clone(), false, false);
         prop_assert_eq!(first.len(), 1, "${msg} (最初の通知候補が1件でない)");
         prop_assert_eq!(first[0].id.as_str(), f.id.as_str(), "${msg} (別idを通知した)");
-        let second = poller::select_notifications(&mut notified, visible, false);
+        let second = poller::select_notifications(&mut notified, visible, false, false);
         prop_assert!(second.is_empty(), "${msg} (同じidを再通知した)");
     }`;
     case "parse_total":
@@ -453,7 +459,7 @@ ${indent(c.fissureOverride ?? "", 8)}
     #[test]
     fn ${name}(fs in proptest::collection::vec(arb_fissure(), 0..30)) {
         let mut set = NotifiedSet::new();
-        let out = poller::select_notifications(&mut set, fs.clone(), true);
+        let out = poller::select_notifications(&mut set, fs.clone(), true, false);
         prop_assert!(out.is_empty(), "${msg} (通知が発火した)");
         for f in &fs {
             prop_assert!(set.contains(&f.id), "${msg} (シードされていないidがある)");
@@ -530,20 +536,100 @@ ${indent(c.fissureOverride ?? "", 8)}
         let existing = poller::notify_candidates(&current, &[f.clone()], now);
         prop_assert_eq!(existing.len(), 1, "${msg} (現存合致亀裂を取得できない)");
         let mut notified = NotifiedSet::new();
-        let seeded = poller::select_notifications(&mut notified, existing.clone(), true);
+        let seeded = poller::select_notifications(&mut notified, existing.clone(), true, false);
         prop_assert!(seeded.is_empty(), "${msg} (scope change直後の現存亀裂を一括通知した)");
         prop_assert!(notified.contains(&f.id), "${msg} (現存亀裂をsilent seedしていない)");
-        let repeated = poller::select_notifications(&mut notified, existing, false);
+        let repeated = poller::select_notifications(&mut notified, existing, false, false);
         prop_assert!(repeated.is_empty(), "${msg} (seed済み現存亀裂を次回通知した)");
 
         let mut new_fissure = f.clone();
         new_fissure.id = format!("{}-new", f.id);
         let newly_visible = poller::notify_candidates(&current, &[new_fissure.clone()], now);
-        let fresh = poller::select_notifications(&mut notified, newly_visible.clone(), false);
+        let fresh = poller::select_notifications(&mut notified, newly_visible.clone(), false, false);
         prop_assert_eq!(fresh.len(), 1, "${msg} (scope change後の新規idを通知候補にしない)");
         prop_assert_eq!(fresh[0].id.as_str(), new_fissure.id.as_str(), "${msg} (新規idを保持しない)");
-        let duplicate = poller::select_notifications(&mut notified, newly_visible, false);
+        let duplicate = poller::select_notifications(&mut notified, newly_visible, false, false);
         prop_assert!(duplicate.is_empty(), "${msg} (scope change後の新規idを再通知した)");
+    }`;
+    case "daily_mute_window":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(start_minute in 0u16..1440, end_minute in 0u16..1440) {
+        let window = DailyMuteWindow {
+            enabled: true,
+            start_minute: i64::from(start_minute),
+            end_minute: i64::from(end_minute),
+        };
+        prop_assert!(window.is_valid(), "${msg} (0..1439の値を無効扱いした)");
+
+        // 任意のstart/endについて1日の全1440分を検査する。
+        for minute in 0u16..1440 {
+            let expected = if start_minute == end_minute {
+                false
+            } else if start_minute < end_minute {
+                start_minute <= minute && minute < end_minute
+            } else {
+                minute >= start_minute || minute < end_minute
+            };
+            prop_assert_eq!(
+                window.is_muted_at_minute(minute),
+                expected,
+                "${msg} (start={}, end={}, minute={})",
+                start_minute,
+                end_minute,
+                minute,
+            );
+        }
+
+        let disabled = DailyMuteWindow { enabled: false, ..window.clone() };
+        prop_assert!(
+            (0u16..1440).all(|minute| !disabled.is_muted_at_minute(minute)),
+            "${msg} (enabled=falseなのにミュートした)"
+        );
+        if start_minute != end_minute {
+            prop_assert!(window.is_muted_at_minute(start_minute), "${msg} (startを含まない)");
+            prop_assert!(!window.is_muted_at_minute(end_minute), "${msg} (endを含んだ)");
+        }
+    }`;
+    case "muted_delivery":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(fs in proptest::collection::vec(arb_fissure(), 0..30), mut fresh in arb_fissure()) {
+        let mut muted_set = NotifiedSet::new();
+        let muted = poller::select_notifications(&mut muted_set, fs.clone(), false, true);
+        prop_assert!(muted.is_empty(), "${msg} (ミュート中に配送対象を返した)");
+        for f in &fs {
+            prop_assert!(muted_set.contains(&f.id), "${msg} (ミュート中のidをmarkしない)");
+        }
+
+        let backlog = poller::select_notifications(&mut muted_set, fs, false, false);
+        prop_assert!(backlog.is_empty(), "${msg} (解除後に滞留idを配送した)");
+
+        fresh.id = "post-mute-fresh-id".to_string();
+        fresh.expiry = base_now() + Duration::hours(1);
+        let delivered = poller::select_notifications(
+            &mut muted_set,
+            vec![fresh.clone()],
+            false,
+            false,
+        );
+        prop_assert_eq!(delivered.len(), 1, "${msg} (解除後の新規idを配送しない)");
+        prop_assert_eq!(delivered[0].id.as_str(), fresh.id.as_str(), "${msg} (別idを配送した)");
+        prop_assert!(
+            poller::select_notifications(&mut muted_set, vec![fresh], false, false).is_empty(),
+            "${msg} (解除後の新規idを再配送した)"
+        );
+
+        let mut seeded_set = NotifiedSet::new();
+        let seeded = poller::select_notifications(
+            &mut seeded_set,
+            delivered,
+            true,
+            false,
+        );
+        prop_assert!(seeded.is_empty(), "${msg} (seed中に配送対象を返した)");
     }`;
     case "filtered_view":
       return `
@@ -1121,6 +1207,75 @@ fn ${name}() {
     assert_eq!(round_trip, hidden_notify, "${msg} (enabledとnotifyの独立状態をround-tripで失った)");
 }`;
   }
+  if (c.pattern === "app_config_compat") {
+    return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let legacy: AppConfig = serde_json::from_str(r#"{}"#)
+        .expect("locale/mute欠落の旧AppConfig JSONを読み込めること");
+    assert_eq!(legacy.locale, AppLocale::Ja, "${msg} (locale欠落がjaでない)");
+    assert!(!legacy.notification_mute.enabled, "${msg} (mute欠落をONへ移行した)");
+
+    for (locale, wire) in [
+        (AppLocale::Ja, "ja"),
+        (AppLocale::En, "en"),
+        (AppLocale::ZhHans, "zh-Hans"),
+    ] {
+        let mut cfg = AppConfig::default();
+        cfg.locale = locale.clone();
+        cfg.notification_mute = DailyMuteWindow {
+            enabled: true,
+            start_minute: 22 * 60 + 15,
+            end_minute: 6 * 60 + 45,
+        };
+        let encoded = serde_json::to_string(&cfg).expect("AppConfigをserializeできること");
+        let value: serde_json::Value = serde_json::from_str(&encoded)
+            .expect("serialize済みAppConfigがJSONであること");
+        assert_eq!(value["locale"], wire, "${msg} (locale wire値)");
+        assert_eq!(value["notificationMute"]["enabled"], true, "${msg} (mute enabled wire値)");
+        assert_eq!(value["notificationMute"]["startMinute"], 1335, "${msg} (mute start wire値)");
+        assert_eq!(value["notificationMute"]["endMinute"], 405, "${msg} (mute end wire値)");
+
+        let round_trip: AppConfig = serde_json::from_str(&encoded)
+            .expect("serialize済みAppConfigを再読込できること");
+        assert_eq!(round_trip.locale, locale, "${msg} (locale round-trip)");
+        assert!(round_trip.notification_mute.enabled, "${msg} (mute enabled round-trip)");
+        assert_eq!(round_trip.notification_mute.start_minute, 1335, "${msg} (mute start round-trip)");
+        assert_eq!(round_trip.notification_mute.end_minute, 405, "${msg} (mute end round-trip)");
+    }
+
+    for invalid in [
+        DailyMuteWindow { enabled: true, start_minute: -1, end_minute: 60 },
+        DailyMuteWindow { enabled: true, start_minute: 60, end_minute: -1 },
+        DailyMuteWindow { enabled: true, start_minute: 1440, end_minute: 60 },
+        DailyMuteWindow { enabled: true, start_minute: 60, end_minute: 1440 },
+        DailyMuteWindow { enabled: true, start_minute: 65_536, end_minute: 60 },
+    ] {
+        assert!(!invalid.is_valid(), "${msg} (範囲外分値をvalid扱いした)");
+        assert!(
+            (0u16..1440).all(|minute| !invalid.is_muted_at_minute(minute)),
+            "${msg} (不正設定が通知を止めた)"
+        );
+        assert!(!invalid.is_muted_at_minute(1440), "${msg} (範囲外の現在分をミュートした)");
+    }
+
+    let base = AppConfig::default();
+    let projection = filter::notification_projection(&base.filter());
+    let mut presentation_only = base;
+    presentation_only.locale = AppLocale::ZhHans;
+    presentation_only.notification_mute = DailyMuteWindow {
+        enabled: true,
+        start_minute: 1320,
+        end_minute: 420,
+    };
+    assert_eq!(
+        filter::notification_projection(&presentation_only.filter()),
+        projection,
+        "${msg} (locale/mute変更でnotification projectionが変化した)"
+    );
+}`;
+  }
   if (c.pattern === "static_check") {
     switch (c.scenario) {
       case "bundle_identity":
@@ -1230,6 +1385,70 @@ fn ${name}() {
             r#"<key>Label</key><string>other</string><key>ProgramArguments</key><array><string>/tmp/other</string></array>"#,
         ),
         "${msg} (無関係な同名plistを移行対象にした)"
+    );
+}`;
+      case "dependency_free_i18n":
+        return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest.parent().expect("repository root");
+    let ts = std::fs::read_to_string(root.join("src/i18n.ts"))
+        .expect("src/i18n.tsを読めること");
+    let rust = std::fs::read_to_string(manifest.join("src/i18n.rs"))
+        .expect("src-tauri/src/i18n.rsを読めること");
+    let package = std::fs::read_to_string(root.join("package.json"))
+        .expect("package.jsonを読めること")
+        .to_ascii_lowercase();
+    let cargo = std::fs::read_to_string(manifest.join("Cargo.toml"))
+        .expect("Cargo.tomlを読めること")
+        .to_ascii_lowercase();
+
+    for import in ts.lines().map(str::trim).filter(|line| line.starts_with("import ")) {
+        assert!(
+            import.contains(" from \\\"./"),
+            "${msg} (TS i18nが外部importを持つ: {import})"
+        );
+    }
+    assert!(
+        !ts.contains("import("),
+        "${msg} (TS i18nが動的importを持つ)"
+    );
+    for import in rust.lines().map(str::trim).filter(|line| line.starts_with("use ")) {
+        assert!(
+            import.starts_with("use std::")
+                || import.starts_with("use crate::")
+                || import.starts_with("use super::")
+                || import.starts_with("use serde_json::"),
+            "${msg} (Rust i18nが外部crateを直接使う: {import})"
+        );
+    }
+    for dependency in [
+        "i18next",
+        "react-i18next",
+        "@lingui",
+        "@formatjs",
+        "intl-messageformat",
+        "messageformat",
+        "fluent-bundle",
+        "fluent-syntax",
+        "unic-langid",
+        "icu_locid",
+        "icu-locale",
+    ] {
+        assert!(
+            !package.contains(dependency) && !cargo.contains(dependency),
+            "${msg} (i18n専用外部依存が追加された: {dependency})"
+        );
+    }
+    assert!(
+        ts.contains("from \\\"./locales.json\\\""),
+        "${msg} (TSがsrc/locales.jsonを直接読まない)"
+    );
+    assert!(
+        rust.contains("include_str!(\\\"../../src/locales.json\\\")"),
+        "${msg} (Rustがsrc/locales.jsonを直接埋め込まない)"
     );
 }`;
       default:
@@ -1408,6 +1627,75 @@ fn ${name}() {
         );
     }
 }`;
+    case "localized_backend":
+      return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let now = base_now();
+    let fissure = Fissure {
+        id: "localized-notification".to_string(),
+        activation: now,
+        expiry: now + Duration::minutes(30),
+        node: "Test Node (Void)".to_string(),
+        mission_type: "Survival".to_string(),
+        enemy: "Orokin".to_string(),
+        tier: "Axi".to_string(),
+        tier_num: 4,
+        is_storm: false,
+        is_hard: true,
+    };
+
+    for (locale, hard, body, accepted, watch_prefix, storm_include, storm_only, candidate_error, rule_error) in [
+        (AppLocale::Ja, "鋼", "Orokin / 消滅まで残り30分", "通知要求を受け付けました: desktop", "監視:", "+VOID嵐", "VOID嵐のみ", "不明な候補ID: bad", "不明なルール番号: 99"),
+        (AppLocale::En, "Steel Path", "Orokin / 30 min remaining", "Notification request accepted: desktop", "Watch:", "+VOID STORM", "VOID STORM ONLY", "Unknown candidate ID: bad", "Unknown rule index: 99"),
+        (AppLocale::ZhHans, "钢铁之路", "Orokin / 剩余 30 分钟", "通知请求已接受：desktop", "监视：", "+虚空风暴", "仅虚空风暴", "未知候选项 ID：bad", "未知规则序号：99"),
+    ] {
+        let payload = notify::desktop_payload_for_locale(&fissure, now, locale);
+        assert!(payload.title.contains(hard), "${msg} (hard label: {})", payload.title);
+        assert_eq!(payload.body, body, "${msg} (body)");
+        let summary = notify::summarize_test_outcomes_for_locale(
+            &[NotificationOutcome::Requested { destination: "desktop" }],
+            locale,
+        )
+        .expect("Requestedをlocale別に要約できること");
+        assert_eq!(summary, accepted, "${msg} (test summary)");
+
+        let mut cfg = AppConfig::default();
+        cfg.locale = locale;
+        cfg.rules[0].storms = StormMode::Include;
+        let include_watch = relico_lib::watch_line(&cfg);
+        assert!(include_watch.starts_with(watch_prefix), "${msg} (tray: {include_watch})");
+        assert!(include_watch.contains(storm_include), "${msg} (Storm Include: {include_watch})");
+        cfg.rules[0].storms = StormMode::Only;
+        let only_watch = relico_lib::watch_line(&cfg);
+        assert!(only_watch.contains(storm_only), "${msg} (Storm Only: {only_watch})");
+
+        let actual_candidate_error = relico_lib::i18n::format(
+            locale,
+            "error.unknownCandidate",
+            &[("id", "bad")],
+        );
+        let actual_rule_error = relico_lib::i18n::format(
+            locale,
+            "error.unknownRuleIndex",
+            &[("index", "99")],
+        );
+        assert_eq!(actual_candidate_error, candidate_error, "${msg} (candidate error)");
+        assert_eq!(actual_rule_error, rule_error, "${msg} (rule error)");
+        for rendered in [
+            &payload.title,
+            &payload.body,
+            &summary,
+            &include_watch,
+            &only_watch,
+            &actual_candidate_error,
+            &actual_rule_error,
+        ] {
+            assert!(!rendered.contains("[["), "${msg} (missing marker: {rendered})");
+        }
+    }
+}`;
     default:
       throw new Error(`未知のnotification example scenario: ${c.scenario} (${c.id})`);
   }
@@ -1531,8 +1819,8 @@ test("${c.id} palette keyboard", async ({ page }) => {
   await expect(page.locator("#editing-meta")).toHaveText("R1/2");
   await page.keyboard.press("ArrowUp");
   await expect(page.locator("#editing-meta")).toHaveText("R2/2");
-  // Cmd/Ctrl+1..9は対応indexのルールへ直接ジャンプする
-  await page.keyboard.press("ControlOrMeta+1");
+  // Ctrl+1..9は対応indexのルールへ直接ジャンプする。Cmd+数字はコンテンツタブ専用
+  await page.keyboard.press("Control+1");
   await expect(page.locator("#editing-meta")).toHaveText("R1/2");
   expect(await mutations()).toBe(mutationsBefore);
   // IME変換中(composition中)のEnterは候補を適用しない
@@ -1551,8 +1839,8 @@ test("${c.id} palette keyboard", async ({ page }) => {
   expect(applied[applied.length - 1].args.id).toBe("tier:Axi");
   await expect(page.locator("#palette-overlay")).toBeVisible();
   await expect(page.locator("#palette-input")).toHaveValue("");
-  // パレット表示中もCmd/Ctrl+数字で編集対象を切り替えられる(開いたまま)
-  await page.keyboard.press("ControlOrMeta+2");
+  // パレット表示中もCtrl+数字で編集対象を切り替えられる(開いたまま)
+  await page.keyboard.press("Control+2");
   await expect(page.locator("#palette-rule")).toContainText("EDIT R2");
   await expect(page.locator("#palette-overlay")).toBeVisible();
 });`;
@@ -1926,6 +2214,232 @@ test("${c.id} serializes rapid new rule and filter apply", async ({ page }) => {
   expect(after.slice(0, 2)).toEqual(before);
   expect(after[2]).toMatchObject({ enabled: true, notify: false, tiers: ["Axi"] });
 });`;
+    case "content_tabs":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
+  await page.setViewportSize({ width: 960, height: 620 });
+  await bootConsole(page, { locale: "en" });
+  const tabs = [
+    ["fissures", "Fissures"],
+    ["sortie", "Sortie"],
+    ["archon", "Archon Hunt"],
+    ["syndicates", "Syndicates"],
+    ["area-missions", "Area Missions"],
+    ["archimedea", "Archimedea"],
+    ["descendia", "Descendia"],
+  ] as const;
+  await expect(page.locator("#content-tabs")).toHaveAttribute("role", "tablist");
+  await expect(page.locator("#content-tabs [role=tab]")).toHaveCount(tabs.length);
+  await expect(page.locator('[role="tabpanel"]')).toHaveCount(tabs.length);
+  expect(
+    await page.locator("#content-tabs [role=tab]").evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("data-tab-id")),
+    ),
+  ).toEqual(tabs.map(([id]) => id));
+  await expect(
+    page.locator("#tab-arbitration, #panel-arbitration, #tab-netracells, #panel-netracells"),
+  ).toHaveCount(0);
+
+  for (const [id, label] of tabs) {
+    const tab = page.locator("#tab-" + id);
+    const panel = page.locator("#panel-" + id);
+    await expect(tab).toHaveAttribute("role", "tab");
+    await expect(tab).toHaveAttribute("data-tab-id", id);
+    await expect(tab).toHaveAttribute("aria-controls", "panel-" + id);
+    await expect(tab).toHaveText(label);
+    await expect(panel).toHaveAttribute("role", "tabpanel");
+    await expect(panel).toHaveAttribute("aria-labelledby", "tab-" + id);
+  }
+
+  const assertActive = async (id: string) => {
+    await expect(page.locator('#content-tabs [role="tab"][aria-selected="true"]')).toHaveCount(1);
+    await expect(page.locator('#content-tabs [role="tab"][tabindex="0"]')).toHaveCount(1);
+    await expect(page.locator('#content-tabs [role="tab"][aria-selected="true"]')).toHaveAttribute(
+      "data-tab-id",
+      id,
+    );
+    await expect(page.locator('[role="tabpanel"]:not([hidden])')).toHaveCount(1);
+    await expect(page.locator("#panel-" + id)).toBeVisible();
+    await expect(page.locator('#content-tabs [role="tab"][aria-selected="false"]')).toHaveCount(
+      tabs.length - 1,
+    );
+    await expect(page.locator('#content-tabs [role="tab"][tabindex="-1"]')).toHaveCount(
+      tabs.length - 1,
+    );
+  };
+
+  await assertActive("fissures");
+  for (let i = 0; i < tabs.length; i++) {
+    await page.keyboard.press("Meta+" + (i + 1));
+    await assertActive(tabs[i][0]);
+  }
+  // 最終タブから次へ、先頭タブから前へ循環する。
+  await page.keyboard.press("Control+Tab");
+  await assertActive("fissures");
+  await page.keyboard.press("Control+Shift+Tab");
+  await assertActive("descendia");
+  // 取得不能タブへ対応していた数字はアプリが奪わず、active tabも変えない。
+  await page.evaluate(() => {
+    document.addEventListener("keydown", (event) => {
+      document.documentElement.dataset.lastShortcutDefaultPrevented = String(
+        event.defaultPrevented,
+      );
+    });
+  });
+  await page.keyboard.press("Meta+8");
+  await assertActive("descendia");
+  await expect(page.locator("html")).toHaveAttribute("data-last-shortcut-default-prevented", "false");
+  await page.keyboard.press("Meta+9");
+  await assertActive("descendia");
+  await expect(page.locator("html")).toHaveAttribute("data-last-shortcut-default-prevented", "false");
+
+  // Ctrl+数字はタブではなく従来のrule edit focusだけを変更する。
+  await page.keyboard.press("Control+2");
+  await expect(page.locator("#editing-meta")).toHaveText("R2/2");
+  await assertActive("descendia");
+
+  // ARIA roving focusは矢印/Home/Endでactive tabと共に移動する。
+  await page.locator("#tab-fissures").focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#tab-sortie")).toBeFocused();
+  await assertActive("sortie");
+  await page.keyboard.press("Home");
+  await expect(page.locator("#tab-fissures")).toBeFocused();
+  await assertActive("fissures");
+  await page.keyboard.press("End");
+  await expect(page.locator("#tab-descendia")).toBeFocused();
+  await assertActive("descendia");
+});`;
+    case "mute_window":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} notification mute window", async ({ page }) => {
+  await bootConsole(page, { locale: "en", notificationsMuted: true });
+  await page.locator("#delivery-tab").click();
+  await expect(page.locator("#mute-status")).toHaveAttribute("data-muted", "true");
+  await expect(page.locator("#mute-status")).toBeVisible();
+
+  const rulesBefore = await page.locator("#rules-list .rule-row").count();
+  await expect(page.locator("#mute-check")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator("#mute-start-input")).toBeDisabled();
+  await expect(page.locator("#mute-end-input")).toBeDisabled();
+  await page.locator("#mute-check").click();
+  await expect(page.locator("#mute-check")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#mute-start-input")).toBeEnabled();
+  await expect(page.locator("#mute-end-input")).toBeEnabled();
+  await page.locator("#mute-start-input").fill("22:15");
+  await page.locator("#mute-start-input").dispatchEvent("change");
+  await page.locator("#mute-end-input").fill("06:45");
+  await page.locator("#mute-end-input").dispatchEvent("change");
+
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (entry) =>
+          entry.cmd === "set_config" &&
+          entry.args.config.notificationMute.enabled === true &&
+          entry.args.config.notificationMute.startMinute === 1335 &&
+          entry.args.config.notificationMute.endMinute === 405,
+      ),
+    )
+    .toBe(true);
+  await expect(page.locator("#rules-list .rule-row")).toHaveCount(rulesBefore);
+  expect(
+    (await calls(page)).filter((entry) =>
+      ["set_rule_enabled", "set_rule_notify", "apply_candidate", "clear_filter"].includes(entry.cmd),
+    ),
+  ).toHaveLength(0);
+
+  // backendがMUTEDと報告していても、明示操作のTEST DELIVERYは抑止しない。
+  await page.locator("#test-btn").click();
+  await expect
+    .poll(async () => (await calls(page)).some((entry) => entry.cmd === "test_notification"))
+    .toBe(true);
+});`;
+    case "locale_display":
+      return `
+// ${c.id}: ${c.desc}
+const localeGoldens = {
+  ja: {
+    text: [
+      ["#tab-fissures", "tabs.fissures", "亀裂"],
+      ["#filters-tab", "sidebar.filters", "フィルター"],
+      ["#delivery-tab", "sidebar.delivery", "通知"],
+      ["#test-btn", "delivery.test", "通知をテスト"],
+      ["#pause-btn", "common.pause", "一時停止"],
+      ['#mute-check [data-i18n-key="delivery.muteSchedule"]', "delivery.muteSchedule", "通知ミュート"],
+    ],
+    tabsLabel: "時限コンテンツ",
+    languageLabel: "表示言語",
+    rulePlaceholder: "ルール名 (R1)",
+  },
+  en: {
+    text: [
+      ["#tab-fissures", "tabs.fissures", "Fissures"],
+      ["#filters-tab", "sidebar.filters", "Filters"],
+      ["#delivery-tab", "sidebar.delivery", "Delivery"],
+      ["#test-btn", "delivery.test", "Test Delivery"],
+      ["#pause-btn", "common.pause", "Pause"],
+      ['#mute-check [data-i18n-key="delivery.muteSchedule"]', "delivery.muteSchedule", "Notification mute"],
+    ],
+    tabsLabel: "Timed content",
+    languageLabel: "Display language",
+    rulePlaceholder: "Rule name (R1)",
+  },
+  "zh-Hans": {
+    text: [
+      ["#tab-fissures", "tabs.fissures", "裂隙"],
+      ["#filters-tab", "sidebar.filters", "筛选"],
+      ["#delivery-tab", "sidebar.delivery", "通知"],
+      ["#test-btn", "delivery.test", "测试通知"],
+      ["#pause-btn", "common.pause", "暂停"],
+      ['#mute-check [data-i18n-key="delivery.muteSchedule"]', "delivery.muteSchedule", "通知静音"],
+    ],
+    tabsLabel: "限时内容",
+    languageLabel: "显示语言",
+    rulePlaceholder: "规则名称 (R1)",
+  },
+} as const;
+
+for (const [locale, golden] of Object.entries(localeGoldens)) {
+  test("${c.id} semantic DOM golden " + locale, async ({ page }) => {
+    await page.setViewportSize({ width: 720, height: 480 });
+    await bootConsole(page, { locale: locale as "ja" | "en" | "zh-Hans" });
+    await expect(page.locator("html")).toHaveAttribute("lang", locale);
+    await expect(page.locator("#locale-select")).toHaveValue(locale);
+
+    for (const [selector, key, expectedText] of golden.text) {
+      const node = page.locator(selector);
+      await expect(node).toHaveAttribute("data-i18n-key", key);
+      await expect(node).toHaveText(expectedText);
+    }
+    await expect(page.locator("#content-tabs")).toHaveAttribute("data-i18n-aria-label-key", "tabs.label");
+    await expect(page.locator("#content-tabs")).toHaveAttribute("aria-label", golden.tabsLabel);
+    await expect(page.locator("#locale-select")).toHaveAttribute(
+      "data-i18n-aria-label-key",
+      "delivery.language",
+    );
+    await expect(page.locator("#locale-select")).toHaveAttribute("aria-label", golden.languageLabel);
+    await expect(page.locator("#rulename-input")).toHaveAttribute(
+      "data-i18n-placeholder-key",
+      "rules.namePlaceholder",
+    );
+    await expect(page.locator("#rulename-input")).toHaveAttribute("placeholder", golden.rulePlaceholder);
+    await expect(page.locator("[data-i18n-missing]")).toHaveCount(0);
+    expect(await page.locator("body").innerText()).not.toMatch(/\\[\\[[^\\]]+\\]\\]/);
+
+    for (const width of [720, 950]) {
+      await page.setViewportSize({ width, height: 620 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      expect(await page.locator(".rail").evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
+      const tabLabelsFit = await page.locator('#content-tabs [role="tab"]').evaluateAll((tabs) =>
+        tabs.every((tab) => tab.scrollWidth <= tab.clientWidth),
+      );
+      expect(tabLabelsFit).toBe(true);
+    }
+  });
+}`;
     default:
       throw new Error(`未知のrendererシナリオ: ${c.scenario} (${c.id})`);
   }
@@ -1980,6 +2494,36 @@ describe("${c.id}", () => {
     await expect($("#rail-msg")).not.toHaveText(expect.stringContaining("受け付けました"));
   });
 });`;
+    case "locale_config_roundtrip":
+      return `
+// ${c.id}: ${c.desc}
+describe("${c.id}", () => {
+  it("locale round-trips through real config IPC", async () => {
+    await waitForInit();
+    await $("#delivery-tab").click();
+    await $("#locale-select").selectByAttribute("value", "zh-Hans");
+    // tauri-plugin-wdioのWebKit select helperは値だけを変えてchangeを発火しないため、
+    // rendererで検証済みのDOM結線を明示発火し、その先の実set_config往復をここで検査する。
+    await browser.execute(() => {
+      const select = document.querySelector("#locale-select") as HTMLSelectElement | null;
+      if (!select) throw new Error("locale-select not found");
+      select.value = "zh-Hans";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    // html langの切替はset_config成功後に行う契約なので、ここまで待てば永続化も完了している。
+    await browser.waitUntil(
+      async () => (await $("html").getAttribute("lang")) === "zh-Hans",
+      { timeoutMsg: "locale変更が実set_config完了後に反映されない" },
+    );
+    await expect($("#tab-fissures")).toHaveText("裂隙");
+
+    await browser.refresh();
+    await waitForInit();
+    await expect($("html")).toHaveAttribute("lang", "zh-Hans");
+    await expect($("#locale-select")).toHaveValue("zh-Hans");
+    await expect($("#tab-fissures")).toHaveText("裂隙");
+  });
+});`;
     default:
       throw new Error(`未知のe2eシナリオ: ${c.scenario} (${c.id})`);
   }
@@ -1989,6 +2533,7 @@ const RUST_EXAMPLE_PATTERNS = new Set([
   "legacy_rule_enabled",
   "rule_name_config",
   "rule_notify_config",
+  "app_config_compat",
   "notification_example",
   "static_check",
   "approved_asset",
@@ -2035,6 +2580,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use proptest::prelude::*;
 use relico_lib::backoff::Backoff;
+use relico_lib::config::{AppConfig, AppLocale, DailyMuteWindow};
 use relico_lib::dedup::NotifiedSet;
 use relico_lib::filter::{self, FilterSettings, Mode, StormMode, WatchRule};
 use relico_lib::model::Fissure;

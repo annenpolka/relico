@@ -6,6 +6,10 @@
 import type { Page } from "@playwright/test";
 
 export interface BootOptions {
+  /** AppConfig.localeとして返す表示言語 */
+  locale?: "ja" | "en" | "zh-Hans";
+  /** backend snapshotが報告する現在のミュート状態 */
+  notificationsMuted?: boolean;
   /** 全ルールをVIEW未選択で起動する(通知参加は維持) */
   allRulesDisabled?: boolean;
   /** 亀裂0件のworldstateで起動する(empty rowの検査用) */
@@ -28,6 +32,8 @@ export async function bootConsole(page: Page, options: BootOptions = {}): Promis
     noFissures: options.noFissures ?? false,
     firstExpirySecs: options.firstExpirySecs ?? 1800,
     applyCandidateDelayMs: options.applyCandidateDelayMs ?? 0,
+    locale: options.locale ?? "en",
+    notificationsMuted: options.notificationsMuted ?? false,
   });
   await page.goto("/");
   await page.waitForFunction(() => {
@@ -48,11 +54,15 @@ function installMock({
   noFissures,
   firstExpirySecs,
   applyCandidateDelayMs,
+  locale,
+  notificationsMuted,
 }: {
   allRulesDisabled: boolean;
   noFissures: boolean;
   firstExpirySecs: number;
   applyCandidateDelayMs: number;
+  locale: "ja" | "en" | "zh-Hans";
+  notificationsMuted: boolean;
 }) {
   type Rule = {
     enabled: boolean;
@@ -136,8 +146,15 @@ function installMock({
       desktopNotification: true,
       discordWebhookUrl: null as string | null,
       paused: false,
+      locale,
+      notificationMute: {
+        enabled: false,
+        startMinute: 22 * 60,
+        endMinute: 7 * 60,
+      },
     },
     status: {
+      revision: 0,
       fissures,
       nextNotification: fissures[0] ?? null,
       apiOk: true,
@@ -146,6 +163,41 @@ function installMock({
       nextPollSecs: 60,
       notifiedToday: 0,
       paused: false,
+      notificationsMuted,
+      suppressedToday: notificationsMuted ? 2 : 0,
+      timedContent: {
+        sortie: [
+          {
+            id: "sortie-current",
+            kind: "sortie",
+            variant: null,
+            title: "Sortie",
+            subtitle: "Grineer",
+            activation: iso(-3600),
+            expiry: iso(18 * 3600),
+            availability: "available",
+            stages: [
+              {
+                order: 1,
+                title: "Extermination",
+                node: "Adaro (Sedna)",
+                detail: null,
+                modifiers: ["Enemy Physical Enhancement"],
+              },
+            ],
+          },
+        ],
+        archon: [],
+        syndicates: [],
+        areaMissions: [],
+        archimedea: [],
+        descendia: [],
+        wfcdOk: true,
+        wfcdError: null,
+        descentsOk: true,
+        descentsError: null,
+        lastPoll: iso(0),
+      },
     },
   };
 

@@ -6,8 +6,9 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 use tokio::sync::watch;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, AppLocale};
 use crate::filter::{Mode, StormMode};
+use crate::i18n;
 use crate::model::Fissure;
 use crate::notify;
 use crate::palette::{self, Facet};
@@ -20,10 +21,27 @@ pub struct AppState {
     pub client: reqwest::Client,
 }
 
-fn persist(app: &AppHandle, state: &State<AppState>, cfg: AppConfig) -> Result<(), String> {
-    cfg.save(&state.config_path).map_err(|e| e.to_string())?;
+fn localized_error(locale: AppLocale, key: &str, field: &str, value: &str) -> String {
+    i18n::format(locale, key, &[(field, value)])
+}
+
+fn persist(app: &AppHandle, state: &State<AppState>, mut cfg: AppConfig) -> Result<(), String> {
+    let locale = cfg.locale;
+    // 壊れたquiet-hoursで通知を止めない。UIにも正規化後のOFFを返す。
+    if !cfg.notification_mute.is_valid() {
+        cfg.notification_mute.enabled = false;
+    }
+    cfg.save(&state.config_path).map_err(|error| {
+        localized_error(locale, "error.configSave", "error", &error.to_string())
+    })?;
     let _ = tauri::Emitter::emit(app, "config", &cfg);
-    state.cfg_tx.send(cfg).map_err(|e| e.to_string())
+    state.cfg_tx.send(cfg.clone()).map_err(|error| {
+        localized_error(locale, "error.configBroadcast", "error", &error.to_string())
+    })?;
+    // locale/Pause変更を次のnetwork poll待ちにせずtrayへ反映する。
+    let snapshot = state.poller.lock().expect("poller state").snapshot.clone();
+    crate::update_tray(app, &cfg, &snapshot);
+    Ok(())
 }
 
 #[tauri::command]
@@ -118,7 +136,7 @@ pub fn apply_candidate(
     let cand = catalog
         .iter()
         .find(|c| c.id == id)
-        .ok_or_else(|| format!("未知の候補id: {id}"))?;
+        .ok_or_else(|| localized_error(cfg.locale, "error.unknownCandidate", "id", &id))?;
 
     let new_active = if cand.id == "action:pause" {
         cfg.paused = !cfg.paused;
@@ -167,7 +185,12 @@ pub fn set_rule_enabled(
         active: index.min(cfg.rules.len().saturating_sub(1)),
     };
     if !palette::set_rule_enabled(&mut editor, index, enabled) {
-        return Err(format!("未知のルールindex: {index}"));
+        return Err(localized_error(
+            cfg.locale,
+            "error.unknownRuleIndex",
+            "index",
+            &index.to_string(),
+        ));
     }
     cfg.rules = editor.rules;
     persist(&app, &state, cfg.clone())?;
@@ -188,7 +211,12 @@ pub fn set_rule_notify(
         active: index.min(cfg.rules.len().saturating_sub(1)),
     };
     if !palette::set_rule_notify(&mut editor, index, notify) {
-        return Err(format!("未知のルールindex: {index}"));
+        return Err(localized_error(
+            cfg.locale,
+            "error.unknownRuleIndex",
+            "index",
+            &index.to_string(),
+        ));
     }
     cfg.rules = editor.rules;
     persist(&app, &state, cfg.clone())?;
@@ -196,25 +224,41 @@ pub fn set_rule_notify(
 }
 
 #[tauri::command]
-pub fn get_autostart(app: AppHandle) -> Result<bool, String> {
+pub fn get_autostart(app: AppHandle, state: State<AppState>) -> Result<bool, String> {
     use tauri_plugin_autostart::ManagerExt;
-    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+    let locale = state.cfg_tx.borrow().locale;
+    app.autolaunch().is_enabled().map_err(|error| {
+        localized_error(locale, "error.autostartRead", "error", &error.to_string())
+    })
 }
 
 #[tauri::command]
-pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+pub fn set_autostart(app: AppHandle, state: State<AppState>, enabled: bool) -> Result<(), String> {
     use tauri_plugin_autostart::ManagerExt;
+    let locale = state.cfg_tx.borrow().locale;
     let launcher = app.autolaunch();
-    if enabled {
-        launcher.enable().map_err(|e| e.to_string())
+    let result = if enabled {
+        launcher.enable()
     } else {
-        launcher.disable().map_err(|e| e.to_string())
-    }
+        launcher.disable()
+    };
+    result.map_err(|error| {
+        localized_error(locale, "error.autostartUpdate", "error", &error.to_string())
+    })
 }
 
 #[tauri::command]
 pub fn get_status(state: State<AppState>) -> StatusSnapshot {
-    state.poller.lock().expect("poller state").snapshot.clone()
+    let cfg = state.cfg_tx.borrow().clone();
+    let now = chrono::Local::now();
+    let mut poller = state.poller.lock().expect("poller state");
+    poller.reset_daily_counters(now);
+    let muted = cfg.notifications_muted_at(now);
+    if poller.snapshot.notifications_muted != muted {
+        poller.snapshot.notifications_muted = muted;
+        poller.bump_revision();
+    }
+    poller.snapshot.clone()
 }
 
 /// MAN-001 / MAN-002 の確認手段。ダミー亀裂で通知経路を発火する
@@ -238,7 +282,7 @@ pub async fn test_notification(state: State<'_, AppState>) -> Result<String, Str
     let mut outcomes = vec![];
     let mut notes = vec![];
     if cfg.desktop_notification {
-        match notify::desktop(&dummy, now, true).await {
+        match notify::desktop_for_locale(&dummy, now, true, cfg.locale).await {
             Ok(receipt) => {
                 outcomes.push(notify::NotificationOutcome::Requested {
                     destination: "desktop",
@@ -255,7 +299,7 @@ pub async fn test_notification(state: State<'_, AppState>) -> Result<String, Str
     }
     if let Some(url) = cfg.discord_webhook_url.as_deref() {
         if !url.is_empty() {
-            match notify::discord(&state.client, url, &dummy).await {
+            match notify::discord_for_locale(&state.client, url, &dummy, cfg.locale).await {
                 Ok(_) => outcomes.push(notify::NotificationOutcome::Requested {
                     destination: "discord",
                 }),
@@ -266,9 +310,13 @@ pub async fn test_notification(state: State<'_, AppState>) -> Result<String, Str
             }
         }
     }
-    let mut summary = notify::summarize_test_outcomes(&outcomes)?;
+    let mut summary = notify::summarize_test_outcomes_for_locale(&outcomes, cfg.locale)?;
     if !notes.is_empty() {
-        summary.push_str(&format!("（{}）", notes.join(" / ")));
+        summary = crate::i18n::format(
+            cfg.locale,
+            "notify.withNotes",
+            &[("summary", &summary), ("notes", &notes.join(" / "))],
+        );
     }
     Ok(summary)
 }

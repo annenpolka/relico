@@ -56,3 +56,32 @@ describe("E2E-002", () => {
     await expect($("#rail-msg")).not.toHaveText(expect.stringContaining("受け付けました"));
   });
 });
+
+// E2E-003: 実アプリで表示言語をzh-Hansへ変更すると、本物のset_config完了後にhtml langとcritical UIが切り替わり、再読込後も実get_configからzh-Hansが復元される(WDIO Tauri E2E)
+describe("E2E-003", () => {
+  it("locale round-trips through real config IPC", async () => {
+    await waitForInit();
+    await $("#delivery-tab").click();
+    await $("#locale-select").selectByAttribute("value", "zh-Hans");
+    // tauri-plugin-wdioのWebKit select helperは値だけを変えてchangeを発火しないため、
+    // rendererで検証済みのDOM結線を明示発火し、その先の実set_config往復をここで検査する。
+    await browser.execute(() => {
+      const select = document.querySelector("#locale-select") as HTMLSelectElement | null;
+      if (!select) throw new Error("locale-select not found");
+      select.value = "zh-Hans";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    // html langの切替はset_config成功後に行う契約なので、ここまで待てば永続化も完了している。
+    await browser.waitUntil(
+      async () => (await $("html").getAttribute("lang")) === "zh-Hans",
+      { timeoutMsg: "locale変更が実set_config完了後に反映されない" },
+    );
+    await expect($("#tab-fissures")).toHaveText("裂隙");
+
+    await browser.refresh();
+    await waitForInit();
+    await expect($("html")).toHaveAttribute("lang", "zh-Hans");
+    await expect($("#locale-select")).toHaveValue("zh-Hans");
+    await expect($("#tab-fissures")).toHaveText("裂隙");
+  });
+});

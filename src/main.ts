@@ -6,13 +6,26 @@ if (import.meta.env.VITE_E2E) {
   void import("@wdio/tauri-plugin");
 }
 import { candidateGlyphHtml, glyphHtml, planetForFissure } from "./icons";
+import {
+  applyDocumentTranslations,
+  candidateLabel,
+  getLocale,
+  normalizeLocale,
+  setLocale,
+  t,
+  type MessageKey,
+} from "./i18n";
+import { handleContentTabShortcut, initContentTabs, type ContentTabId } from "./tabs";
 import type {
+  AppLocale,
   AppConfig,
   ApplyResult,
   CandView,
   Facet,
   Fissure,
   StatusSnapshot,
+  TimedContentCard,
+  TimedContentSnapshot,
   WatchRule,
 } from "./types";
 
@@ -22,10 +35,23 @@ let autostart = false;
 let editingRuleIndex = 0;
 let catalogView: CandView[] = []; // q="" の全候補(レール描画用)
 let nextRefresh = 0;
+let pendingLocale: AppLocale | null = null;
 // facet絞りlauncherの対象5軸(actionとruleトグル候補は対象外)
 type RuleFacet = Exclude<Facet, "action" | "rule">;
 let railTab: "filters" | "delivery" = "filters";
 let paletteFacet: RuleFacet | null = null;
+
+function withFrontendDefaults(next: AppConfig): AppConfig {
+  return {
+    ...next,
+    locale: normalizeLocale(next.locale),
+    notificationMute: next.notificationMute ?? {
+      enabled: false,
+      startMinute: 22 * 60,
+      endMinute: 7 * 60,
+    },
+  };
+}
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
@@ -52,7 +78,7 @@ function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     void flushSave().catch((e) => {
-      railMsg(`保存失敗: ${e}`, "err");
+      railMsg(t("common.saveFailed", { error: String(e) }), "err");
     });
   }, 300);
 }
@@ -65,7 +91,7 @@ async function refreshCatalog() {
 async function applyCand(id: string) {
   try {
     const res = await invoke<ApplyResult>("apply_candidate", { id, active: editingRuleIndex });
-    config = res.config;
+    config = withFrontendDefaults(res.config);
     editingRuleIndex = res.active;
     await refreshCatalog();
     renderRail();
@@ -77,7 +103,7 @@ async function applyCand(id: string) {
 
 async function setRuleEnabled(index: number, enabled: boolean) {
   try {
-    config = await invoke<AppConfig>("set_rule_enabled", { index, enabled });
+    config = withFrontendDefaults(await invoke<AppConfig>("set_rule_enabled", { index, enabled }));
     editingRuleIndex = Math.max(0, Math.min(editingRuleIndex, config.rules.length - 1));
     await refreshCatalog();
     renderRail();
@@ -90,7 +116,7 @@ async function setRuleEnabled(index: number, enabled: boolean) {
 
 async function setRuleNotify(index: number, notify: boolean) {
   try {
-    config = await invoke<AppConfig>("set_rule_notify", { index, notify });
+    config = withFrontendDefaults(await invoke<AppConfig>("set_rule_notify", { index, notify }));
     editingRuleIndex = Math.max(0, Math.min(editingRuleIndex, config.rules.length - 1));
     await refreshCatalog();
     renderRail();
@@ -111,13 +137,18 @@ async function focusRule(index: number) {
 
 // ---- ルール一覧 ----
 function summarize(r: WatchRule): string {
-  const tiers = r.tiers.length ? r.tiers.map((t) => t.toUpperCase()).join("+") : "ALL";
-  const mode = r.mode === "SteelPath" ? "鋼" : r.mode === "Normal" ? "通常" : "両方";
+  const tiers = r.tiers.length ? r.tiers.map((tier) => tier.toUpperCase()).join("+") : t("rules.all");
+  const mode =
+    r.mode === "SteelPath"
+      ? t("rules.modeSteel")
+      : r.mode === "Normal"
+        ? t("rules.modeNormal")
+        : t("rules.modeBoth");
   let s = `${tiers}/${mode}`;
   if (r.missionTypes.length) s += `/M${r.missionTypes.length}`;
   if (r.planets.length) s += `/P${r.planets.length}`;
-  if (r.storms === "Include") s += "/+STORM";
-  if (r.storms === "Only") s += "/STORM ONLY";
+  if (r.storms === "Include") s += `/${t("rules.stormInclude")}`;
+  if (r.storms === "Only") s += `/${t("rules.stormOnly")}`;
   return s;
 }
 
@@ -125,14 +156,14 @@ function renderRules() {
   const box = $("rules-list");
   const rules = config?.rules ?? [];
   const viewCount = rules.filter((rule) => rule.enabled).length;
-  $("rules-meta").textContent = `${viewCount}/${rules.length} VIEW`;
+  $("rules-meta").textContent = t("rules.viewCount", { current: viewCount, total: rules.length });
   // NEWゴースト行は静的な#rule-newノードを流用し、リスト末尾へ置き直す(リスナー維持)
   const ghost = $("rule-new");
   if (!rules.length) {
-    $("editing-meta").textContent = "NO RULE";
+    $("editing-meta").textContent = t("rules.noRule");
     const p = document.createElement("p");
     p.className = "norules";
-    p.textContent = "NO RULES";
+    p.textContent = t("rules.noRules");
     box.replaceChildren(p, ghost);
     renderRuleButtons(null);
     return;
@@ -155,11 +186,9 @@ function renderRules() {
       toggle.setAttribute("aria-pressed", String(r.enabled));
       toggle.setAttribute(
         "aria-label",
-        `${r.enabled ? "一覧表示から外す" : "一覧表示に含める"}: ルール R${i + 1}`,
+        t(r.enabled ? "rules.excludeView" : "rules.includeView", { index: i + 1 }),
       );
-      toggle.title = r.enabled
-        ? "VIEW ON — クリックで一覧表示から外す"
-        : "VIEW OFF — クリックで一覧表示に含める";
+      toggle.title = t(r.enabled ? "rules.viewOnTitle" : "rules.viewOffTitle");
       toggle.addEventListener("click", () => setRuleEnabled(i, !r.enabled));
 
       const edit = document.createElement("button");
@@ -168,8 +197,11 @@ function renderRules() {
       // 名前があれば要約より優先して表示する(要約はtooltipに残す)
       edit.innerHTML = `<span class="rno">R${i + 1}</span><span class="rule-summary">${esc(r.name ?? summarize(r))}</span>`;
       if (focused) edit.setAttribute("aria-current", "true");
-      edit.setAttribute("aria-label", `ルール ${r.name ?? `R${i + 1}`} を編集対象にする: ${summarize(r)}`);
-      edit.title = `${summarize(r)} — クリックして編集対象にする`;
+      edit.setAttribute(
+        "aria-label",
+        t("rules.editAria", { name: r.name ?? `R${i + 1}`, summary: summarize(r) }),
+      );
+      edit.title = t("rules.editTitle", { summary: summarize(r) });
       // 行本体はedit focusを移すだけ。パレットは打鍵かfacet launcherで開く(RND-003)
       edit.addEventListener("click", () => {
         if (i !== editingRuleIndex) void focusRule(i);
@@ -183,11 +215,9 @@ function renderRules() {
       notifyBtn.setAttribute("aria-pressed", String(r.notify));
       notifyBtn.setAttribute(
         "aria-label",
-        `${r.notify ? "通知を無効にする" : "通知を有効にする"}: ルール R${i + 1}`,
+        t(r.notify ? "rules.disableNotify" : "rules.enableNotify", { index: i + 1 }),
       );
-      notifyBtn.title = r.notify
-        ? "NOTIFY ON — クリックで通知対象から外す"
-        : "NOTIFY OFF — クリックで通知対象に含める";
+      notifyBtn.title = t(r.notify ? "rules.notifyOnTitle" : "rules.notifyOffTitle");
       notifyBtn.addEventListener("click", () => setRuleNotify(i, !r.notify));
 
       row.replaceChildren(toggle, edit, notifyBtn);
@@ -207,10 +237,10 @@ function renderRuleButtons(editingIndex: number | null) {
   armTimer = undefined;
   $("rule-del").classList.remove("armed");
   $("clear-btn").classList.remove("armed");
-  $("rule-del").innerHTML = `${glyphHtml("action", "delete-rule")}<span>DEL${editingIndex === null ? "" : ` R${editingIndex + 1}`}</span>`;
-  $("clear-btn").innerHTML = `${glyphHtml("action", "clear")}<span>CLEAR</span>`;
-  $("rule-del").title = "編集中ルールを削除(2度押しで実行)";
-  $("clear-btn").title = "ルール構成を既定(全対象1本)に戻す(2度押しで実行)";
+  $("rule-del").innerHTML = `${glyphHtml("action", "delete-rule")}<span>${esc(t("rules.delete"))}${editingIndex === null ? "" : ` R${editingIndex + 1}`}</span>`;
+  $("clear-btn").innerHTML = `${glyphHtml("action", "clear")}<span>${esc(t("rules.clear"))}</span>`;
+  $("rule-del").title = t("rules.deleteTitle");
+  $("clear-btn").title = t("rules.clearTitle");
 }
 
 /** 破壊系の2度押し確認: 1クリック目はSURE?表示のみ、2秒で復帰、SURE?中のクリックだけ実行(RND-003) */
@@ -223,38 +253,46 @@ function armOrFire(id: "rule-del" | "clear-btn", fire: () => void) {
   }
   renderRuleButtons(config?.rules.length ? editingRuleIndex : null);
   btn.classList.add("armed");
-  btn.innerHTML = `<span>SURE?</span>`;
+  btn.innerHTML = `<span>${esc(t("common.confirm"))}</span>`;
   armTimer = setTimeout(() => {
     renderRuleButtons(config?.rules.length ? editingRuleIndex : null);
   }, 2000);
 }
 
-const FACET_LABELS: Record<RuleFacet, string> = {
-  tier: "TIER",
-  mode: "MODE",
-  storm: "STORM",
-  mission: "MISSION",
-  planet: "PLANET",
+const FACET_LABEL_KEYS: Record<RuleFacet, MessageKey> = {
+  tier: "facets.tier",
+  mode: "facets.mode",
+  storm: "facets.storm",
+  mission: "facets.mission",
+  planet: "facets.planet",
 };
+
+const PALETTE_FACET_LABEL_KEYS: Record<Facet, MessageKey> = {
+  ...FACET_LABEL_KEYS,
+  action: "facets.action",
+  rule: "facets.rule",
+};
+
+const facetLabel = (facet: RuleFacet): string => t(FACET_LABEL_KEYS[facet]).toUpperCase();
 
 function renderFacetLauncher(containerId: string, facet: RuleFacet) {
   const button = $<HTMLButtonElement>(containerId);
   const selected = catalogView.filter((c) => c.facet === facet && c.on);
   const summary =
     selected.length === 0
-      ? "ALL"
+      ? t("rules.all").toUpperCase()
       : selected.length <= 2
         ? selected.map((c) => c.label.toUpperCase()).join(" + ")
         : `${selected[0].label.toUpperCase()} +${selected.length - 1}`;
-  const full = selected.length ? selected.map((c) => c.label).join(", ") : "All";
+  const full = selected.length ? selected.map((c) => c.label).join(", ") : t("rules.all");
   const icon =
     selected.length === 1
       ? candidateGlyphHtml(facet, selected[0].id)
       : candidateGlyphHtml(facet, `${facet}:`);
 
-  button.innerHTML = `<span class="facet-name">${FACET_LABELS[facet]}</span><span class="facet-icon">${icon}</span><span class="facet-value">${esc(summary)}</span><span class="facet-arrow">›</span>`;
-  button.title = `${FACET_LABELS[facet]}: ${full}`;
-  button.setAttribute("aria-label", `${FACET_LABELS[facet]}を編集。現在値: ${full}`);
+  button.innerHTML = `<span class="facet-name">${esc(facetLabel(facet))}</span><span class="facet-icon">${icon}</span><span class="facet-value">${esc(summary)}</span><span class="facet-arrow">›</span>`;
+  button.title = `${facetLabel(facet)}: ${full}`;
+  button.setAttribute("aria-label", t("facets.editAria", { facet: facetLabel(facet), value: full }));
   button.setAttribute("aria-haspopup", "dialog");
   button.onclick = () => openPalette("", facet);
 }
@@ -262,12 +300,49 @@ function renderFacetLauncher(containerId: string, facet: RuleFacet) {
 function setCheck(id: string, on: boolean) {
   const btn = $(id);
   btn.classList.toggle("off", !on);
+  btn.setAttribute("aria-pressed", String(on));
   const box = btn.querySelector(".box");
   if (box) box.textContent = `[${on ? "x" : " "}]`;
 }
 
+function minuteToTime(value: number): string {
+  const minute = ((Math.trunc(value) % 1440) + 1440) % 1440;
+  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+}
+
+function timeToMinute(value: string): number | null {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  return hour <= 23 && minute <= 59 ? hour * 60 + minute : null;
+}
+
+function renderMuteSettings() {
+  if (!config) return;
+  const mute = config.notificationMute;
+  setCheck("mute-check", mute.enabled);
+  const start = $<HTMLInputElement>("mute-start-input");
+  const end = $<HTMLInputElement>("mute-end-input");
+  start.value = minuteToTime(mute.startMinute);
+  end.value = minuteToTime(mute.endMinute);
+  start.disabled = !mute.enabled;
+  end.disabled = !mute.enabled;
+
+  // 現在ミュート中かはbackend snapshotだけを表示し、時刻区間をTSで再判定しない。RND-011
+  const muted = status?.notificationsMuted ?? false;
+  const suppressed = status?.suppressedToday ?? 0;
+  const muteStatus = $("mute-status");
+  muteStatus.dataset.muted = String(muted);
+  muteStatus.textContent = !mute.enabled
+    ? t("delivery.muteDisabled")
+    : t(muted ? "delivery.muteActive" : "delivery.muteInactive", { count: suppressed });
+  muteStatus.title = muteStatus.textContent;
+}
+
 function renderRail() {
   if (!config) return;
+  $("rule-new").innerHTML = `${glyphHtml("action", "new-rule")}<span>${esc(t("rules.new"))}</span>`;
   renderRules();
   renderFacetLauncher("tier-checks", "tier");
   renderFacetLauncher("mode-checks", "mode");
@@ -281,7 +356,12 @@ function renderRail() {
   // 編集中ルールの名前を同期する(入力中のclobberを避けるためfocus中は触らない)
   const nameInput = $("rulename-input") as HTMLInputElement;
   const editingRule = config.rules[Math.min(editingRuleIndex, config.rules.length - 1)];
-  nameInput.placeholder = editingRule ? `RULE NAME (R${editingRuleIndex + 1})` : "RULE NAME";
+  nameInput.dataset.i18nPlaceholderKey = editingRule
+    ? "rules.namePlaceholder"
+    : "rules.namePlaceholderEmpty";
+  nameInput.placeholder = editingRule
+    ? t("rules.namePlaceholder", { index: editingRuleIndex + 1 })
+    : t("rules.namePlaceholderEmpty");
   if (document.activeElement !== nameInput) {
     nameInput.value = editingRule?.name ?? "";
   }
@@ -289,9 +369,12 @@ function renderRail() {
   ($("webhook-input") as HTMLInputElement).value = config.discordWebhookUrl ?? "";
   ($("minremain-input") as HTMLInputElement).value = String(config.minRemainingSecs);
   ($("poll-input") as HTMLInputElement).value = String(config.pollIntervalSecs);
+  $<HTMLSelectElement>("locale-select").value = config.locale;
+  renderMuteSettings();
 
   const pauseBtn = $("pause-btn");
-  pauseBtn.textContent = config.paused ? "RESUME" : "PAUSE";
+  pauseBtn.dataset.i18nKey = config.paused ? "common.resume" : "common.pause";
+  pauseBtn.textContent = t(config.paused ? "common.resume" : "common.pause");
   pauseBtn.classList.toggle("hot", config.paused);
 
   renderRailTabs();
@@ -306,6 +389,8 @@ function renderRailTabs() {
   $("delivery-tab").classList.toggle("active", !filters);
   $("filters-tab").setAttribute("aria-selected", String(filters));
   $("delivery-tab").setAttribute("aria-selected", String(!filters));
+  $("filters-tab").setAttribute("aria-pressed", String(filters));
+  $("delivery-tab").setAttribute("aria-pressed", String(!filters));
 }
 
 function setRailTab(next: "filters" | "delivery") {
@@ -345,7 +430,7 @@ function thSortKey(th: HTMLTableCellElement): SortKey | null {
 }
 
 function renderSortHeaders() {
-  document.querySelectorAll<HTMLTableCellElement>("thead th[scope=col]").forEach((th) => {
+  document.querySelectorAll<HTMLTableCellElement>("#fissure-table thead th[scope=col]").forEach((th) => {
     const active = thSortKey(th) === sortKey;
     th.querySelector(".sort-mark")?.remove();
     if (active) {
@@ -361,7 +446,7 @@ function renderSortHeaders() {
 }
 
 function initSortHeaders() {
-  document.querySelectorAll<HTMLTableCellElement>("thead th[scope=col]").forEach((th) => {
+  document.querySelectorAll<HTMLTableCellElement>("#fissure-table thead th[scope=col]").forEach((th) => {
     const key = thSortKey(th);
     if (!key) return;
     th.addEventListener("click", () => {
@@ -385,10 +470,10 @@ function renderTable() {
   if (fissures.length === 0) {
     const msg =
       status?.apiOk === false
-        ? "API UNREACHABLE — BACKING OFF"
+        ? t("table.unreachable")
         : status?.lastPoll
-          ? "NO MATCHING FISSURES — ADJUST RULES"
-          : "WAITING FOR WORLDSTATE…";
+          ? t("table.noMatches")
+          : t("table.waiting");
     rows.innerHTML = `<tr><td colspan="7" class="empty">${msg}</td></tr>`;
     return;
   }
@@ -396,9 +481,10 @@ function renderTable() {
     ...fissures.map((f) => {
       const tr = document.createElement("tr");
       const difficulty = f.isHard ? "SteelPath" : "Normal";
-      const mode = `<span class="flag ${f.isHard ? "t-hard" : "t-normal"}">${glyphHtml("difficulty", difficulty)}<span>${f.isHard ? "HARD" : "NORMAL"}</span></span>`;
+      const modeLabel = t(f.isHard ? "table.hard" : "table.normal").toUpperCase();
+      const mode = `<span class="flag ${f.isHard ? "t-hard" : "t-normal"}">${glyphHtml("difficulty", difficulty)}<span>${esc(modeLabel)}</span></span>`;
       const storm = f.isStorm
-        ? `<span class="flag t-storm">${glyphHtml("storm", "Only")}<span>STORM</span></span>`
+        ? `<span class="flag t-storm">${glyphHtml("storm", "Only")}<span>${esc(t("table.stormValue").toUpperCase())}</span></span>`
         : `<span class="t-no-storm">—</span>`;
       const planet = planetForFissure(f.planet, f.isStorm);
       tr.title = [
@@ -406,8 +492,8 @@ function renderTable() {
         f.node,
         f.missionType.toUpperCase(),
         f.enemy.toUpperCase(),
-        f.isHard ? "HARD" : "NORMAL",
-        f.isStorm ? "STORM" : "NO STORM",
+        modeLabel,
+        f.isStorm ? t("table.stormValue") : t("table.noStorm"),
       ].join(" · ");
       tr.innerHTML = `
         <td class="col-tier t-tier"><span class="icon-label">${glyphHtml("tier", f.tier)}<span>${esc(f.tier.toUpperCase())}</span></span></td>
@@ -450,23 +536,219 @@ function tickTimers() {
   });
 }
 
+// ---- ソーティー・アルコン等の時限コンテンツカード ----
+type TimedTabId = Exclude<ContentTabId, "fissures">;
+
+const TIMED_TAB_FIELDS: Record<TimedTabId, keyof TimedContentSnapshot> = {
+  sortie: "sortie",
+  archon: "archon",
+  syndicates: "syndicates",
+  "area-missions": "areaMissions",
+  archimedea: "archimedea",
+  descendia: "descendia",
+};
+
+const PERSONAL_PROGRESS_TABS = new Set<TimedTabId>(["archimedea", "descendia"]);
+
+const AVAILABILITY_KEYS: Record<TimedContentCard["availability"], MessageKey> = {
+  available: "timed.available",
+  unavailable: "timed.unavailable",
+  synthetic: "timed.synthetic",
+};
+
+const TIMED_TITLE_KEYS: Partial<Record<string, MessageKey>> = {
+  sortie: "tabs.sortie",
+  archon: "tabs.archon",
+  descendia: "tabs.descendia",
+};
+
+function localizedDate(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value;
+  return new Intl.DateTimeFormat(getLocale(), {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(timestamp));
+}
+
+function appendTimedMeta(container: HTMLElement, key: MessageKey, value: string): void {
+  const item = document.createElement("span");
+  const heading = document.createElement("strong");
+  heading.textContent = t(key);
+  item.append(heading, value);
+  container.append(item);
+}
+
+function timedCardDescription(card: TimedContentCard): string | null {
+  if (
+    card.kind.includes("syndicat") ||
+    card.kind === "area-mission" ||
+    card.kind === "descendia"
+  ) {
+    return t("timed.stageCount", { count: card.stages.length });
+  }
+  if (card.availability === "available") return card.subtitle;
+  return t(AVAILABILITY_KEYS[card.availability]);
+}
+
+function timedCardElement(card: TimedContentCard): HTMLElement {
+  const article = document.createElement("article");
+  article.className = "timed-card";
+  article.dataset.cardId = card.id;
+  article.dataset.kind = card.kind;
+  article.dataset.availability = card.availability;
+  if (card.variant) article.dataset.variant = card.variant;
+
+  const header = document.createElement("div");
+  header.className = "timed-card-header";
+  const title = document.createElement("h2");
+  const localizedTitleKey = TIMED_TITLE_KEYS[card.kind];
+  title.textContent = localizedTitleKey ? t(localizedTitleKey) : card.title;
+  header.append(title);
+  // `variant` is an internal normalization marker,
+  // not a player-facing label. Keep it as data for tests/diagnostics only.
+  article.append(header);
+
+  // API由来固有名詞はraw表示するが、推定/利用不可/件数説明はapp catalogを優先する。
+  const description = timedCardDescription(card);
+  if (description) {
+    const subtitle = document.createElement("p");
+    subtitle.className = "timed-subtitle";
+    subtitle.textContent = description;
+    article.append(subtitle);
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "timed-meta";
+  if (card.activation) appendTimedMeta(meta, "timed.activation", localizedDate(card.activation));
+  if (card.expiry) appendTimedMeta(meta, "timed.expiry", localizedDate(card.expiry));
+  appendTimedMeta(meta, "timed.availability", t(AVAILABILITY_KEYS[card.availability]));
+  article.append(meta);
+
+  if (card.stages.length) {
+    const stages = document.createElement("ol");
+    stages.className = "timed-stages";
+    for (const stage of [...card.stages].sort((a, b) => a.order - b.order)) {
+      const item = document.createElement("li");
+      item.className = "timed-stage";
+      item.dataset.stageOrder = String(stage.order);
+      const order = document.createElement("span");
+      order.className = "timed-stage-order";
+      order.textContent = String(stage.order).padStart(2, "0");
+      const body = document.createElement("div");
+      const stageTitle = document.createElement("div");
+      stageTitle.className = "timed-stage-title";
+      stageTitle.textContent = [stage.title, stage.node].filter(Boolean).join(" — ");
+      body.append(stageTitle);
+      if (stage.detail) {
+        const detail = document.createElement("div");
+        detail.className = "timed-stage-detail";
+        detail.textContent = stage.detail;
+        body.append(detail);
+      }
+      const structured: string[] = [];
+      if (stage.enemyLevels?.length) {
+        structured.push(
+          t("timed.enemyLevels", {
+            min: stage.enemyLevels[0],
+            max: stage.enemyLevels[stage.enemyLevels.length - 1],
+          }),
+        );
+      }
+      if (stage.standingStages?.length) {
+        structured.push(
+          t("timed.standingTotal", {
+            value: stage.standingStages.reduce((total, value) => total + value, 0),
+          }),
+        );
+      }
+      if (stage.minMr !== undefined) structured.push(t("timed.minMr", { value: stage.minMr }));
+      if (stage.timeBound) structured.push(t("timed.timeBound", { value: stage.timeBound }));
+      if (structured.length) {
+        const details = document.createElement("div");
+        details.className = "timed-stage-detail timed-stage-structured";
+        details.textContent = structured.join(" · ");
+        body.append(details);
+      }
+      if (stage.modifiers.length) {
+        const modifiers = document.createElement("div");
+        modifiers.className = "timed-stage-modifiers";
+        modifiers.textContent = `${t("timed.modifiers")}: ${stage.modifiers.join(" · ")}`;
+        body.append(modifiers);
+      }
+      item.append(order, body);
+      stages.append(item);
+    }
+    article.append(stages);
+  }
+  return article;
+}
+
+function renderTimedPanel(tab: TimedTabId): void {
+  const root = $(`timed-${tab}`);
+  const timed = status?.timedContent;
+  const field = TIMED_TAB_FIELDS[tab];
+  const value = timed?.[field];
+  const cards = Array.isArray(value) ? (value as TimedContentCard[]) : [];
+  const sourceOk =
+    tab === "descendia" ? (timed?.descentsOk ?? true) : (timed?.wfcdOk ?? true);
+  const sourceError = tab === "descendia" ? timed?.descentsError : timed?.wfcdError;
+  const sourceFailed = !sourceOk && (timed?.lastPoll != null || sourceError != null);
+  const children: HTMLElement[] = [];
+
+  if (sourceFailed) {
+    const error = document.createElement("p");
+    error.className = "timed-source-error";
+    error.textContent = t("timed.sourceError", {
+      source: tab === "descendia" ? "Descendia" : "WFCD",
+      error: sourceError ?? "--",
+    });
+    children.push(error);
+  }
+
+  // A source failure can coexist with last-valid cards. Keep those cards visible
+  // and place the failure banner above them instead of replacing the content.
+  if (!cards.length) {
+    const empty = document.createElement("p");
+    empty.className = "timed-empty";
+    empty.textContent = t("timed.noContent");
+    children.push(empty);
+  } else {
+    children.push(...cards.map(timedCardElement));
+  }
+
+  if (PERSONAL_PROGRESS_TABS.has(tab)) {
+    const note = document.createElement("p");
+    note.className = "timed-progress-note";
+    note.dataset.i18nKey = "timed.personalProgressUnavailable";
+    note.textContent = t("timed.personalProgressUnavailable");
+    children.push(note);
+  }
+  root.replaceChildren(...children);
+}
+
+function renderTimedContent() {
+  for (const tab of Object.keys(TIMED_TAB_FIELDS) as TimedTabId[]) renderTimedPanel(tab);
+}
+
 // ---- ステータスバー ----
 function renderStatusbar() {
   if (!status) return;
-  $("sb-poll").textContent = `POLL ${config?.pollIntervalSecs ?? "--"}s`;
+  $("sb-poll").textContent = t("status.poll", { seconds: config?.pollIntervalSecs ?? "--" });
   const api = $("sb-api");
   if (status.paused) {
-    api.textContent = "PAUSED";
+    api.textContent = t("status.paused");
     api.className = "err";
   } else if (status.apiOk) {
-    api.textContent = "API OK";
+    api.textContent = t("status.apiOk");
     api.className = "ok";
   } else {
-    api.textContent = "API ERR";
+    api.textContent = t("status.apiError");
     api.className = "err";
   }
-  $("sb-notified").textContent = `ATTEMPTED TODAY: ${status.notifiedToday}`;
+  $("sb-notified").textContent = t("status.attempted", { count: status.notifiedToday });
   renderWatchLine();
+  renderMuteSettings();
 }
 
 function renderWatchLine() {
@@ -475,22 +757,22 @@ function renderWatchLine() {
   const notifying = config.rules.filter((rule) => rule.notify);
   $("sb-watch").textContent =
     notifying.length === 0
-      ? "WATCH: NO NOTIFICATION RULES"
+      ? t("status.watchNone")
       : notifying.length === 1 && total === 1
-        ? `WATCH: ${summarize(notifying[0])}`
+        ? t("status.watchRule", { rule: summarize(notifying[0]) })
         : notifying.length === total
-          ? `WATCH: ${notifying.length} RULES`
-          : `WATCH: ${notifying.length}/${total} RULES`;
+          ? t("status.watchCount", { count: notifying.length })
+          : t("status.watchPartial", { current: notifying.length, total });
 }
 
 function tickStatusbar() {
   const el = $("sb-next");
   if (status?.paused) {
-    el.textContent = "NEXT REFRESH --";
+    el.textContent = t("status.nextRefreshPaused");
     return;
   }
   nextRefresh = Math.max(0, nextRefresh - 1);
-  el.textContent = `NEXT REFRESH ${nextRefresh}s`;
+  el.textContent = t("status.nextRefresh", { seconds: nextRefresh });
 }
 
 // ---- ファジーパレット ----
@@ -530,20 +812,27 @@ function renderPalette() {
   const rules = config?.rules ?? [];
   const index = Math.min(editingRuleIndex, rules.length - 1);
   $("palette-rule").textContent = rules.length
-    ? `EDIT R${index + 1}/${rules.length} · VIEW ${rules[index].enabled ? "ON" : "OFF"} · NOTIFY ${rules[index].notify ? "ON" : "OFF"}${paletteFacet ? ` · ${FACET_LABELS[paletteFacet]}` : ""}`
-    : "NO RULES";
+    ? `${t("palette.edit", {
+        index: index + 1,
+        total: rules.length,
+        view: t(rules[index].enabled ? "common.on" : "common.off"),
+        notify: t(rules[index].notify ? "common.on" : "common.off"),
+      }).toUpperCase()}${paletteFacet ? ` · ${facetLabel(paletteFacet)}` : ""}`
+    : t("palette.noRules");
   const box = $("palette-cands");
   if (!paletteResults.length) {
-    box.innerHTML = `<div class="cand none">NO MATCH</div>`;
+    box.innerHTML = `<div class="cand none">${esc(t("palette.noMatch"))}</div>`;
     return;
   }
   box.replaceChildren(
     ...paletteResults.slice(0, PALETTE_MAX).map((c, i) => {
       const div = document.createElement("div");
       div.className = `cand${c.on ? "" : " off"}${i === paletteSel ? " sel" : ""}`;
-      const label = c.via ? esc(c.label) : hl(c.label, c.indices);
+      const localizedLabel = candidateLabel(c.id, c.label);
+      const label =
+        localizedLabel !== c.label || c.via ? esc(localizedLabel) : hl(localizedLabel, c.indices);
       const via = c.via ? `<span class="via">⌁ ${hl(c.via, c.indices)}</span>` : "";
-      div.innerHTML = `<span class="box">[${c.on ? "x" : " "}]</span>${candidateGlyphHtml(c.facet, c.id)}<span class="label">${label}</span>${via}<span class="facet">${c.facet.toUpperCase()}</span>`;
+      div.innerHTML = `<span class="box">[${c.on ? "x" : " "}]</span>${candidateGlyphHtml(c.facet, c.id)}<span class="label">${label}</span>${via}<span class="facet">${esc(t(PALETTE_FACET_LABEL_KEYS[c.facet]).toUpperCase())}</span>`;
       div.addEventListener("click", () => {
         paletteSel = i;
         paletteApply();
@@ -601,18 +890,19 @@ function enterRenameMode() {
   paletteRenaming = true;
   const input = $("palette-input") as HTMLInputElement;
   input.value = rule.name ?? "";
-  input.placeholder = `RENAME R${editingRuleIndex + 1}…`;
+  input.placeholder = t("palette.renamePlaceholder", { index: editingRuleIndex + 1 });
   input.select();
-  $("palette-rule").textContent = `RENAME R${editingRuleIndex + 1}`;
-  $("palette-cands").innerHTML =
-    `<div class="cand none">新しい名前を入力して⏎(空欄で名前解除 / ESCで戻る)</div>`;
+  $("palette-rule").textContent = t("palette.rename", { index: editingRuleIndex + 1 }).toUpperCase();
+  $("palette-cands").innerHTML = `<div class="cand none">${esc(t("palette.renameHint"))}</div>`;
 }
 
 function exitRenameMode() {
   paletteRenaming = false;
   const input = $("palette-input") as HTMLInputElement;
   input.value = "";
-  input.placeholder = paletteFacet ? `SEARCH ${FACET_LABELS[paletteFacet]}…` : "SEARCH ALL FILTERS…";
+  input.placeholder = paletteFacet
+    ? t("palette.searchFacet", { facet: facetLabel(paletteFacet) })
+    : t("palette.searchAll");
   paletteSel = 0;
   void paletteQuery();
 }
@@ -625,7 +915,7 @@ async function commitRename() {
     try {
       await flushSave();
     } catch (e) {
-      railMsg(`保存失敗: ${e}`, "err");
+      railMsg(t("common.saveFailed", { error: String(e) }), "err");
     }
     renderRail();
   }
@@ -639,7 +929,9 @@ function openPalette(seed: string, facet: RuleFacet | null = null) {
   $("palette-overlay").hidden = false;
   const input = $("palette-input") as HTMLInputElement;
   input.value = seed;
-  input.placeholder = facet ? `SEARCH ${FACET_LABELS[facet]}…` : "SEARCH ALL FILTERS…";
+  input.placeholder = facet
+    ? t("palette.searchFacet", { facet: facetLabel(facet) })
+    : t("palette.searchAll");
   paletteSel = 0;
   input.focus();
   paletteQuery();
@@ -656,48 +948,87 @@ function closePalette() {
 
 async function clearFilter() {
   try {
-    config = await invoke<AppConfig>("clear_filter");
+    config = withFrontendDefaults(await invoke<AppConfig>("clear_filter"));
     editingRuleIndex = 0;
     await refreshCatalog();
     renderRail();
     renderStatusbar();
-    railMsg("ルールを既定に戻した", "ok");
+    railMsg(t("common.resetDone"), "ok");
   } catch (e) {
     railMsg(String(e), "err");
   }
 }
 
+function renderLocaleSensitiveUi() {
+  applyDocumentTranslations();
+  renderRail();
+  renderTable();
+  renderTimedContent();
+  renderStatusbar();
+  renderSortHeaders();
+  if (paletteOpen && !paletteRenaming) renderPalette();
+}
+
+async function persistLocale(locale: AppLocale) {
+  if (!config || locale === config.locale) return;
+  const next = { ...config, locale };
+  clearTimeout(saveTimer);
+  saveTimer = undefined;
+  pendingLocale = locale;
+  try {
+    // html langと表示の切替は、実set_configが成功した後だけ行う。E2E-003
+    await invoke("set_config", { config: next });
+    config = next;
+    setLocale(locale);
+    renderLocaleSensitiveUi();
+  } catch (error) {
+    $<HTMLSelectElement>("locale-select").value = config.locale;
+    railMsg(t("common.saveFailed", { error: String(error) }), "err");
+  } finally {
+    pendingLocale = null;
+  }
+}
+
 // ---- 初期化 ----
 async function init() {
-  config = await invoke<AppConfig>("get_config");
+  config = withFrontendDefaults(await invoke<AppConfig>("get_config"));
   status = await invoke<StatusSnapshot>("get_status");
   autostart = await invoke<boolean>("get_autostart").catch(() => false);
   editingRuleIndex = 0;
+  setLocale(config.locale);
   await refreshCatalog();
   nextRefresh = status.nextPollSecs;
   renderRail();
   renderTable();
+  renderTimedContent();
   renderStatusbar();
 
   await listen<StatusSnapshot>("status", (event) => {
+    if (status && event.payload.revision < status.revision) return;
     status = event.payload;
     nextRefresh = status.nextPollSecs;
     renderTable();
+    renderTimedContent();
     renderStatusbar();
   });
 
   // トレイのPAUSE等、フロント外からの設定変更に追随する
   await listen<AppConfig>("config", async (event) => {
-    config = event.payload;
+    config = withFrontendDefaults(event.payload);
+    if (pendingLocale === config.locale) return;
+    setLocale(config.locale);
     editingRuleIndex = Math.max(0, Math.min(editingRuleIndex, config.rules.length - 1));
     await refreshCatalog();
     renderRail();
     renderTable();
+    renderTimedContent();
     renderStatusbar();
   });
 
+  initContentTabs(() => {
+    if (paletteOpen) closePalette();
+  });
   initSortHeaders();
-  $("rule-new").innerHTML = `${glyphHtml("action", "new-rule")}<span>NEW RULE</span>`;
   $("rule-new").addEventListener("click", () => applyCand("action:new-rule"));
   $("rule-del").addEventListener("click", () =>
     armOrFire("rule-del", () => void applyCand("action:delete-rule")),
@@ -719,17 +1050,44 @@ async function init() {
       autostart = !autostart;
       renderRail();
     } catch (e) {
-      railMsg(`AUTOSTART失敗: ${e}`, "err");
+      railMsg(t("common.autostartFailed", { error: String(e) }), "err");
     }
   });
   $("test-btn").addEventListener("click", async () => {
-    railMsg("REQUESTING…");
+    railMsg(t("common.requesting"));
     try {
       await flushSave();
       railMsg(await invoke<string>("test_notification"), "ok");
     } catch (e) {
       railMsg(String(e), "err");
     }
+  });
+  $<HTMLSelectElement>("locale-select").addEventListener("change", (event) => {
+    const locale = normalizeLocale((event.target as HTMLSelectElement).value);
+    void persistLocale(locale);
+  });
+  $("mute-check").addEventListener("click", () => {
+    if (!config) return;
+    config.notificationMute = {
+      ...config.notificationMute,
+      enabled: !config.notificationMute.enabled,
+    };
+    save();
+    renderMuteSettings();
+  });
+  $<HTMLInputElement>("mute-start-input").addEventListener("change", (event) => {
+    if (!config) return;
+    const minute = timeToMinute((event.target as HTMLInputElement).value);
+    if (minute === null) return renderMuteSettings();
+    config.notificationMute = { ...config.notificationMute, startMinute: minute };
+    save();
+  });
+  $<HTMLInputElement>("mute-end-input").addEventListener("change", (event) => {
+    if (!config) return;
+    const minute = timeToMinute((event.target as HTMLInputElement).value);
+    if (minute === null) return renderMuteSettings();
+    config.notificationMute = { ...config.notificationMute, endMinute: minute };
+    save();
   });
   ($("rulename-input") as HTMLInputElement).addEventListener("input", (e) => {
     if (!config) return;
@@ -760,9 +1118,30 @@ async function init() {
 
   // どこでも打鍵でパレット起動(入力欄フォーカス時を除く)。MAN-003
   document.addEventListener("keydown", (e) => {
-    // Cmd/Ctrl+1..9: 対応indexのルールへedit focusを移す(一覧・パレット共通)。RND-001
-    const digitCombo = (e.metaKey || e.ctrlKey) && !e.altKey && /^Digit([1-9])$/.exec(e.code);
-    if (digitCombo && !paletteRenaming) {
+    const target = e.target as HTMLElement;
+    const inField =
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      target.isContentEditable;
+    const composing = paletteComposing || e.isComposing || e.key === "Process" || e.keyCode === 229;
+
+    // Cmd+1..7 and Ctrl(+Shift)+Tab are browser-style content navigation.
+    // Editable fields and IME composition retain their native key handling.
+    if (handleContentTabShortcut(e, paletteRenaming || composing)) {
+      if (paletteOpen) closePalette();
+      return;
+    }
+
+    // Ctrl+1..9 is reserved for edit focus. Meta+digits belong to content tabs.
+    const digitCombo =
+      e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      !e.shiftKey &&
+      /^Digit([1-9])$/.exec(e.code);
+    const paletteSearchFocused = paletteOpen && target === $("palette-input");
+    if (digitCombo && !paletteRenaming && (!inField || paletteSearchFocused) && !composing) {
       const index = Number(digitCombo[1]) - 1;
       if (config && index < config.rules.length) {
         e.preventDefault();
@@ -773,8 +1152,6 @@ async function init() {
       return;
     }
     if (!paletteOpen) {
-      const t = e.target as HTMLElement;
-      const inField = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement;
       const plainKey = !e.metaKey && !e.ctrlKey && !e.altKey;
       // 一覧画面のSpaceは編集中ルールのVIEW選択トグル(パレットは開かない)。RND-001
       if (!inField && plainKey && e.key === " ") {

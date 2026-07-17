@@ -35,7 +35,9 @@
 | PRS-001 | `parse_total` | property-tested | 惑星抽出は任意文字列でパニックせず、"Node (Planet)" 形式でPlanetを返す |
 | POL-001 | `bounded` | property-tested | APIバックオフの遅延は失敗・成功がどう並んでも常に[60s, 600s]に収まる |
 | POL-002 | `seed_silent` | property-tested | 起動直後の初回ポーリングはシードのみ: 既存の合致亀裂を通知済みとして記録するが、通知は1件も発火しない(起動時の通知洪水を防ぐ) |
-| POL-003 | `notification_scope_change` | property-tested | 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない |
+| POL-003 | `notification_scope_change` | property-tested | 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない |
+| MUT-001 | `daily_mute_window` | property-tested | 有効な日次通知ミュート区間はシステムローカル時刻の分単位で[start, end)として判定する。start<endは同日区間、start>endは日跨ぎ区間、start==endは誤って終日停止しない空区間であり、負数を含む無効設定と範囲外の分値もミュートしない。この真理値は1日の全1440分で成立する |
+| MUT-002 | `muted_delivery` | property-tested | 起動直後のseed中または通知ミュート中に観測した合致亀裂は通知済みidとしてmarkするが配送対象を1件も返さない。通常配送へ戻しても同じidを滞留通知せず、その後に現れた新規idだけを1回返す。配送判定はHTTP取得開始時ではなく取得後の最新設定を使い、ミュート・一時停止・表示言語の変更を次の配送前へ反映する。ミュートは一覧・通知候補・next表示を変えず、明示操作のTEST DELIVERYには適用しない |
 | NTY-001 | `notify_candidates` | property-tested | 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない |
 | VIS-001 | `filtered_view` | property-tested | 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる |
 | FZY-001 | `fuzzy_subsequence` | property-tested | パレットのファジーマッチが成立するのは、クエリ文字が候補文字列(またはalias)に順序どおり現れる場合に限る(健全性) |
@@ -52,18 +54,21 @@
 | CFG-002 | `legacy_rule_enabled` | example-tested | enabledを持たない既存WatchRule JSONはenabled=true(一覧表示へ参加)として読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する |
 | CFG-003 | `rule_name_config` | example-tested | WatchRuleのnameは省略可能な表示用メタデータで、nameを持たない旧JSONは名前なしとして読み込み、設定したnameはserialize/deserializeを往復しても他のフィールドと共に保持される |
 | CFG-004 | `rule_notify_config` | example-tested | WatchRuleのnotifyはenabledから独立した通知参加フラグで、notifyを持たない旧JSONは旧enabled値(それも欠落ならtrue)を引き継ぐ。明示したnotify=true/falseはenabledの値に関係なくserialize/deserializeを往復しても保持される |
+| CFG-005 | `app_config_compat` | example-tested | AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない |
 | NTF-001 | `notification_example` | example-tested | 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する |
 | NTF-002 | `notification_example` | example-tested | desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める |
 | NTF-003 | `notification_example` | example-tested | 未バンドルのraw devでdesktop通知を利用できない場合は、失敗詳細を保持し、デバッグbundle .appを使う just notification-test を案内する |
 | NTF-004 | `notification_example` | example-tested | Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する |
+| NTF-005 | `notification_example` | example-tested | ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する |
 | STA-001 | `static_check` | example-tested | 配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない |
 | STA-002 | `static_check` | example-tested | トレイは専用tray-icon.pngをテンプレート画像として登録する配線を持ち、PNGはモノクロ(+アルファ)形式である |
 | STA-003 | `static_check` | example-tested | macOS AUTOSTARTは内部のUnix実行ファイルをLaunchAgent登録せず、アプリアイコンを保持するAppleScript Login Itemとして.app bundleを登録し、旧relico.plistを一度だけ移行する配線を持つ |
+| STA-004 | `static_check` | example-tested | i18n専用の外部ライブラリを追加せず、TS/Rustの自前lookup・placeholder実装が同じsrc/locales.jsonを直接読む。TSのi18n moduleは相対importだけ、Rustは標準ライブラリ・crate内module・既存の汎用serde_json以外の外部crateを使わない |
 | AST-001 | `approved_asset` | example-tested | メニューバー用tray-icon.pngは目視承認済みの内容から変わっていない(変えたらMAN-005の手順で再承認しsha256を更新する) |
 | AST-002 | `approved_asset` | example-tested | 配布用アプリアイコンicon.icnsは目視承認済みの内容から変わっていない(変えたらMAN-006の手順で再承認しsha256を更新する) |
 | ICN-001 | `renderer_glyphs` | example-tested | 既知のTier・惑星・ミッション・ファクション・難易度・VOID嵐・アクション値には汎用と区別できる専用SVGグリフが割り当てられ、未知値はカテゴリ別の汎用グリフへフォールバックし、グリフは装飾(aria-hidden)である |
 | ICN-002 | `renderer_glyphs` | example-tested | 表示用惑星名はVOID嵐のときだけEarth/Venus/Saturn/Neptune/Pluto/VeilをProxima表記へ寄せ、通常亀裂・その他の惑星・欠損値はそのまま返す |
-| RND-001 | `renderer_scenario` | example-tested | パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)。一覧画面のSpaceはパレットを開かずに編集中ルールの表示選択(enabled)をトグルし(action:toggle-rule)、一覧画面の↑/↓はedit focusを前後のルールへ巡回移動し、Cmd/Ctrl+1..9は対応indexのルールへedit focusを移す(パレット表示中も有効。フォーカス移動は設定を変更しない)。IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力でき、DESELECT ALL RULES候補は全表示選択を解除して通知参加を変えない(renderer統合) |
+| RND-001 | `renderer_scenario` | example-tested | パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)。一覧画面のSpaceはパレットを開かずに編集中ルールの表示選択(enabled)をトグルし(action:toggle-rule)、一覧画面の↑/↓はedit focusを前後のルールへ巡回移動し、Ctrl+1..9は対応indexのルールへedit focusを移す(パレット表示中も有効。フォーカス移動は設定を変更しない)。Cmd+1..7はコンテンツタブ専用でルールを変更せず、Cmd+8/9はアプリが奪わない。IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力でき、DESELECT ALL RULES候補は全表示選択を解除して通知参加を変えない(renderer統合) |
 | RND-002 | `renderer_scenario` | example-tested | Webhook URL入力直後のTEST DELIVERYは、遅延保存を先にflushしてから通知テストを実行する(renderer統合) |
 | RND-003 | `renderer_scenario` | example-tested | ルール行のenabled切替は一覧表示だけを変えるset_rule_enabledを呼びedit focus・notifyを変えず、行のnotify切替はset_rule_notifyだけを呼びenabledもedit focusも変えず、行本体はedit focusをそのルールへ移すだけでパレットも切替も呼ばない。DEL/CLEARは2度押し確認で、1クリック目はSURE?表示になるだけで実行せず、2秒で自動復帰し、SURE?表示中のクリックだけが実行する。全ルールの表示選択を解除しても一覧は全亀裂を表示し、notify=trueのルールはWATCH表示と通知参加を維持する(renderer統合) |
 | RND-004 | `renderer_scenario` | example-tested | 最小720x480でも右サイドバーは縦スクロールなしでルール一覧・NEW/DEL/CLEAR・5軸launcher・配送設定・TEST/PAUSE・時間設定へ到達でき、ルール一覧はrail高さの固定比率領域に全ルール行を保持して内側だけ縦スクロールし、launcherはパレットをその軸に絞って開く(renderer統合) |
@@ -72,8 +77,12 @@
 | RND-008 | `renderer_scenario` | example-tested | 一覧表示中の亀裂は次回pollを待たずexpiry到達後1秒以内にDOMとfrontend snapshotから除去され、他の生存中亀裂・設定・通知状態を変えない(renderer統合) |
 | RND-007 | `renderer_scenario` | example-tested | 亀裂表のヘッダクリックで項目別ソートでき、同じ列の再クリックで昇順/降順をトグルし、ソート中の列にaria-sortが付く。既定はT-REMAIN昇順で、ソートは表示のみ(設定・通知の変更を呼ばない)(renderer統合) |
 | RND-009 | `renderer_scenario` | example-tested | VIEW選択0本からピッカーでfilter候補を適用すると既存ルールを変更せずVIEW ON・NOTIFY OFFの新ルールを作り、edit focusを新ルールへ移す。NEW RULE適用中に別のfilter候補を素早く確定しても操作を直列化し、旧edit対象を変更せず同じ新ルールへ適用する(renderer統合) |
+| RND-010 | `renderer_scenario` | example-tested | コンテンツ領域は公開データから実内容を取得できるfissures/sortie/archon/syndicates/area-missions/archimedea/descendiaの7タブをこの順で持ち、英語表示はFissures/Sortie/Archon Hunt/Syndicates/Area Missions/Archimedea/Descendiaとなる。実内容を取得できないarbitration/netracellsのtabとtabpanelは持たない。active tabと可視tabpanelは常に各1つで、Cmd+1..7は対応タブへ切替、Cmd+8/9はactive tabを変えずアプリが奪わない。Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持する(renderer統合) |
+| RND-011 | `renderer_scenario` | example-tested | DELIVERYの通知ミュートUIはON/OFFと開始・終了時刻をAppConfig.notificationMute(enabled/startMinute/endMinute)へ保存し、backend snapshotのnotificationsMuted=trueを独自判定せず状態表示する。設定操作はルール・VIEW・NOTIFYを変えず、TEST DELIVERYはミュート表示中でも実行経路へ進む(renderer統合) |
+| RND-012 | `renderer_scenario` | example-tested | locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、本文・aria-label・placeholderの言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合) |
 | E2E-001 | `e2e_scenario` | example-tested | 実アプリでパレット打鍵→候補適用が本物のquery_candidates/apply_candidateを往復し、ルールsummaryとwatch行へ反映される(WDIO Tauri E2E、専用identity) |
 | E2E-002 | `e2e_scenario` | example-tested | 実アプリで通知先を全て無効にしたTEST DELIVERYが、本物のset_config・test_notificationを通り、NTF-001の失敗理由(通知先なし)をrailへ表示する(WDIO Tauri E2E) |
+| E2E-003 | `e2e_scenario` | example-tested | 実アプリで表示言語をzh-Hansへ変更すると、本物のset_config完了後にhtml langとcritical UIが切り替わり、再読込後も実get_configからzh-Hansが復元される(WDIO Tauri E2E) |
 | MAN-001 | `manual` | manual | 通知テスト専用bundleと配布bundleの各名義で、macOSの初回権限許可とバナー表示を人が知覚できる |
 | MAN-002 | `manual` | manual | Discord Webhook通知がスマホのDiscordアプリでpush表示される |
 | MAN-003 | `manual` | manual | ファジーパレットで、macOSの実IMEを使った日本語alias入力ができる |
@@ -85,6 +94,7 @@
 | MAN-009 | `manual` | manual | 配布版・通知テスト版・DMG一時mount・旧AUTOSTART実行ファイルがmacOSのアプリ登録で競合せず、配布版のcanonical appだけがcom.annenpolka.relicoとして残る |
 | MAN-010 | `manual` | manual | 右サイドバーの要約が読みやすく、情報の優先順位が視覚的に自然である |
 | MAN-011 | `manual` | manual | compact表示が実データで読みやすく、VoiceOverでtable semanticsが自然に読み上げられる |
+| MAN-012 | `manual` | manual | 7つの時限コンテンツ表示は公開worldstateから実内容を取得できるものだけを扱い、取得経路の部分障害や個人進捗の非公開性をもっともらしい推測値で埋めない |
 
 保証ラベルの意味: **property-tested** = proptestオラクルで機械検証 / **example-tested** = 具体例テストで機械検証 / **manual** = 手動確認(残余)
 
@@ -121,6 +131,10 @@ just devと配布.appの両方で確認する。1) コンソール表示中はDo
 #### MAN-011: compact表示が実データで読みやすく、VoiceOverでtable semanticsが自然に読み上げられる
 
 リリース前に、実データ(実ワールドステート)で狭幅表示の情報密度と読みやすさを目視し、WKWebView/VoiceOverでtable semantics(7項目の見出しと値)が自然に読み上げられることを確認する。1段/2段の切替幅・横スクロール禁止・MODE/STORM独立・ellipsis時の全文とtooltip保持・empty row全幅・stickyヘッダ・th[scope=col]はRND-005で機械検証済み。
+
+#### MAN-012: 7つの時限コンテンツ表示は公開worldstateから実内容を取得できるものだけを扱い、取得経路の部分障害や個人進捗の非公開性をもっともらしい推測値で埋めない
+
+リリース前に実データで確認する。1) 亀裂、ソーティー、アルコン、シンジケート、地位ミッション、アルキメデアはWFCD worldstate、DescendiaはDE公式worldState.phpのDescentsに由来し、片方の取得失敗でも他方と亀裂通知は更新を続け、最後の有効snapshotと取得エラーを区別して表示する。2) 現行公開sourceがSolNode000/Unknown/1970等の無効sentinelしか返さない仲裁と、実ミッションfieldを持たないネットセルはtab・tabpanel・合成カードを設けない。3) アルキメデア、Descendiaの公開データにない個人の残り回数・クリア階・獲得報酬を推測せず、公開ミッション情報とゲーム内確認案内だけを表示する。schema変化はtimed moduleのfixture testで検知し、安定した公開sourceまたは認証済みプレイヤーAPIが利用可能になったときに再検討する。
 
 ### 一回限りの受入(対象が変わったときだけ再実施)
 

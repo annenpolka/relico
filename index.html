@@ -10,60 +10,88 @@
 
   <body>
     <main class="console">
-      <section class="tablewrap">
-        <table>
-          <colgroup>
-            <col class="col-tier" />
-            <col class="col-node" />
-            <col class="col-mission" />
-            <col class="col-faction" />
-            <col class="col-timer" />
-            <col class="col-mode" />
-            <col class="col-storm" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th class="col-tier" scope="col">TIER</th>
-              <th class="col-node" scope="col">NODE</th>
-              <th class="col-mission" scope="col">MISSION</th>
-              <th class="col-faction" scope="col">FACTION</th>
-              <th class="col-timer" scope="col">T-REMAIN</th>
-              <th class="col-mode" scope="col">MODE</th>
-              <th class="col-storm" scope="col">STORM</th>
-            </tr>
-          </thead>
-          <tbody id="fissure-rows">
-            <tr><td colspan="7" class="empty">WAITING FOR WORLDSTATE…</td></tr>
-          </tbody>
-        </table>
+      <section class="content-pane">
+        <nav
+          id="content-tabs"
+          class="content-tabs"
+          role="tablist"
+          aria-label="時限コンテンツ"
+          data-i18n-aria-label-key="tabs.label"
+        >
+          <button id="tab-fissures" class="content-tab active" type="button" role="tab" tabindex="0" aria-selected="true" aria-controls="panel-fissures" data-tab-id="fissures" data-i18n-key="tabs.fissures">亀裂</button>
+          <button id="tab-sortie" class="content-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-sortie" data-tab-id="sortie" data-i18n-key="tabs.sortie">ソーティー</button>
+          <button id="tab-archon" class="content-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-archon" data-tab-id="archon" data-i18n-key="tabs.archon">アルコン討伐戦</button>
+          <button id="tab-syndicates" class="content-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-syndicates" data-tab-id="syndicates" data-i18n-key="tabs.syndicates">シンジケート</button>
+          <button id="tab-area-missions" class="content-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-area-missions" data-tab-id="area-missions" data-i18n-key="tabs.areaMissions">地位ミッション</button>
+          <button id="tab-archimedea" class="content-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-archimedea" data-tab-id="archimedea" data-i18n-key="tabs.archimedea">アルキメデア</button>
+          <button id="tab-descendia" class="content-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-descendia" data-tab-id="descendia" data-i18n-key="tabs.descendia">ディセンディア</button>
+        </nav>
+
+        <div class="content-panels">
+          <section id="panel-fissures" class="content-panel" role="tabpanel" aria-labelledby="tab-fissures">
+            <div class="tablewrap">
+              <table id="fissure-table">
+                <colgroup>
+                  <col class="col-tier" />
+                  <col class="col-node" />
+                  <col class="col-mission" />
+                  <col class="col-faction" />
+                  <col class="col-timer" />
+                  <col class="col-mode" />
+                  <col class="col-storm" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th class="col-tier" scope="col" data-i18n-key="table.tier">レリック</th>
+                    <th class="col-node" scope="col" data-i18n-key="table.node">ノード</th>
+                    <th class="col-mission" scope="col" data-i18n-key="table.mission">ミッション</th>
+                    <th class="col-faction" scope="col" data-i18n-key="table.faction">勢力</th>
+                    <th class="col-timer" scope="col" data-i18n-key="table.remaining">残り時間</th>
+                    <th class="col-mode" scope="col" data-i18n-key="table.mode">モード</th>
+                    <th class="col-storm" scope="col" data-i18n-key="table.storm">VOID嵐</th>
+                  </tr>
+                </thead>
+                <tbody id="fissure-rows">
+                  <tr><td colspan="7" class="empty" data-i18n-key="table.waiting">ワールドステートを待機中…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section id="panel-sortie" class="content-panel timed-panel" role="tabpanel" aria-labelledby="tab-sortie" hidden><div id="timed-sortie" class="timed-cards"></div></section>
+          <section id="panel-archon" class="content-panel timed-panel" role="tabpanel" aria-labelledby="tab-archon" hidden><div id="timed-archon" class="timed-cards"></div></section>
+          <section id="panel-syndicates" class="content-panel timed-panel" role="tabpanel" aria-labelledby="tab-syndicates" hidden><div id="timed-syndicates" class="timed-cards"></div></section>
+          <section id="panel-area-missions" class="content-panel timed-panel" role="tabpanel" aria-labelledby="tab-area-missions" hidden><div id="timed-area-missions" class="timed-cards"></div></section>
+          <section id="panel-archimedea" class="content-panel timed-panel" role="tabpanel" aria-labelledby="tab-archimedea" hidden><div id="timed-archimedea" class="timed-cards"></div></section>
+          <section id="panel-descendia" class="content-panel timed-panel" role="tabpanel" aria-labelledby="tab-descendia" hidden><div id="timed-descendia" class="timed-cards"></div></section>
+        </div>
       </section>
 
-      <aside class="rail">
+      <aside class="rail" aria-label="ルールと通知の設定" data-i18n-aria-label-key="sidebar.label">
         <section class="rail-rules">
-          <div class="rail-heading" title="␣ VIEW切替 / ↑↓ フォーカス移動 / ⌘·Ctrl+1-9 ジャンプ / 任意文字 パレット">
-            <h3>RULES</h3>
+          <div class="rail-heading" title="Space: 表示切替 / ↑↓: 編集対象 / Ctrl+1-9: ルールへ移動 / 任意文字: パレット" data-i18n-title-key="rules.shortcutTitle">
+            <h3 data-i18n-key="rules.heading">ルール</h3>
             <span id="rules-meta">--</span>
           </div>
           <div id="rules-list">
-            <button id="rule-new" class="rule-ghost" type="button">+ NEW RULE</button>
+            <button id="rule-new" class="rule-ghost" type="button">+ 新規ルール</button>
           </div>
           <div class="rowbtns">
-            <button id="rule-del" class="action">DEL</button>
-            <button id="clear-btn" class="action">CLEAR</button>
+            <button id="rule-del" class="action">削除</button>
+            <button id="clear-btn" class="action">クリア</button>
           </div>
         </section>
 
-        <div class="rail-tabs" role="tablist" aria-label="Sidebar section">
-          <button id="filters-tab" class="rail-tab active" type="button" role="tab" aria-selected="true" aria-controls="filters-panel">FILTERS</button>
-          <button id="delivery-tab" class="rail-tab" type="button" role="tab" aria-selected="false" aria-controls="delivery-panel">DELIVERY</button>
+        <div class="rail-tabs" role="group" aria-label="設定セクション" data-i18n-aria-label-key="sidebar.sections">
+          <button id="filters-tab" class="rail-tab active" type="button" aria-pressed="true" aria-controls="filters-panel" data-i18n-key="sidebar.filters">フィルター</button>
+          <button id="delivery-tab" class="rail-tab" type="button" aria-pressed="false" aria-controls="delivery-panel" data-i18n-key="sidebar.delivery">通知</button>
         </div>
 
-        <section id="filters-panel" class="rail-panel" role="tabpanel" aria-labelledby="filters-tab">
+        <section id="filters-panel" class="rail-panel" role="region" aria-labelledby="filters-tab">
           <div class="rail-heading panel-heading">
-            <h3>EDIT RULE</h3>
+            <h3 data-i18n-key="rules.edit">ルール編集</h3>
             <span id="editing-meta">--</span>
           </div>
-          <input id="rulename-input" type="text" placeholder="RULE NAME" spellcheck="false" maxlength="24" autocomplete="off" />
+          <input id="rulename-input" type="text" placeholder="ルール名" data-i18n-placeholder-key="rules.namePlaceholder" spellcheck="false" maxlength="24" autocomplete="off" />
           <div class="facet-launchers">
             <button id="tier-checks" class="facet-launch" type="button"></button>
             <button id="mode-checks" class="facet-launch" type="button"></button>
@@ -73,24 +101,42 @@
           </div>
         </section>
 
-        <section id="delivery-panel" class="rail-panel" role="tabpanel" aria-labelledby="delivery-tab" hidden>
+        <section id="delivery-panel" class="rail-panel" role="region" aria-labelledby="delivery-tab" hidden>
           <div class="rail-heading panel-heading">
-            <h3>NOTIFICATION DELIVERY</h3>
+            <h3 data-i18n-key="delivery.heading">通知設定</h3>
           </div>
           <div class="delivery-toggles">
-            <button class="check" id="desktop-check"><span class="box">[x]</span> DESKTOP</button>
-            <button class="check" id="autostart-check"><span class="box">[ ]</span> AUTOSTART</button>
+            <button class="check" id="desktop-check"><span class="box">[x]</span><span class="check-label" data-i18n-key="delivery.desktop">デスクトップ</span></button>
+            <button class="check" id="autostart-check"><span class="box">[ ]</span><span class="check-label" data-i18n-key="delivery.autostart">ログイン時起動</span></button>
           </div>
-          <input id="webhook-input" type="text" placeholder="DISCORD WEBHOOK URL" spellcheck="false" />
-          <button id="test-btn" class="action wide">TEST DELIVERY</button>
+          <input id="webhook-input" type="text" placeholder="Discord Webhook URL" data-i18n-placeholder-key="delivery.webhookPlaceholder" spellcheck="false" />
+          <button id="test-btn" class="action wide" data-i18n-key="delivery.test">通知をテスト</button>
           <div class="kv-grid">
-            <label class="kv"><span>MIN-REMAIN</span><input id="minremain-input" type="number" min="0" step="60" /></label>
-            <label class="kv"><span>POLL SECS</span><input id="poll-input" type="number" min="30" step="10" /></label>
+            <label class="kv"><span data-i18n-key="delivery.minRemain">最小残り時間</span><input id="minremain-input" type="number" min="0" step="60" /></label>
+            <label class="kv"><span data-i18n-key="delivery.pollSecs">更新間隔（秒）</span><input id="poll-input" type="number" min="30" step="10" /></label>
+          </div>
+          <label class="locale-row" for="locale-select">
+            <span data-i18n-key="delivery.language">表示言語</span>
+            <select id="locale-select" aria-label="表示言語" data-i18n-aria-label-key="delivery.language">
+              <option value="ja">日本語</option>
+              <option value="en">English</option>
+              <option value="zh-Hans">简体中文</option>
+            </select>
+          </label>
+          <div class="mute-settings">
+            <button class="check" id="mute-check" type="button" aria-pressed="false">
+              <span class="box">[ ]</span><span class="check-label" data-i18n-key="delivery.muteSchedule">通知ミュート</span>
+            </button>
+            <div class="mute-time-grid">
+              <label><span data-i18n-key="delivery.muteStart">開始</span><input id="mute-start-input" type="time" step="60" disabled /></label>
+              <label><span data-i18n-key="delivery.muteEnd">終了</span><input id="mute-end-input" type="time" step="60" disabled /></label>
+            </div>
+            <p id="mute-status" data-muted="false">ミュート時間は無効</p>
           </div>
         </section>
 
         <div class="rail-footer">
-          <button id="pause-btn" class="action wide">PAUSE</button>
+          <button id="pause-btn" class="action wide" data-i18n-key="common.pause">一時停止</button>
           <p id="rail-msg"></p>
         </div>
       </aside>
@@ -113,7 +159,7 @@
         </div>
         <div class="cands" id="palette-cands"></div>
         <div class="hint">
-          <span>↑↓ 選択</span><span>⏎ トグル(連続入力)</span><span>⌘1-9 編集対象</span><span>esc 閉じる</span><span>TYPE ANYWHERE</span>
+          <span data-i18n-key="palette.hintSelect">↑↓ 選択</span><span data-i18n-key="palette.hintApply">Enter 適用（連続入力）</span><span data-i18n-key="palette.hintRule">Ctrl+1-9 編集対象</span><span data-i18n-key="palette.hintClose">Esc 閉じる</span><span data-i18n-key="palette.hintAnywhere">どこでも入力</span>
         </div>
       </div>
     </div>

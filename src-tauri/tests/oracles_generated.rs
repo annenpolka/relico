@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use proptest::prelude::*;
 use relico_lib::backoff::Backoff;
+use relico_lib::config::{AppConfig, AppLocale, DailyMuteWindow};
 use relico_lib::dedup::NotifiedSet;
 use relico_lib::filter::{self, FilterSettings, Mode, StormMode, WatchRule};
 use relico_lib::model::Fissure;
@@ -477,10 +478,10 @@ proptest! {
         prop_assert_eq!(visible.len(), 1, "SPEC DED-003 違反: 同じ亀裂へ複数の表示ルールまたは通知ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (複数ルール合致で一覧が重複した)");
 
         let mut notified = NotifiedSet::new();
-        let first = poller::select_notifications(&mut notified, visible.clone(), false);
+        let first = poller::select_notifications(&mut notified, visible.clone(), false, false);
         prop_assert_eq!(first.len(), 1, "SPEC DED-003 違反: 同じ亀裂へ複数の表示ルールまたは通知ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (最初の通知候補が1件でない)");
         prop_assert_eq!(first[0].id.as_str(), f.id.as_str(), "SPEC DED-003 違反: 同じ亀裂へ複数の表示ルールまたは通知ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (別idを通知した)");
-        let second = poller::select_notifications(&mut notified, visible, false);
+        let second = poller::select_notifications(&mut notified, visible, false, false);
         prop_assert!(second.is_empty(), "SPEC DED-003 違反: 同じ亀裂へ複数の表示ルールまたは通知ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (同じidを再通知した)");
     }
 
@@ -513,14 +514,14 @@ proptest! {
     #[test]
     fn pol_002(fs in proptest::collection::vec(arb_fissure(), 0..30)) {
         let mut set = NotifiedSet::new();
-        let out = poller::select_notifications(&mut set, fs.clone(), true);
+        let out = poller::select_notifications(&mut set, fs.clone(), true, false);
         prop_assert!(out.is_empty(), "SPEC POL-002 違反: 起動直後の初回ポーリングはシードのみ: 既存の合致亀裂を通知済みとして記録するが、通知は1件も発火しない(起動時の通知洪水を防ぐ) (通知が発火した)");
         for f in &fs {
             prop_assert!(set.contains(&f.id), "SPEC POL-002 違反: 起動直後の初回ポーリングはシードのみ: 既存の合致亀裂を通知済みとして記録するが、通知は1件も発火しない(起動時の通知洪水を防ぐ) (シードされていないidがある)");
         }
     }
 
-    /// POL-003: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (射影による変更判定)
+    /// POL-003: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない (射影による変更判定)
     #[test]
     fn pol_003_projection(
         previous in arb_settings(),
@@ -534,11 +535,11 @@ proptest! {
         prop_assert_eq!(
             poller::notification_scope_changed(Some(&previous), &current),
             expected,
-            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (notification projectionとの差分と一致しない)"
+            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない (notification projectionとの差分と一致しない)"
         );
         prop_assert!(
             poller::notification_scope_changed(None, &current),
-            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (初回評価をscope changeと判定しない)"
+            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない (初回評価をscope changeと判定しない)"
         );
 
         // notify=false draftの追加・編集はscope changeではない
@@ -547,7 +548,7 @@ proptest! {
         muted_only_change.rules.push(muted);
         prop_assert!(
             !poller::notification_scope_changed(Some(&previous), &muted_only_change),
-            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (notify=false draft追加をscope changeと誤判定した)"
+            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない (notify=false draft追加をscope changeと誤判定した)"
         );
 
         // enabledは表示選択だけなので任意に変えてもscope changeではない
@@ -557,11 +558,11 @@ proptest! {
         }
         prop_assert!(
             !poller::notification_scope_changed(Some(&previous), &display_only_change),
-            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (enabled変更をscope changeと誤判定した)"
+            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない (enabled変更をscope changeと誤判定した)"
         );
     }
 
-    /// POL-003: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (scope change時のsilent seed)
+    /// POL-003: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない (scope change時のsilent seed)
     #[test]
     fn pol_003_silent_seed(mut f in arb_fissure()) {
         let now = base_now();
@@ -583,26 +584,104 @@ proptest! {
         };
         prop_assert!(
             poller::notification_scope_changed(Some(&previous), &current),
-            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (notify有効化をscope changeと判定しない)"
+            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない (notify有効化をscope changeと判定しない)"
         );
 
         let existing = poller::notify_candidates(&current, &[f.clone()], now);
-        prop_assert_eq!(existing.len(), 1, "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (現存合致亀裂を取得できない)");
+        prop_assert_eq!(existing.len(), 1, "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない (現存合致亀裂を取得できない)");
         let mut notified = NotifiedSet::new();
-        let seeded = poller::select_notifications(&mut notified, existing.clone(), true);
-        prop_assert!(seeded.is_empty(), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (scope change直後の現存亀裂を一括通知した)");
-        prop_assert!(notified.contains(&f.id), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (現存亀裂をsilent seedしていない)");
-        let repeated = poller::select_notifications(&mut notified, existing, false);
-        prop_assert!(repeated.is_empty(), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (seed済み現存亀裂を次回通知した)");
+        let seeded = poller::select_notifications(&mut notified, existing.clone(), true, false);
+        prop_assert!(seeded.is_empty(), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない (scope change直後の現存亀裂を一括通知した)");
+        prop_assert!(notified.contains(&f.id), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない (現存亀裂をsilent seedしていない)");
+        let repeated = poller::select_notifications(&mut notified, existing, false, false);
+        prop_assert!(repeated.is_empty(), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない (seed済み現存亀裂を次回通知した)");
 
         let mut new_fissure = f.clone();
         new_fissure.id = format!("{}-new", f.id);
         let newly_visible = poller::notify_candidates(&current, &[new_fissure.clone()], now);
-        let fresh = poller::select_notifications(&mut notified, newly_visible.clone(), false);
-        prop_assert_eq!(fresh.len(), 1, "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (scope change後の新規idを通知候補にしない)");
-        prop_assert_eq!(fresh[0].id.as_str(), new_fissure.id.as_str(), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (新規idを保持しない)");
-        let duplicate = poller::select_notifications(&mut notified, newly_visible, false);
-        prop_assert!(duplicate.is_empty(), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (scope change後の新規idを再通知した)");
+        let fresh = poller::select_notifications(&mut notified, newly_visible.clone(), false, false);
+        prop_assert_eq!(fresh.len(), 1, "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない (scope change後の新規idを通知候補にしない)");
+        prop_assert_eq!(fresh[0].id.as_str(), new_fissure.id.as_str(), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない (新規idを保持しない)");
+        let duplicate = poller::select_notifications(&mut notified, newly_visible, false, false);
+        prop_assert!(duplicate.is_empty(), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない (scope change後の新規idを再通知した)");
+    }
+
+    /// MUT-001: 有効な日次通知ミュート区間はシステムローカル時刻の分単位で[start, end)として判定する。start<endは同日区間、start>endは日跨ぎ区間、start==endは誤って終日停止しない空区間であり、負数を含む無効設定と範囲外の分値もミュートしない。この真理値は1日の全1440分で成立する
+    #[test]
+    fn mut_001(start_minute in 0u16..1440, end_minute in 0u16..1440) {
+        let window = DailyMuteWindow {
+            enabled: true,
+            start_minute: i64::from(start_minute),
+            end_minute: i64::from(end_minute),
+        };
+        prop_assert!(window.is_valid(), "SPEC MUT-001 違反: 有効な日次通知ミュート区間はシステムローカル時刻の分単位で[start, end)として判定する。start<endは同日区間、start>endは日跨ぎ区間、start==endは誤って終日停止しない空区間であり、負数を含む無効設定と範囲外の分値もミュートしない。この真理値は1日の全1440分で成立する (0..1439の値を無効扱いした)");
+
+        // 任意のstart/endについて1日の全1440分を検査する。
+        for minute in 0u16..1440 {
+            let expected = if start_minute == end_minute {
+                false
+            } else if start_minute < end_minute {
+                start_minute <= minute && minute < end_minute
+            } else {
+                minute >= start_minute || minute < end_minute
+            };
+            prop_assert_eq!(
+                window.is_muted_at_minute(minute),
+                expected,
+                "SPEC MUT-001 違反: 有効な日次通知ミュート区間はシステムローカル時刻の分単位で[start, end)として判定する。start<endは同日区間、start>endは日跨ぎ区間、start==endは誤って終日停止しない空区間であり、負数を含む無効設定と範囲外の分値もミュートしない。この真理値は1日の全1440分で成立する (start={}, end={}, minute={})",
+                start_minute,
+                end_minute,
+                minute,
+            );
+        }
+
+        let disabled = DailyMuteWindow { enabled: false, ..window.clone() };
+        prop_assert!(
+            (0u16..1440).all(|minute| !disabled.is_muted_at_minute(minute)),
+            "SPEC MUT-001 違反: 有効な日次通知ミュート区間はシステムローカル時刻の分単位で[start, end)として判定する。start<endは同日区間、start>endは日跨ぎ区間、start==endは誤って終日停止しない空区間であり、負数を含む無効設定と範囲外の分値もミュートしない。この真理値は1日の全1440分で成立する (enabled=falseなのにミュートした)"
+        );
+        if start_minute != end_minute {
+            prop_assert!(window.is_muted_at_minute(start_minute), "SPEC MUT-001 違反: 有効な日次通知ミュート区間はシステムローカル時刻の分単位で[start, end)として判定する。start<endは同日区間、start>endは日跨ぎ区間、start==endは誤って終日停止しない空区間であり、負数を含む無効設定と範囲外の分値もミュートしない。この真理値は1日の全1440分で成立する (startを含まない)");
+            prop_assert!(!window.is_muted_at_minute(end_minute), "SPEC MUT-001 違反: 有効な日次通知ミュート区間はシステムローカル時刻の分単位で[start, end)として判定する。start<endは同日区間、start>endは日跨ぎ区間、start==endは誤って終日停止しない空区間であり、負数を含む無効設定と範囲外の分値もミュートしない。この真理値は1日の全1440分で成立する (endを含んだ)");
+        }
+    }
+
+    /// MUT-002: 起動直後のseed中または通知ミュート中に観測した合致亀裂は通知済みidとしてmarkするが配送対象を1件も返さない。通常配送へ戻しても同じidを滞留通知せず、その後に現れた新規idだけを1回返す。配送判定はHTTP取得開始時ではなく取得後の最新設定を使い、ミュート・一時停止・表示言語の変更を次の配送前へ反映する。ミュートは一覧・通知候補・next表示を変えず、明示操作のTEST DELIVERYには適用しない
+    #[test]
+    fn mut_002(fs in proptest::collection::vec(arb_fissure(), 0..30), mut fresh in arb_fissure()) {
+        let mut muted_set = NotifiedSet::new();
+        let muted = poller::select_notifications(&mut muted_set, fs.clone(), false, true);
+        prop_assert!(muted.is_empty(), "SPEC MUT-002 違反: 起動直後のseed中または通知ミュート中に観測した合致亀裂は通知済みidとしてmarkするが配送対象を1件も返さない。通常配送へ戻しても同じidを滞留通知せず、その後に現れた新規idだけを1回返す。配送判定はHTTP取得開始時ではなく取得後の最新設定を使い、ミュート・一時停止・表示言語の変更を次の配送前へ反映する。ミュートは一覧・通知候補・next表示を変えず、明示操作のTEST DELIVERYには適用しない (ミュート中に配送対象を返した)");
+        for f in &fs {
+            prop_assert!(muted_set.contains(&f.id), "SPEC MUT-002 違反: 起動直後のseed中または通知ミュート中に観測した合致亀裂は通知済みidとしてmarkするが配送対象を1件も返さない。通常配送へ戻しても同じidを滞留通知せず、その後に現れた新規idだけを1回返す。配送判定はHTTP取得開始時ではなく取得後の最新設定を使い、ミュート・一時停止・表示言語の変更を次の配送前へ反映する。ミュートは一覧・通知候補・next表示を変えず、明示操作のTEST DELIVERYには適用しない (ミュート中のidをmarkしない)");
+        }
+
+        let backlog = poller::select_notifications(&mut muted_set, fs, false, false);
+        prop_assert!(backlog.is_empty(), "SPEC MUT-002 違反: 起動直後のseed中または通知ミュート中に観測した合致亀裂は通知済みidとしてmarkするが配送対象を1件も返さない。通常配送へ戻しても同じidを滞留通知せず、その後に現れた新規idだけを1回返す。配送判定はHTTP取得開始時ではなく取得後の最新設定を使い、ミュート・一時停止・表示言語の変更を次の配送前へ反映する。ミュートは一覧・通知候補・next表示を変えず、明示操作のTEST DELIVERYには適用しない (解除後に滞留idを配送した)");
+
+        fresh.id = "post-mute-fresh-id".to_string();
+        fresh.expiry = base_now() + Duration::hours(1);
+        let delivered = poller::select_notifications(
+            &mut muted_set,
+            vec![fresh.clone()],
+            false,
+            false,
+        );
+        prop_assert_eq!(delivered.len(), 1, "SPEC MUT-002 違反: 起動直後のseed中または通知ミュート中に観測した合致亀裂は通知済みidとしてmarkするが配送対象を1件も返さない。通常配送へ戻しても同じidを滞留通知せず、その後に現れた新規idだけを1回返す。配送判定はHTTP取得開始時ではなく取得後の最新設定を使い、ミュート・一時停止・表示言語の変更を次の配送前へ反映する。ミュートは一覧・通知候補・next表示を変えず、明示操作のTEST DELIVERYには適用しない (解除後の新規idを配送しない)");
+        prop_assert_eq!(delivered[0].id.as_str(), fresh.id.as_str(), "SPEC MUT-002 違反: 起動直後のseed中または通知ミュート中に観測した合致亀裂は通知済みidとしてmarkするが配送対象を1件も返さない。通常配送へ戻しても同じidを滞留通知せず、その後に現れた新規idだけを1回返す。配送判定はHTTP取得開始時ではなく取得後の最新設定を使い、ミュート・一時停止・表示言語の変更を次の配送前へ反映する。ミュートは一覧・通知候補・next表示を変えず、明示操作のTEST DELIVERYには適用しない (別idを配送した)");
+        prop_assert!(
+            poller::select_notifications(&mut muted_set, vec![fresh], false, false).is_empty(),
+            "SPEC MUT-002 違反: 起動直後のseed中または通知ミュート中に観測した合致亀裂は通知済みidとしてmarkするが配送対象を1件も返さない。通常配送へ戻しても同じidを滞留通知せず、その後に現れた新規idだけを1回返す。配送判定はHTTP取得開始時ではなく取得後の最新設定を使い、ミュート・一時停止・表示言語の変更を次の配送前へ反映する。ミュートは一覧・通知候補・next表示を変えず、明示操作のTEST DELIVERYには適用しない (解除後の新規idを再配送した)"
+        );
+
+        let mut seeded_set = NotifiedSet::new();
+        let seeded = poller::select_notifications(
+            &mut seeded_set,
+            delivered,
+            true,
+            false,
+        );
+        prop_assert!(seeded.is_empty(), "SPEC MUT-002 違反: 起動直後のseed中または通知ミュート中に観測した合致亀裂は通知済みidとしてmarkするが配送対象を1件も返さない。通常配送へ戻しても同じidを滞留通知せず、その後に現れた新規idだけを1回返す。配送判定はHTTP取得開始時ではなく取得後の最新設定を使い、ミュート・一時停止・表示言語の変更を次の配送前へ反映する。ミュートは一覧・通知候補・next表示を変えず、明示操作のTEST DELIVERYには適用しない (seed中に配送対象を返した)");
     }
 
     /// NTY-001: 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない
@@ -1154,6 +1233,73 @@ fn cfg_004() {
     assert_eq!(round_trip, hidden_notify, "SPEC CFG-004 違反: WatchRuleのnotifyはenabledから独立した通知参加フラグで、notifyを持たない旧JSONは旧enabled値(それも欠落ならtrue)を引き継ぐ。明示したnotify=true/falseはenabledの値に関係なくserialize/deserializeを往復しても保持される (enabledとnotifyの独立状態をround-tripで失った)");
 }
 
+/// CFG-005: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない
+#[test]
+fn cfg_005() {
+    let legacy: AppConfig = serde_json::from_str(r#"{}"#)
+        .expect("locale/mute欠落の旧AppConfig JSONを読み込めること");
+    assert_eq!(legacy.locale, AppLocale::Ja, "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (locale欠落がjaでない)");
+    assert!(!legacy.notification_mute.enabled, "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (mute欠落をONへ移行した)");
+
+    for (locale, wire) in [
+        (AppLocale::Ja, "ja"),
+        (AppLocale::En, "en"),
+        (AppLocale::ZhHans, "zh-Hans"),
+    ] {
+        let mut cfg = AppConfig::default();
+        cfg.locale = locale.clone();
+        cfg.notification_mute = DailyMuteWindow {
+            enabled: true,
+            start_minute: 22 * 60 + 15,
+            end_minute: 6 * 60 + 45,
+        };
+        let encoded = serde_json::to_string(&cfg).expect("AppConfigをserializeできること");
+        let value: serde_json::Value = serde_json::from_str(&encoded)
+            .expect("serialize済みAppConfigがJSONであること");
+        assert_eq!(value["locale"], wire, "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (locale wire値)");
+        assert_eq!(value["notificationMute"]["enabled"], true, "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (mute enabled wire値)");
+        assert_eq!(value["notificationMute"]["startMinute"], 1335, "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (mute start wire値)");
+        assert_eq!(value["notificationMute"]["endMinute"], 405, "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (mute end wire値)");
+
+        let round_trip: AppConfig = serde_json::from_str(&encoded)
+            .expect("serialize済みAppConfigを再読込できること");
+        assert_eq!(round_trip.locale, locale, "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (locale round-trip)");
+        assert!(round_trip.notification_mute.enabled, "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (mute enabled round-trip)");
+        assert_eq!(round_trip.notification_mute.start_minute, 1335, "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (mute start round-trip)");
+        assert_eq!(round_trip.notification_mute.end_minute, 405, "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (mute end round-trip)");
+    }
+
+    for invalid in [
+        DailyMuteWindow { enabled: true, start_minute: -1, end_minute: 60 },
+        DailyMuteWindow { enabled: true, start_minute: 60, end_minute: -1 },
+        DailyMuteWindow { enabled: true, start_minute: 1440, end_minute: 60 },
+        DailyMuteWindow { enabled: true, start_minute: 60, end_minute: 1440 },
+        DailyMuteWindow { enabled: true, start_minute: 65_536, end_minute: 60 },
+    ] {
+        assert!(!invalid.is_valid(), "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (範囲外分値をvalid扱いした)");
+        assert!(
+            (0u16..1440).all(|minute| !invalid.is_muted_at_minute(minute)),
+            "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (不正設定が通知を止めた)"
+        );
+        assert!(!invalid.is_muted_at_minute(1440), "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (範囲外の現在分をミュートした)");
+    }
+
+    let base = AppConfig::default();
+    let projection = filter::notification_projection(&base.filter());
+    let mut presentation_only = base;
+    presentation_only.locale = AppLocale::ZhHans;
+    presentation_only.notification_mute = DailyMuteWindow {
+        enabled: true,
+        start_minute: 1320,
+        end_minute: 420,
+    };
+    assert_eq!(
+        filter::notification_projection(&presentation_only.filter()),
+        projection,
+        "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (locale/mute変更でnotification projectionが変化した)"
+    );
+}
+
 /// NTF-001: 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する
 #[test]
 fn ntf_001() {
@@ -1301,6 +1447,74 @@ fn ntf_004() {
     }
 }
 
+/// NTF-005: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する
+#[test]
+fn ntf_005() {
+    let now = base_now();
+    let fissure = Fissure {
+        id: "localized-notification".to_string(),
+        activation: now,
+        expiry: now + Duration::minutes(30),
+        node: "Test Node (Void)".to_string(),
+        mission_type: "Survival".to_string(),
+        enemy: "Orokin".to_string(),
+        tier: "Axi".to_string(),
+        tier_num: 4,
+        is_storm: false,
+        is_hard: true,
+    };
+
+    for (locale, hard, body, accepted, watch_prefix, storm_include, storm_only, candidate_error, rule_error) in [
+        (AppLocale::Ja, "鋼", "Orokin / 消滅まで残り30分", "通知要求を受け付けました: desktop", "監視:", "+VOID嵐", "VOID嵐のみ", "不明な候補ID: bad", "不明なルール番号: 99"),
+        (AppLocale::En, "Steel Path", "Orokin / 30 min remaining", "Notification request accepted: desktop", "Watch:", "+VOID STORM", "VOID STORM ONLY", "Unknown candidate ID: bad", "Unknown rule index: 99"),
+        (AppLocale::ZhHans, "钢铁之路", "Orokin / 剩余 30 分钟", "通知请求已接受：desktop", "监视：", "+虚空风暴", "仅虚空风暴", "未知候选项 ID：bad", "未知规则序号：99"),
+    ] {
+        let payload = notify::desktop_payload_for_locale(&fissure, now, locale);
+        assert!(payload.title.contains(hard), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (hard label: {})", payload.title);
+        assert_eq!(payload.body, body, "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (body)");
+        let summary = notify::summarize_test_outcomes_for_locale(
+            &[NotificationOutcome::Requested { destination: "desktop" }],
+            locale,
+        )
+        .expect("Requestedをlocale別に要約できること");
+        assert_eq!(summary, accepted, "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (test summary)");
+
+        let mut cfg = AppConfig::default();
+        cfg.locale = locale;
+        cfg.rules[0].storms = StormMode::Include;
+        let include_watch = relico_lib::watch_line(&cfg);
+        assert!(include_watch.starts_with(watch_prefix), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (tray: {include_watch})");
+        assert!(include_watch.contains(storm_include), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (Storm Include: {include_watch})");
+        cfg.rules[0].storms = StormMode::Only;
+        let only_watch = relico_lib::watch_line(&cfg);
+        assert!(only_watch.contains(storm_only), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (Storm Only: {only_watch})");
+
+        let actual_candidate_error = relico_lib::i18n::format(
+            locale,
+            "error.unknownCandidate",
+            &[("id", "bad")],
+        );
+        let actual_rule_error = relico_lib::i18n::format(
+            locale,
+            "error.unknownRuleIndex",
+            &[("index", "99")],
+        );
+        assert_eq!(actual_candidate_error, candidate_error, "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (candidate error)");
+        assert_eq!(actual_rule_error, rule_error, "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (rule error)");
+        for rendered in [
+            &payload.title,
+            &payload.body,
+            &summary,
+            &include_watch,
+            &only_watch,
+            &actual_candidate_error,
+            &actual_rule_error,
+        ] {
+            assert!(!rendered.contains("[["), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (missing marker: {rendered})");
+        }
+    }
+}
+
 /// STA-001: 配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない
 #[test]
 fn sta_001() {
@@ -1404,6 +1618,69 @@ fn sta_003() {
             r#"<key>Label</key><string>other</string><key>ProgramArguments</key><array><string>/tmp/other</string></array>"#,
         ),
         "SPEC STA-003 違反: macOS AUTOSTARTは内部のUnix実行ファイルをLaunchAgent登録せず、アプリアイコンを保持するAppleScript Login Itemとして.app bundleを登録し、旧relico.plistを一度だけ移行する配線を持つ (無関係な同名plistを移行対象にした)"
+    );
+}
+
+/// STA-004: i18n専用の外部ライブラリを追加せず、TS/Rustの自前lookup・placeholder実装が同じsrc/locales.jsonを直接読む。TSのi18n moduleは相対importだけ、Rustは標準ライブラリ・crate内module・既存の汎用serde_json以外の外部crateを使わない
+#[test]
+fn sta_004() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest.parent().expect("repository root");
+    let ts = std::fs::read_to_string(root.join("src/i18n.ts"))
+        .expect("src/i18n.tsを読めること");
+    let rust = std::fs::read_to_string(manifest.join("src/i18n.rs"))
+        .expect("src-tauri/src/i18n.rsを読めること");
+    let package = std::fs::read_to_string(root.join("package.json"))
+        .expect("package.jsonを読めること")
+        .to_ascii_lowercase();
+    let cargo = std::fs::read_to_string(manifest.join("Cargo.toml"))
+        .expect("Cargo.tomlを読めること")
+        .to_ascii_lowercase();
+
+    for import in ts.lines().map(str::trim).filter(|line| line.starts_with("import ")) {
+        assert!(
+            import.contains(" from \"./"),
+            "SPEC STA-004 違反: i18n専用の外部ライブラリを追加せず、TS/Rustの自前lookup・placeholder実装が同じsrc/locales.jsonを直接読む。TSのi18n moduleは相対importだけ、Rustは標準ライブラリ・crate内module・既存の汎用serde_json以外の外部crateを使わない (TS i18nが外部importを持つ: {import})"
+        );
+    }
+    assert!(
+        !ts.contains("import("),
+        "SPEC STA-004 違反: i18n専用の外部ライブラリを追加せず、TS/Rustの自前lookup・placeholder実装が同じsrc/locales.jsonを直接読む。TSのi18n moduleは相対importだけ、Rustは標準ライブラリ・crate内module・既存の汎用serde_json以外の外部crateを使わない (TS i18nが動的importを持つ)"
+    );
+    for import in rust.lines().map(str::trim).filter(|line| line.starts_with("use ")) {
+        assert!(
+            import.starts_with("use std::")
+                || import.starts_with("use crate::")
+                || import.starts_with("use super::")
+                || import.starts_with("use serde_json::"),
+            "SPEC STA-004 違反: i18n専用の外部ライブラリを追加せず、TS/Rustの自前lookup・placeholder実装が同じsrc/locales.jsonを直接読む。TSのi18n moduleは相対importだけ、Rustは標準ライブラリ・crate内module・既存の汎用serde_json以外の外部crateを使わない (Rust i18nが外部crateを直接使う: {import})"
+        );
+    }
+    for dependency in [
+        "i18next",
+        "react-i18next",
+        "@lingui",
+        "@formatjs",
+        "intl-messageformat",
+        "messageformat",
+        "fluent-bundle",
+        "fluent-syntax",
+        "unic-langid",
+        "icu_locid",
+        "icu-locale",
+    ] {
+        assert!(
+            !package.contains(dependency) && !cargo.contains(dependency),
+            "SPEC STA-004 違反: i18n専用の外部ライブラリを追加せず、TS/Rustの自前lookup・placeholder実装が同じsrc/locales.jsonを直接読む。TSのi18n moduleは相対importだけ、Rustは標準ライブラリ・crate内module・既存の汎用serde_json以外の外部crateを使わない (i18n専用外部依存が追加された: {dependency})"
+        );
+    }
+    assert!(
+        ts.contains("from \"./locales.json\""),
+        "SPEC STA-004 違反: i18n専用の外部ライブラリを追加せず、TS/Rustの自前lookup・placeholder実装が同じsrc/locales.jsonを直接読む。TSのi18n moduleは相対importだけ、Rustは標準ライブラリ・crate内module・既存の汎用serde_json以外の外部crateを使わない (TSがsrc/locales.jsonを直接読まない)"
+    );
+    assert!(
+        rust.contains("include_str!(\"../../src/locales.json\")"),
+        "SPEC STA-004 違反: i18n専用の外部ライブラリを追加せず、TS/Rustの自前lookup・placeholder実装が同じsrc/locales.jsonを直接読む。TSのi18n moduleは相対importだけ、Rustは標準ライブラリ・crate内module・既存の汎用serde_json以外の外部crateを使わない (Rustがsrc/locales.jsonを直接埋め込まない)"
     );
 }
 

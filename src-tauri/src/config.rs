@@ -1,9 +1,79 @@
 use std::fs;
 use std::path::Path;
 
+use chrono::{DateTime, Local, Timelike};
 use serde::{Deserialize, Serialize};
 
 use crate::filter::{FilterSettings, WatchRule};
+
+/// アプリ全体で共有する表示言語。未知の将来値は日本語へ安全にフォールバックする。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AppLocale {
+    #[serde(rename = "en")]
+    En,
+    #[serde(rename = "zh-Hans")]
+    ZhHans,
+    #[default]
+    #[serde(rename = "ja", other)]
+    Ja,
+}
+
+impl AppLocale {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ja => "ja",
+            Self::En => "en",
+            Self::ZhHans => "zh-Hans",
+        }
+    }
+}
+
+/// 毎日繰り返す通知ミュート区間。分値はローカル壁時計の0:00からの分数。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DailyMuteWindow {
+    pub enabled: bool,
+    /// JSONの負数もAppConfig全体を捨てず、この区間だけfail-openにできる幅で受ける。
+    pub start_minute: i64,
+    pub end_minute: i64,
+}
+
+impl Default for DailyMuteWindow {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            start_minute: 22 * 60,
+            end_minute: 7 * 60,
+        }
+    }
+}
+
+impl DailyMuteWindow {
+    pub fn is_valid(&self) -> bool {
+        (0..24 * 60).contains(&self.start_minute) && (0..24 * 60).contains(&self.end_minute)
+    }
+
+    /// 区間は[start,end)。start==end・無効値・enabled=falseは空区間(fail-open)。
+    pub fn is_muted_at_minute(&self, minute: u16) -> bool {
+        let minute = i64::from(minute);
+        if !self.enabled
+            || !self.is_valid()
+            || minute >= 24 * 60
+            || self.start_minute == self.end_minute
+        {
+            return false;
+        }
+        if self.start_minute < self.end_minute {
+            self.start_minute <= minute && minute < self.end_minute
+        } else {
+            minute >= self.start_minute || minute < self.end_minute
+        }
+    }
+
+    pub fn is_muted_at_local(&self, now: DateTime<Local>) -> bool {
+        self.is_muted_at_minute((now.hour() * 60 + now.minute()) as u16)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -15,6 +85,8 @@ pub struct AppConfig {
     pub desktop_notification: bool,
     pub discord_webhook_url: Option<String>,
     pub paused: bool,
+    pub locale: AppLocale,
+    pub notification_mute: DailyMuteWindow,
 }
 
 impl Default for AppConfig {
@@ -26,6 +98,8 @@ impl Default for AppConfig {
             desktop_notification: true,
             discord_webhook_url: None,
             paused: false,
+            locale: AppLocale::Ja,
+            notification_mute: DailyMuteWindow::default(),
         }
     }
 }
@@ -43,13 +117,22 @@ impl AppConfig {
         self.poll_interval_secs.max(30)
     }
 
+    pub fn notifications_muted_at(&self, now: DateTime<Local>) -> bool {
+        self.notification_mute.is_muted_at_local(now)
+    }
+
     /// 読めない・存在しない場合は既定値(起動を止めない)。
     /// 旧スキーマ(単一ANDフィルタ)のファイルはrules欠落として既定ルールに落ちる
     pub fn load(path: &Path) -> Self {
-        fs::read_to_string(path)
+        let mut config: Self = fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // 壊れた区間で通知を止めず、他の設定は保持する。
+        if !config.notification_mute.is_valid() {
+            config.notification_mute.enabled = false;
+        }
+        config
     }
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {

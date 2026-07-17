@@ -1,8 +1,9 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::{Serialize, Serializer};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::watch;
@@ -13,6 +14,7 @@ use crate::dedup::NotifiedSet;
 use crate::filter::{self, FilterSettings};
 use crate::model::Fissure;
 use crate::notify;
+use crate::timed::TimedContentSnapshot;
 
 pub const API_URL: &str = "https://api.warframestat.us/pc/fissures";
 
@@ -60,6 +62,8 @@ where
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusSnapshot {
+    /// 二つの独立pollerが後着した古いfull snapshotをUIで破棄するための単調revision。
+    pub revision: u64,
     /// フィルタ合致亀裂のみ(SPEC: VIS-001)。消滅が近い順
     #[serde(serialize_with = "serialize_fissures")]
     pub fissures: Vec<Fissure>,
@@ -71,20 +75,52 @@ pub struct StatusSnapshot {
     pub last_poll: Option<DateTime<Utc>>,
     pub next_poll_secs: u64,
     pub notified_today: u32,
+    /// backendがシステムローカル時刻で評価した現在のquiet-hours状態。
+    pub notifications_muted: bool,
+    /// quiet-hours中に既知扱いとして破棄した新規通知数。
+    pub suppressed_today: u32,
+    /// 亀裂とは独立した5分周期の時限コンテンツsnapshot。
+    pub timed_content: TimedContentSnapshot,
     pub paused: bool,
 }
 
 pub struct PollerState {
     pub snapshot: StatusSnapshot,
     pub notified: NotifiedSet,
+    counter_date: NaiveDate,
 }
 
 impl PollerState {
-    pub fn new(notified: NotifiedSet) -> Self {
+    pub fn new(notified: NotifiedSet, cfg: &AppConfig) -> Self {
+        let now = Local::now();
+        let snapshot = StatusSnapshot {
+            notifications_muted: cfg.notifications_muted_at(now),
+            paused: cfg.paused,
+            next_poll_secs: if cfg.paused {
+                0
+            } else {
+                cfg.effective_poll_secs()
+            },
+            ..StatusSnapshot::default()
+        };
         Self {
-            snapshot: StatusSnapshot::default(),
+            snapshot,
             notified,
+            counter_date: now.date_naive(),
         }
+    }
+
+    pub(crate) fn reset_daily_counters(&mut self, now: DateTime<Local>) {
+        let date = now.date_naive();
+        if date != self.counter_date {
+            self.counter_date = date;
+            self.snapshot.notified_today = 0;
+            self.snapshot.suppressed_today = 0;
+        }
+    }
+
+    pub(crate) fn bump_revision(&mut self) {
+        self.snapshot.revision = self.snapshot.revision.saturating_add(1);
     }
 }
 
@@ -151,12 +187,13 @@ pub fn select_notifications(
     notified: &mut NotifiedSet,
     matching: Vec<Fissure>,
     seed_only: bool,
+    muted: bool,
 ) -> Vec<Fissure> {
     let fresh: Vec<Fissure> = matching
         .into_iter()
         .filter(|f| notified.mark(&f.id, f.expiry))
         .collect();
-    if seed_only {
+    if seed_only || muted {
         Vec::new()
     } else {
         fresh
@@ -192,28 +229,56 @@ pub async fn run(
         let sleep_secs = if cfg.paused {
             emit_snapshot(&app, &cfg, &state, |snap| {
                 snap.paused = true;
+                snap.notifications_muted =
+                    cfg.notifications_muted_at(chrono::Utc::now().with_timezone(&chrono::Local));
                 snap.next_poll_secs = 0;
             });
-            3600 // 再開はwatch変更で即起きる
+            // HTTPは止めたまま、quiet-hours境界と日次counterだけは分単位で更新する。
+            60
         } else {
-            let current_scope = cfg.filter();
-            let seed_only = notification_scope_changed(seeded_scope.as_ref(), &current_scope);
-            match poll_once(&app, &client, &cfg, &state, &notified_path, seed_only).await {
-                Ok(()) => {
-                    seeded_scope = Some(filter::notification_projection(&current_scope));
+            match poll_once(
+                &app,
+                &client,
+                &cfg_rx,
+                &state,
+                &notified_path,
+                seeded_scope.as_ref(),
+            )
+            .await
+            {
+                Ok(scope) => {
+                    if let Some(scope) = scope {
+                        seeded_scope = Some(scope);
+                    }
                     backoff.on_success();
-                    cfg.effective_poll_secs()
+                    let latest = cfg_rx.borrow().clone();
+                    if latest.paused {
+                        60
+                    } else {
+                        latest.effective_poll_secs()
+                    }
                 }
                 Err(err) => {
                     eprintln!("poll failed: {err}");
-                    let delay = backoff.on_failure();
-                    emit_snapshot(&app, &cfg, &state, |snap| {
-                        snap.api_ok = false;
-                        snap.last_error = Some(err);
-                        snap.paused = false;
-                        snap.next_poll_secs = delay;
-                    });
-                    delay
+                    let latest = cfg_rx.borrow().clone();
+                    if latest.paused {
+                        emit_snapshot(&app, &latest, &state, |snap| {
+                            snap.paused = true;
+                            snap.notifications_muted = latest.notifications_muted_at(Local::now());
+                            snap.next_poll_secs = 0;
+                        });
+                        60
+                    } else {
+                        let delay = backoff.on_failure();
+                        emit_snapshot(&app, &latest, &state, |snap| {
+                            snap.api_ok = false;
+                            snap.last_error = Some(err);
+                            snap.notifications_muted = latest.notifications_muted_at(Local::now());
+                            snap.paused = false;
+                            snap.next_poll_secs = delay;
+                        });
+                        delay
+                    }
                 }
             }
         };
@@ -232,11 +297,11 @@ pub async fn run(
 async fn poll_once(
     app: &AppHandle,
     client: &reqwest::Client,
-    cfg: &AppConfig,
+    cfg_rx: &watch::Receiver<AppConfig>,
     state: &Arc<Mutex<PollerState>>,
     notified_path: &Path,
-    seed_only: bool,
-) -> Result<(), String> {
+    seeded_scope: Option<&FilterSettings>,
+) -> Result<Option<FilterSettings>, String> {
     let fissures: Vec<Fissure> = client
         .get(API_URL)
         .send()
@@ -248,18 +313,43 @@ async fn poll_once(
         .await
         .map_err(|e| e.to_string())?;
 
+    // HTTP待機中に保存されたミュート・Pause・locale・ruleを、dedup/配送より前に採用する。
+    let cfg = cfg_rx.borrow().clone();
+    if cfg.paused {
+        emit_snapshot(app, &cfg, state, |snap| {
+            snap.paused = true;
+            snap.notifications_muted = cfg.notifications_muted_at(Local::now());
+            snap.next_poll_secs = 0;
+        });
+        return Ok(None);
+    }
+
     let now = Utc::now();
     let fcfg = cfg.filter();
+    let seed_only = notification_scope_changed(seeded_scope, &fcfg);
     // 表示(enabled、無指定なら全件)と通知候補(notify、表示とは独立)を分離する。SPEC: VIS-001 / NTY-001
     let visible = visible_fissures(&fcfg, &fissures, now);
     let candidates = notify_candidates(&fcfg, &fissures, now);
     let next_notification = candidates.first().cloned();
 
+    let muted = cfg.notifications_muted_at(now.with_timezone(&chrono::Local));
     let to_notify: Vec<Fissure> = {
         let mut st = state.lock().expect("poller state");
+        st.reset_daily_counters(now.with_timezone(&Local));
         st.notified.prune(now);
 
-        let to_notify = select_notifications(&mut st.notified, candidates, seed_only);
+        let suppressed = if muted && !seed_only {
+            let mut unique_ids = HashSet::new();
+            candidates
+                .iter()
+                .filter(|fissure| {
+                    !st.notified.contains(&fissure.id) && unique_ids.insert(fissure.id.clone())
+                })
+                .count() as u32
+        } else {
+            0
+        };
+        let to_notify = select_notifications(&mut st.notified, candidates, seed_only, muted);
 
         if let Err(e) = st.notified.save(notified_path) {
             eprintln!("notified set save failed: {e}");
@@ -272,16 +362,18 @@ async fn poll_once(
         st.snapshot.last_poll = Some(now);
         st.snapshot.next_poll_secs = cfg.effective_poll_secs();
         st.snapshot.notified_today += to_notify.len() as u32;
+        st.snapshot.notifications_muted = muted;
+        st.snapshot.suppressed_today += suppressed;
         st.snapshot.paused = false;
         to_notify
     };
 
-    emit_snapshot(app, cfg, state, |_| {});
+    emit_snapshot(app, &cfg, state, |_| {});
 
     for f in &to_notify {
-        notify::send(client, cfg, f).await;
+        notify::send(client, &cfg, f).await;
     }
-    Ok(())
+    Ok(Some(filter::notification_projection(&fcfg)))
 }
 
 fn emit_snapshot(
@@ -292,7 +384,9 @@ fn emit_snapshot(
 ) {
     let snap = {
         let mut st = state.lock().expect("poller state");
+        st.reset_daily_counters(Local::now());
         mutate(&mut st.snapshot);
+        st.bump_revision();
         st.snapshot.clone()
     };
     let _ = app.emit("status", &snap);

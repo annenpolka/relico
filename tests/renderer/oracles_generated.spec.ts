@@ -6,7 +6,7 @@
 import { expect, test } from "@playwright/test";
 import { bootConsole, calls } from "./harness";
 
-// RND-001: パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)。一覧画面のSpaceはパレットを開かずに編集中ルールの表示選択(enabled)をトグルし(action:toggle-rule)、一覧画面の↑/↓はedit focusを前後のルールへ巡回移動し、Cmd/Ctrl+1..9は対応indexのルールへedit focusを移す(パレット表示中も有効。フォーカス移動は設定を変更しない)。IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力でき、DESELECT ALL RULES候補は全表示選択を解除して通知参加を変えない(renderer統合)
+// RND-001: パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)。一覧画面のSpaceはパレットを開かずに編集中ルールの表示選択(enabled)をトグルし(action:toggle-rule)、一覧画面の↑/↓はedit focusを前後のルールへ巡回移動し、Ctrl+1..9は対応indexのルールへedit focusを移す(パレット表示中も有効。フォーカス移動は設定を変更しない)。Cmd+1..7はコンテンツタブ専用でルールを変更せず、Cmd+8/9はアプリが奪わない。IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力でき、DESELECT ALL RULES候補は全表示選択を解除して通知参加を変えない(renderer統合)
 test("RND-001 palette keyboard", async ({ page }) => {
   await bootConsole(page);
   // どこでも打鍵で開き、入力を引き継ぐ
@@ -67,8 +67,8 @@ test("RND-001 palette keyboard", async ({ page }) => {
   await expect(page.locator("#editing-meta")).toHaveText("R1/2");
   await page.keyboard.press("ArrowUp");
   await expect(page.locator("#editing-meta")).toHaveText("R2/2");
-  // Cmd/Ctrl+1..9は対応indexのルールへ直接ジャンプする
-  await page.keyboard.press("ControlOrMeta+1");
+  // Ctrl+1..9は対応indexのルールへ直接ジャンプする。Cmd+数字はコンテンツタブ専用
+  await page.keyboard.press("Control+1");
   await expect(page.locator("#editing-meta")).toHaveText("R1/2");
   expect(await mutations()).toBe(mutationsBefore);
   // IME変換中(composition中)のEnterは候補を適用しない
@@ -87,8 +87,8 @@ test("RND-001 palette keyboard", async ({ page }) => {
   expect(applied[applied.length - 1].args.id).toBe("tier:Axi");
   await expect(page.locator("#palette-overlay")).toBeVisible();
   await expect(page.locator("#palette-input")).toHaveValue("");
-  // パレット表示中もCmd/Ctrl+数字で編集対象を切り替えられる(開いたまま)
-  await page.keyboard.press("ControlOrMeta+2");
+  // パレット表示中もCtrl+数字で編集対象を切り替えられる(開いたまま)
+  await page.keyboard.press("Control+2");
   await expect(page.locator("#palette-rule")).toContainText("EDIT R2");
   await expect(page.locator("#palette-overlay")).toBeVisible();
 });
@@ -454,3 +454,226 @@ test("RND-009 serializes rapid new rule and filter apply", async ({ page }) => {
   expect(after.slice(0, 2)).toEqual(before);
   expect(after[2]).toMatchObject({ enabled: true, notify: false, tiers: ["Axi"] });
 });
+
+// RND-010: コンテンツ領域は公開データから実内容を取得できるfissures/sortie/archon/syndicates/area-missions/archimedea/descendiaの7タブをこの順で持ち、英語表示はFissures/Sortie/Archon Hunt/Syndicates/Area Missions/Archimedea/Descendiaとなる。実内容を取得できないarbitration/netracellsのtabとtabpanelは持たない。active tabと可視tabpanelは常に各1つで、Cmd+1..7は対応タブへ切替、Cmd+8/9はactive tabを変えずアプリが奪わない。Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持する(renderer統合)
+test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
+  await page.setViewportSize({ width: 960, height: 620 });
+  await bootConsole(page, { locale: "en" });
+  const tabs = [
+    ["fissures", "Fissures"],
+    ["sortie", "Sortie"],
+    ["archon", "Archon Hunt"],
+    ["syndicates", "Syndicates"],
+    ["area-missions", "Area Missions"],
+    ["archimedea", "Archimedea"],
+    ["descendia", "Descendia"],
+  ] as const;
+  await expect(page.locator("#content-tabs")).toHaveAttribute("role", "tablist");
+  await expect(page.locator("#content-tabs [role=tab]")).toHaveCount(tabs.length);
+  await expect(page.locator('[role="tabpanel"]')).toHaveCount(tabs.length);
+  expect(
+    await page.locator("#content-tabs [role=tab]").evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("data-tab-id")),
+    ),
+  ).toEqual(tabs.map(([id]) => id));
+  await expect(
+    page.locator("#tab-arbitration, #panel-arbitration, #tab-netracells, #panel-netracells"),
+  ).toHaveCount(0);
+
+  for (const [id, label] of tabs) {
+    const tab = page.locator("#tab-" + id);
+    const panel = page.locator("#panel-" + id);
+    await expect(tab).toHaveAttribute("role", "tab");
+    await expect(tab).toHaveAttribute("data-tab-id", id);
+    await expect(tab).toHaveAttribute("aria-controls", "panel-" + id);
+    await expect(tab).toHaveText(label);
+    await expect(panel).toHaveAttribute("role", "tabpanel");
+    await expect(panel).toHaveAttribute("aria-labelledby", "tab-" + id);
+  }
+
+  const assertActive = async (id: string) => {
+    await expect(page.locator('#content-tabs [role="tab"][aria-selected="true"]')).toHaveCount(1);
+    await expect(page.locator('#content-tabs [role="tab"][tabindex="0"]')).toHaveCount(1);
+    await expect(page.locator('#content-tabs [role="tab"][aria-selected="true"]')).toHaveAttribute(
+      "data-tab-id",
+      id,
+    );
+    await expect(page.locator('[role="tabpanel"]:not([hidden])')).toHaveCount(1);
+    await expect(page.locator("#panel-" + id)).toBeVisible();
+    await expect(page.locator('#content-tabs [role="tab"][aria-selected="false"]')).toHaveCount(
+      tabs.length - 1,
+    );
+    await expect(page.locator('#content-tabs [role="tab"][tabindex="-1"]')).toHaveCount(
+      tabs.length - 1,
+    );
+  };
+
+  await assertActive("fissures");
+  for (let i = 0; i < tabs.length; i++) {
+    await page.keyboard.press("Meta+" + (i + 1));
+    await assertActive(tabs[i][0]);
+  }
+  // 最終タブから次へ、先頭タブから前へ循環する。
+  await page.keyboard.press("Control+Tab");
+  await assertActive("fissures");
+  await page.keyboard.press("Control+Shift+Tab");
+  await assertActive("descendia");
+  // 取得不能タブへ対応していた数字はアプリが奪わず、active tabも変えない。
+  await page.evaluate(() => {
+    document.addEventListener("keydown", (event) => {
+      document.documentElement.dataset.lastShortcutDefaultPrevented = String(
+        event.defaultPrevented,
+      );
+    });
+  });
+  await page.keyboard.press("Meta+8");
+  await assertActive("descendia");
+  await expect(page.locator("html")).toHaveAttribute("data-last-shortcut-default-prevented", "false");
+  await page.keyboard.press("Meta+9");
+  await assertActive("descendia");
+  await expect(page.locator("html")).toHaveAttribute("data-last-shortcut-default-prevented", "false");
+
+  // Ctrl+数字はタブではなく従来のrule edit focusだけを変更する。
+  await page.keyboard.press("Control+2");
+  await expect(page.locator("#editing-meta")).toHaveText("R2/2");
+  await assertActive("descendia");
+
+  // ARIA roving focusは矢印/Home/Endでactive tabと共に移動する。
+  await page.locator("#tab-fissures").focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#tab-sortie")).toBeFocused();
+  await assertActive("sortie");
+  await page.keyboard.press("Home");
+  await expect(page.locator("#tab-fissures")).toBeFocused();
+  await assertActive("fissures");
+  await page.keyboard.press("End");
+  await expect(page.locator("#tab-descendia")).toBeFocused();
+  await assertActive("descendia");
+});
+
+// RND-011: DELIVERYの通知ミュートUIはON/OFFと開始・終了時刻をAppConfig.notificationMute(enabled/startMinute/endMinute)へ保存し、backend snapshotのnotificationsMuted=trueを独自判定せず状態表示する。設定操作はルール・VIEW・NOTIFYを変えず、TEST DELIVERYはミュート表示中でも実行経路へ進む(renderer統合)
+test("RND-011 notification mute window", async ({ page }) => {
+  await bootConsole(page, { locale: "en", notificationsMuted: true });
+  await page.locator("#delivery-tab").click();
+  await expect(page.locator("#mute-status")).toHaveAttribute("data-muted", "true");
+  await expect(page.locator("#mute-status")).toBeVisible();
+
+  const rulesBefore = await page.locator("#rules-list .rule-row").count();
+  await expect(page.locator("#mute-check")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator("#mute-start-input")).toBeDisabled();
+  await expect(page.locator("#mute-end-input")).toBeDisabled();
+  await page.locator("#mute-check").click();
+  await expect(page.locator("#mute-check")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#mute-start-input")).toBeEnabled();
+  await expect(page.locator("#mute-end-input")).toBeEnabled();
+  await page.locator("#mute-start-input").fill("22:15");
+  await page.locator("#mute-start-input").dispatchEvent("change");
+  await page.locator("#mute-end-input").fill("06:45");
+  await page.locator("#mute-end-input").dispatchEvent("change");
+
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (entry) =>
+          entry.cmd === "set_config" &&
+          entry.args.config.notificationMute.enabled === true &&
+          entry.args.config.notificationMute.startMinute === 1335 &&
+          entry.args.config.notificationMute.endMinute === 405,
+      ),
+    )
+    .toBe(true);
+  await expect(page.locator("#rules-list .rule-row")).toHaveCount(rulesBefore);
+  expect(
+    (await calls(page)).filter((entry) =>
+      ["set_rule_enabled", "set_rule_notify", "apply_candidate", "clear_filter"].includes(entry.cmd),
+    ),
+  ).toHaveLength(0);
+
+  // backendがMUTEDと報告していても、明示操作のTEST DELIVERYは抑止しない。
+  await page.locator("#test-btn").click();
+  await expect
+    .poll(async () => (await calls(page)).some((entry) => entry.cmd === "test_notification"))
+    .toBe(true);
+});
+
+// RND-012: locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、本文・aria-label・placeholderの言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合)
+const localeGoldens = {
+  ja: {
+    text: [
+      ["#tab-fissures", "tabs.fissures", "亀裂"],
+      ["#filters-tab", "sidebar.filters", "フィルター"],
+      ["#delivery-tab", "sidebar.delivery", "通知"],
+      ["#test-btn", "delivery.test", "通知をテスト"],
+      ["#pause-btn", "common.pause", "一時停止"],
+      ['#mute-check [data-i18n-key="delivery.muteSchedule"]', "delivery.muteSchedule", "通知ミュート"],
+    ],
+    tabsLabel: "時限コンテンツ",
+    languageLabel: "表示言語",
+    rulePlaceholder: "ルール名 (R1)",
+  },
+  en: {
+    text: [
+      ["#tab-fissures", "tabs.fissures", "Fissures"],
+      ["#filters-tab", "sidebar.filters", "Filters"],
+      ["#delivery-tab", "sidebar.delivery", "Delivery"],
+      ["#test-btn", "delivery.test", "Test Delivery"],
+      ["#pause-btn", "common.pause", "Pause"],
+      ['#mute-check [data-i18n-key="delivery.muteSchedule"]', "delivery.muteSchedule", "Notification mute"],
+    ],
+    tabsLabel: "Timed content",
+    languageLabel: "Display language",
+    rulePlaceholder: "Rule name (R1)",
+  },
+  "zh-Hans": {
+    text: [
+      ["#tab-fissures", "tabs.fissures", "裂隙"],
+      ["#filters-tab", "sidebar.filters", "筛选"],
+      ["#delivery-tab", "sidebar.delivery", "通知"],
+      ["#test-btn", "delivery.test", "测试通知"],
+      ["#pause-btn", "common.pause", "暂停"],
+      ['#mute-check [data-i18n-key="delivery.muteSchedule"]', "delivery.muteSchedule", "通知静音"],
+    ],
+    tabsLabel: "限时内容",
+    languageLabel: "显示语言",
+    rulePlaceholder: "规则名称 (R1)",
+  },
+} as const;
+
+for (const [locale, golden] of Object.entries(localeGoldens)) {
+  test("RND-012 semantic DOM golden " + locale, async ({ page }) => {
+    await page.setViewportSize({ width: 720, height: 480 });
+    await bootConsole(page, { locale: locale as "ja" | "en" | "zh-Hans" });
+    await expect(page.locator("html")).toHaveAttribute("lang", locale);
+    await expect(page.locator("#locale-select")).toHaveValue(locale);
+
+    for (const [selector, key, expectedText] of golden.text) {
+      const node = page.locator(selector);
+      await expect(node).toHaveAttribute("data-i18n-key", key);
+      await expect(node).toHaveText(expectedText);
+    }
+    await expect(page.locator("#content-tabs")).toHaveAttribute("data-i18n-aria-label-key", "tabs.label");
+    await expect(page.locator("#content-tabs")).toHaveAttribute("aria-label", golden.tabsLabel);
+    await expect(page.locator("#locale-select")).toHaveAttribute(
+      "data-i18n-aria-label-key",
+      "delivery.language",
+    );
+    await expect(page.locator("#locale-select")).toHaveAttribute("aria-label", golden.languageLabel);
+    await expect(page.locator("#rulename-input")).toHaveAttribute(
+      "data-i18n-placeholder-key",
+      "rules.namePlaceholder",
+    );
+    await expect(page.locator("#rulename-input")).toHaveAttribute("placeholder", golden.rulePlaceholder);
+    await expect(page.locator("[data-i18n-missing]")).toHaveCount(0);
+    expect(await page.locator("body").innerText()).not.toMatch(/\[\[[^\]]+\]\]/);
+
+    for (const width of [720, 950]) {
+      await page.setViewportSize({ width, height: 620 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      expect(await page.locator(".rail").evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
+      const tabLabelsFit = await page.locator('#content-tabs [role="tab"]').evaluateAll((tabs) =>
+        tabs.every((tab) => tab.scrollWidth <= tab.clientWidth),
+      );
+      expect(tabLabelsFit).toBe(true);
+    }
+  });
+}

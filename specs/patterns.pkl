@@ -135,6 +135,20 @@ class NotificationScopeChange extends Clause {
   label = "property-tested"
 }
 
+/// 日次通知ミュート区間はローカル時刻の分単位で[start, end)として評価する。
+/// start>endは日跨ぎ、start==endは安全側の空区間とし、全1440分で真理値を検査する。
+class DailyMuteWindow extends Clause {
+  pattern = "daily_mute_window"
+  label = "property-tested"
+}
+
+/// 起動時seedまたは通知ミュート中の候補は通知済みとしてmarkするが配送対象へ返さず、
+/// 通常配送へ戻したとき既存idを滞留通知せず、その後の新規idだけを返す。
+class MutedDelivery extends Clause {
+  pattern = "muted_delivery"
+  label = "property-tested"
+}
+
 /// 表示リストはフィルタ合致亀裂のみを含み(健全性)、
 /// 合致する亀裂を1件も取りこぼさない(完全性)
 class FilteredView extends Clause {
@@ -241,12 +255,18 @@ class RuleNotifyConfig extends Clause {
   label = "example-tested"
 }
 
+/// AppConfigへ後方互換に追加するlocaleと通知ミュート設定を具体例で検査する。
+class AppConfigCompat extends Clause {
+  pattern = "app_config_compat"
+  label = "example-tested"
+}
+
 /// 通知テストの結果表示・payload・raw dev時の案内を、固定した具体例で検証する。
 /// 外部OSへの実配送や人間による知覚はManualへ残す。
 class NotificationExample extends Clause {
   pattern = "notification_example"
   label = "example-tested"
-  scenario: "outcomes" | "desktop_payload" | "desktop_unavailable" | "discord_receipt"
+  scenario: "outcomes" | "desktop_payload" | "desktop_unavailable" | "discord_receipt" | "localized_backend"
 }
 
 /// リポジトリ内の静的成果物(設定ファイル・アイコン・配線)を生成テストで検査する。
@@ -254,7 +274,7 @@ class NotificationExample extends Clause {
 class StaticCheck extends Clause {
   pattern = "static_check"
   label = "example-tested"
-  scenario: "bundle_identity" | "tray_template_icon" | "autostart_bundle_icon"
+  scenario: "bundle_identity" | "tray_template_icon" | "autostart_bundle_icon" | "dependency_free_i18n"
 }
 
 /// 人間が一度目視承認したアセットをsha256で固定する。
@@ -282,7 +302,7 @@ class RendererGlyphs extends Clause {
 class RendererScenario extends Clause {
   pattern = "renderer_scenario"
   label = "example-tested"
-  scenario: "palette_keyboard" | "delivery_flush" | "rule_row_controls" | "sidebar_fit" | "compact_table" | "expiry_cleanup" | "rule_naming" | "table_sort" | "unselected_picker_create"
+  scenario: "palette_keyboard" | "delivery_flush" | "rule_row_controls" | "sidebar_fit" | "compact_table" | "expiry_cleanup" | "rule_naming" | "table_sort" | "unselected_picker_create" | "content_tabs" | "mute_window" | "locale_display"
 }
 
 /// 実アプリ(実IPC・実WKWebView)を通すWDIO Tauri E2E。renderer統合(RendererScenario)が
@@ -291,7 +311,7 @@ class RendererScenario extends Clause {
 class E2eScenario extends Clause {
   pattern = "e2e_scenario"
   label = "example-tested"
-  scenario: "palette_apply_ipc" | "delivery_error_surface"
+  scenario: "palette_apply_ipc" | "delivery_error_surface" | "locale_config_roundtrip"
 }
 
 /// 機械検証しない残余。手動確認手順をSPEC.mdに列挙する

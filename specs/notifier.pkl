@@ -116,7 +116,15 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.NotificationScopeChange {
     id = "POL-003"
-    desc = "初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない"
+    desc = "初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定・通知ミュート時間・表示言語だけの変更では再seedしない"
+  }
+  new patterns.DailyMuteWindow {
+    id = "MUT-001"
+    desc = "有効な日次通知ミュート区間はシステムローカル時刻の分単位で[start, end)として判定する。start<endは同日区間、start>endは日跨ぎ区間、start==endは誤って終日停止しない空区間であり、負数を含む無効設定と範囲外の分値もミュートしない。この真理値は1日の全1440分で成立する"
+  }
+  new patterns.MutedDelivery {
+    id = "MUT-002"
+    desc = "起動直後のseed中または通知ミュート中に観測した合致亀裂は通知済みidとしてmarkするが配送対象を1件も返さない。通常配送へ戻しても同じidを滞留通知せず、その後に現れた新規idだけを1回返す。配送判定はHTTP取得開始時ではなく取得後の最新設定を使い、ミュート・一時停止・表示言語の変更を次の配送前へ反映する。ミュートは一覧・通知候補・next表示を変えず、明示操作のTEST DELIVERYには適用しない"
   }
   new patterns.NotifyCandidates {
     id = "NTY-001"
@@ -182,6 +190,10 @@ clauses: Listing<patterns.Clause> = new {
     id = "CFG-004"
     desc = "WatchRuleのnotifyはenabledから独立した通知参加フラグで、notifyを持たない旧JSONは旧enabled値(それも欠落ならtrue)を引き継ぐ。明示したnotify=true/falseはenabledの値に関係なくserialize/deserializeを往復しても保持される"
   }
+  new patterns.AppConfigCompat {
+    id = "CFG-005"
+    desc = "AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない"
+  }
   new patterns.NotificationExample {
     id = "NTF-001"
     desc = "通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する"
@@ -202,6 +214,11 @@ clauses: Listing<patterns.Clause> = new {
     desc = "Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する"
     scenario = "discord_receipt"
   }
+  new patterns.NotificationExample {
+    id = "NTF-005"
+    desc = "ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する"
+    scenario = "localized_backend"
+  }
   new patterns.StaticCheck {
     id = "STA-001"
     desc = "配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない"
@@ -216,6 +233,11 @@ clauses: Listing<patterns.Clause> = new {
     id = "STA-003"
     desc = "macOS AUTOSTARTは内部のUnix実行ファイルをLaunchAgent登録せず、アプリアイコンを保持するAppleScript Login Itemとして.app bundleを登録し、旧relico.plistを一度だけ移行する配線を持つ"
     scenario = "autostart_bundle_icon"
+  }
+  new patterns.StaticCheck {
+    id = "STA-004"
+    desc = "i18n専用の外部ライブラリを追加せず、TS/Rustの自前lookup・placeholder実装が同じsrc/locales.jsonを直接読む。TSのi18n moduleは相対importだけ、Rustは標準ライブラリ・crate内module・既存の汎用serde_json以外の外部crateを使わない"
+    scenario = "dependency_free_i18n"
   }
   new patterns.ApprovedAsset {
     id = "AST-001"
@@ -241,7 +263,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-001"
-    desc = "パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)。一覧画面のSpaceはパレットを開かずに編集中ルールの表示選択(enabled)をトグルし(action:toggle-rule)、一覧画面の↑/↓はedit focusを前後のルールへ巡回移動し、Cmd/Ctrl+1..9は対応indexのルールへedit focusを移す(パレット表示中も有効。フォーカス移動は設定を変更しない)。IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力でき、DESELECT ALL RULES候補は全表示選択を解除して通知参加を変えない(renderer統合)"
+    desc = "パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)。一覧画面のSpaceはパレットを開かずに編集中ルールの表示選択(enabled)をトグルし(action:toggle-rule)、一覧画面の↑/↓はedit focusを前後のルールへ巡回移動し、Ctrl+1..9は対応indexのルールへedit focusを移す(パレット表示中も有効。フォーカス移動は設定を変更しない)。Cmd+1..7はコンテンツタブ専用でルールを変更せず、Cmd+8/9はアプリが奪わない。IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力でき、DESELECT ALL RULES候補は全表示選択を解除して通知参加を変えない(renderer統合)"
     scenario = "palette_keyboard"
   }
   new patterns.RendererScenario {
@@ -284,6 +306,21 @@ clauses: Listing<patterns.Clause> = new {
     desc = "VIEW選択0本からピッカーでfilter候補を適用すると既存ルールを変更せずVIEW ON・NOTIFY OFFの新ルールを作り、edit focusを新ルールへ移す。NEW RULE適用中に別のfilter候補を素早く確定しても操作を直列化し、旧edit対象を変更せず同じ新ルールへ適用する(renderer統合)"
     scenario = "unselected_picker_create"
   }
+  new patterns.RendererScenario {
+    id = "RND-010"
+    desc = "コンテンツ領域は公開データから実内容を取得できるfissures/sortie/archon/syndicates/area-missions/archimedea/descendiaの7タブをこの順で持ち、英語表示はFissures/Sortie/Archon Hunt/Syndicates/Area Missions/Archimedea/Descendiaとなる。実内容を取得できないarbitration/netracellsのtabとtabpanelは持たない。active tabと可視tabpanelは常に各1つで、Cmd+1..7は対応タブへ切替、Cmd+8/9はactive tabを変えずアプリが奪わない。Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持する(renderer統合)"
+    scenario = "content_tabs"
+  }
+  new patterns.RendererScenario {
+    id = "RND-011"
+    desc = "DELIVERYの通知ミュートUIはON/OFFと開始・終了時刻をAppConfig.notificationMute(enabled/startMinute/endMinute)へ保存し、backend snapshotのnotificationsMuted=trueを独自判定せず状態表示する。設定操作はルール・VIEW・NOTIFYを変えず、TEST DELIVERYはミュート表示中でも実行経路へ進む(renderer統合)"
+    scenario = "mute_window"
+  }
+  new patterns.RendererScenario {
+    id = "RND-012"
+    desc = "locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、本文・aria-label・placeholderの言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合)"
+    scenario = "locale_display"
+  }
   new patterns.E2eScenario {
     id = "E2E-001"
     desc = "実アプリでパレット打鍵→候補適用が本物のquery_candidates/apply_candidateを往復し、ルールsummaryとwatch行へ反映される(WDIO Tauri E2E、専用identity)"
@@ -293,6 +330,11 @@ clauses: Listing<patterns.Clause> = new {
     id = "E2E-002"
     desc = "実アプリで通知先を全て無効にしたTEST DELIVERYが、本物のset_config・test_notificationを通り、NTF-001の失敗理由(通知先なし)をrailへ表示する(WDIO Tauri E2E)"
     scenario = "delivery_error_surface"
+  }
+  new patterns.E2eScenario {
+    id = "E2E-003"
+    desc = "実アプリで表示言語をzh-Hansへ変更すると、本物のset_config完了後にhtml langとcritical UIが切り替わり、再読込後も実get_configからzh-Hansが復元される(WDIO Tauri E2E)"
+    scenario = "locale_config_roundtrip"
   }
   new patterns.Manual {
     id = "MAN-001"
@@ -353,5 +395,10 @@ clauses: Listing<patterns.Clause> = new {
     id = "MAN-011"
     desc = "compact表示が実データで読みやすく、VoiceOverでtable semanticsが自然に読み上げられる"
     procedure = "リリース前に、実データ(実ワールドステート)で狭幅表示の情報密度と読みやすさを目視し、WKWebView/VoiceOverでtable semantics(7項目の見出しと値)が自然に読み上げられることを確認する。1段/2段の切替幅・横スクロール禁止・MODE/STORM独立・ellipsis時の全文とtooltip保持・empty row全幅・stickyヘッダ・th[scope=col]はRND-005で機械検証済み。"
+  }
+  new patterns.Manual {
+    id = "MAN-012"
+    desc = "7つの時限コンテンツ表示は公開worldstateから実内容を取得できるものだけを扱い、取得経路の部分障害や個人進捗の非公開性をもっともらしい推測値で埋めない"
+    procedure = "リリース前に実データで確認する。1) 亀裂、ソーティー、アルコン、シンジケート、地位ミッション、アルキメデアはWFCD worldstate、DescendiaはDE公式worldState.phpのDescentsに由来し、片方の取得失敗でも他方と亀裂通知は更新を続け、最後の有効snapshotと取得エラーを区別して表示する。2) 現行公開sourceがSolNode000/Unknown/1970等の無効sentinelしか返さない仲裁と、実ミッションfieldを持たないネットセルはtab・tabpanel・合成カードを設けない。3) アルキメデア、Descendiaの公開データにない個人の残り回数・クリア階・獲得報酬を推測せず、公開ミッション情報とゲーム内確認案内だけを表示する。schema変化はtimed moduleのfixture testで検知し、安定した公開sourceまたは認証済みプレイヤーAPIが利用可能になったときに再検討する。"
   }
 }

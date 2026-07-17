@@ -13,10 +13,12 @@ pub mod commands;
 pub mod config;
 pub mod dedup;
 pub mod filter;
+pub mod i18n;
 pub mod model;
 pub mod notify;
 pub mod palette;
 pub mod poller;
+pub mod timed;
 
 use commands::AppState;
 use config::AppConfig;
@@ -28,29 +30,50 @@ pub struct TrayHandles {
     pub watch: MenuItem<Wry>,
     pub next: MenuItem<Wry>,
     pub pause: MenuItem<Wry>,
+    pub open: MenuItem<Wry>,
+    pub quit: MenuItem<Wry>,
 }
 
 pub fn watch_line(cfg: &AppConfig) -> String {
     let notifying: Vec<_> = cfg.rules.iter().filter(|rule| rule.notify).collect();
     match notifying.len() {
-        0 => "WATCH: NO NOTIFICATION RULES".to_string(),
-        1 if cfg.rules.len() == 1 => {
-            format!("WATCH: {}", palette::rule_summary(notifying[0]))
+        0 => i18n::text(cfg.locale, "tray.watchNone"),
+        1 if cfg.rules.len() == 1 => i18n::format(
+            cfg.locale,
+            "tray.watchRule",
+            &[("rule", &i18n::rule_summary(cfg.locale, notifying[0]))],
+        ),
+        n if n == cfg.rules.len() => {
+            let count = n.to_string();
+            i18n::format(cfg.locale, "tray.watchCount", &[("count", &count)])
         }
-        n if n == cfg.rules.len() => format!("WATCH: {n} RULES"),
-        n => format!("WATCH: {n}/{} RULES", cfg.rules.len()),
+        n => {
+            let current = n.to_string();
+            let total = cfg.rules.len().to_string();
+            i18n::format(
+                cfg.locale,
+                "tray.watchPartial",
+                &[("current", &current), ("total", &total)],
+            )
+        }
     }
 }
 
 fn next_line(cfg: &AppConfig, snap: &StatusSnapshot) -> String {
     if !cfg.rules.iter().any(|rule| rule.notify) {
-        return "NEXT: --".to_string();
+        return i18n::text(cfg.locale, "tray.nextNone");
     }
     // 表示一覧とは別に保持した通知scope側の先頭を使う。SPEC: NTY-001
     snap.next_notification
         .as_ref()
-        .map(|f| format!("NEXT: {} {}", f.tier.to_uppercase(), f.node))
-        .unwrap_or_else(|| "NEXT: --".to_string())
+        .map(|f| {
+            i18n::format(
+                cfg.locale,
+                "tray.next",
+                &[("tier", &f.tier.to_uppercase()), ("node", &f.node)],
+            )
+        })
+        .unwrap_or_else(|| i18n::text(cfg.locale, "tray.nextNone"))
 }
 
 /// メニュー操作はmacOSではメインスレッド限定のため、run_on_main_thread経由で更新する
@@ -59,20 +82,26 @@ pub fn update_tray(app: &AppHandle, cfg: &AppConfig, snap: &StatusSnapshot) {
     let next = next_line(cfg, snap);
     let paused = cfg.paused;
     let api_ok = snap.api_ok;
+    let locale = cfg.locale;
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Some(h) = app2.try_state::<TrayHandles>() {
             let _ = h.watch.set_text(&watch);
             let _ = h.next.set_text(&next);
-            let _ = h.pause.set_text(if paused { "RESUME" } else { "PAUSE" });
+            let _ = h.pause.set_text(i18n::text(
+                locale,
+                if paused { "tray.resume" } else { "tray.pause" },
+            ));
+            let _ = h.open.set_text(i18n::text(locale, "tray.open"));
+            let _ = h.quit.set_text(i18n::text(locale, "tray.quit"));
         }
         if let Some(tray) = app2.tray_by_id("main") {
             let state = if paused {
-                "PAUSED"
+                i18n::text(locale, "tray.paused")
             } else if api_ok {
-                "API OK"
+                i18n::text(locale, "tray.apiOk")
             } else {
-                "API ERR"
+                i18n::text(locale, "tray.apiError")
             };
             let _ = tray.set_tooltip(Some(format!("RELICO — {state} — {watch}")));
         }
@@ -163,9 +192,10 @@ pub fn run() {
 
             let cfg = AppConfig::load(&config_path);
             let (cfg_tx, cfg_rx) = watch::channel(cfg.clone());
-            let poller_state = Arc::new(Mutex::new(PollerState::new(NotifiedSet::load(
-                &notified_path,
-            ))));
+            let poller_state = Arc::new(Mutex::new(PollerState::new(
+                NotifiedSet::load(&notified_path),
+                &cfg,
+            )));
 
             app.manage(AppState {
                 cfg_tx,
@@ -176,16 +206,41 @@ pub fn run() {
 
             let watch_item =
                 MenuItem::with_id(app, "watch", watch_line(&cfg), false, None::<&str>)?;
-            let next_item = MenuItem::with_id(app, "next", "NEXT: --", false, None::<&str>)?;
+            let next_item = MenuItem::with_id(
+                app,
+                "next",
+                i18n::text(cfg.locale, "tray.nextNone"),
+                false,
+                None::<&str>,
+            )?;
             let pause_item = MenuItem::with_id(
                 app,
                 "pause",
-                if cfg.paused { "RESUME" } else { "PAUSE" },
+                i18n::text(
+                    cfg.locale,
+                    if cfg.paused {
+                        "tray.resume"
+                    } else {
+                        "tray.pause"
+                    },
+                ),
                 true,
                 None::<&str>,
             )?;
-            let open = MenuItem::with_id(app, "open", "OPEN CONSOLE", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "QUIT", true, None::<&str>)?;
+            let open = MenuItem::with_id(
+                app,
+                "open",
+                i18n::text(cfg.locale, "tray.open"),
+                true,
+                None::<&str>,
+            )?;
+            let quit = MenuItem::with_id(
+                app,
+                "quit",
+                i18n::text(cfg.locale, "tray.quit"),
+                true,
+                None::<&str>,
+            )?;
             let menu = Menu::with_items(
                 app,
                 &[
@@ -202,6 +257,8 @@ pub fn run() {
                 watch: watch_item,
                 next: next_item,
                 pause: pause_item,
+                open,
+                quit,
             });
 
             #[cfg(target_os = "macos")]
@@ -224,6 +281,7 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            tauri::async_runtime::spawn(timed::run(app.handle().clone(), poller_state.clone()));
             tauri::async_runtime::spawn(poller::run(
                 app.handle().clone(),
                 cfg_rx,

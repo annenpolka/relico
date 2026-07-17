@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, AppLocale};
+use crate::i18n;
 use crate::model::Fissure;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,12 +28,16 @@ pub enum NotificationOutcome {
 }
 
 pub fn title_for(fissure: &Fissure) -> String {
+    title_for_locale(fissure, AppLocale::Ja)
+}
+
+pub fn title_for_locale(fissure: &Fissure, locale: AppLocale) -> String {
     let mut title = format!(
         "{} {} — {}",
         fissure.tier, fissure.mission_type, fissure.node
     );
     if fissure.is_hard {
-        title.push_str(" 【鋼】");
+        title.push_str(&format!(" 【{}】", i18n::text(locale, "notify.hard")));
     }
     if fissure.is_storm {
         title.push_str(" [STORM]");
@@ -42,28 +47,52 @@ pub fn title_for(fissure: &Fissure) -> String {
 
 /// 現在時刻を呼出側から受け取り、同じinstantで残り時間を組み立てる。
 pub fn desktop_payload(fissure: &Fissure, now: DateTime<Utc>) -> DesktopPayload {
+    desktop_payload_for_locale(fissure, now, AppLocale::Ja)
+}
+
+pub fn desktop_payload_for_locale(
+    fissure: &Fissure,
+    now: DateTime<Utc>,
+    locale: AppLocale,
+) -> DesktopPayload {
     let remaining_min = fissure
         .expiry
         .signed_duration_since(now)
         .num_minutes()
         .max(0);
     DesktopPayload {
-        title: title_for(fissure),
-        body: format!("{} / 消滅まで残り{}分", fissure.enemy, remaining_min),
+        title: title_for_locale(fissure, locale),
+        body: i18n::format(
+            locale,
+            "notify.remaining",
+            &[
+                ("faction", &fissure.enemy),
+                ("minutes", &remaining_min.to_string()),
+            ],
+        ),
     }
 }
 
 pub fn desktop_unavailable_message(detail: &str) -> String {
-    format!(
-        "デスクトップ通知を利用できません: {detail}。rawの `just dev` にはRELICOのbundle identityがないため、`just notification-test` でデバッグbundle .appを起動してください"
-    )
+    desktop_unavailable_message_for_locale(detail, AppLocale::Ja)
+}
+
+pub fn desktop_unavailable_message_for_locale(detail: &str, locale: AppLocale) -> String {
+    i18n::format(locale, "notify.desktopUnavailable", &[("detail", detail)])
 }
 
 /// TESTの結果は「OS/HTTPが要求を受け付けた」範囲だけを報告する。
 /// 一部成功があっても、選択先に1件でも失敗があればコマンド全体は失敗とする。
 pub fn summarize_test_outcomes(outcomes: &[NotificationOutcome]) -> Result<String, String> {
+    summarize_test_outcomes_for_locale(outcomes, AppLocale::Ja)
+}
+
+pub fn summarize_test_outcomes_for_locale(
+    outcomes: &[NotificationOutcome],
+    locale: AppLocale,
+) -> Result<String, String> {
     if outcomes.is_empty() {
-        return Err("通知先が1つも有効になっていない".to_string());
+        return Err(i18n::text(locale, "notify.noDestination"));
     }
 
     let mut requested = Vec::new();
@@ -79,69 +108,92 @@ pub fn summarize_test_outcomes(outcomes: &[NotificationOutcome]) -> Result<Strin
     }
 
     if failed.is_empty() {
-        Ok(format!(
-            "通知要求を受け付けました: {}",
-            requested.join(" + ")
+        Ok(i18n::format(
+            locale,
+            "notify.requested",
+            &[("destinations", &requested.join(" + "))],
         ))
     } else {
-        let mut message = format!("通知要求に失敗: {}", failed.join(" / "));
+        let mut message = i18n::format(
+            locale,
+            "notify.failed",
+            &[("failures", &failed.join(" / "))],
+        );
         if !requested.is_empty() {
-            message.push_str(&format!("; 要求受付済み: {}", requested.join(" + ")));
+            message.push_str("; ");
+            message.push_str(&i18n::format(
+                locale,
+                "notify.partial",
+                &[("destinations", &requested.join(" + "))],
+            ));
         }
         Err(message)
     }
 }
 
-#[cfg(target_os = "macos")]
 pub async fn desktop(
     fissure: &Fissure,
     now: DateTime<Utc>,
     interactive: bool,
+) -> Result<DesktopReceipt, String> {
+    desktop_for_locale(fissure, now, interactive, AppLocale::Ja).await
+}
+
+#[cfg(target_os = "macos")]
+pub async fn desktop_for_locale(
+    fissure: &Fissure,
+    now: DateTime<Utc>,
+    interactive: bool,
+    locale: AppLocale,
 ) -> Result<DesktopReceipt, String> {
     use mac_usernotifications::{
         check_bundle, get_notification_settings, request_auth, AuthorizationStatus, Notification,
         NotificationSettingStatus,
     };
 
-    check_bundle().map_err(|error| desktop_unavailable_message(&error.to_string()))?;
+    check_bundle()
+        .map_err(|error| desktop_unavailable_message_for_locale(&error.to_string(), locale))?;
 
-    let mut settings = get_notification_settings()
-        .await
-        .map_err(|error| format!("macOS通知設定の取得に失敗: {error}"))?;
+    let mut settings = get_notification_settings().await.map_err(|error| {
+        i18n::format(
+            locale,
+            "notify.settingsReadFailed",
+            &[("error", &error.to_string())],
+        )
+    })?;
 
     if settings.authorization_status == AuthorizationStatus::NotDetermined {
         if !interactive {
-            return Err(
-                "macOSの通知権限が未設定です。RELICOを開いてTESTを押し、権限を選択してください"
-                    .to_string(),
-            );
+            return Err(i18n::text(locale, "notify.permissionNotDetermined"));
         }
-        let granted = request_auth()
-            .await
-            .map_err(|error| format!("macOS通知権限の要求に失敗: {error}"))?;
+        let granted = request_auth().await.map_err(|error| {
+            i18n::format(
+                locale,
+                "notify.permissionRequestFailed",
+                &[("error", &error.to_string())],
+            )
+        })?;
         if !granted {
-            return Err(
-                "macOSの通知権限が許可されませんでした。システム設定 > 通知 > RELICOを確認してください"
-                    .to_string(),
-            );
+            return Err(i18n::text(locale, "notify.permissionNotGranted"));
         }
-        settings = get_notification_settings()
-            .await
-            .map_err(|error| format!("権限要求後のmacOS通知設定取得に失敗: {error}"))?;
+        settings = get_notification_settings().await.map_err(|error| {
+            i18n::format(
+                locale,
+                "notify.settingsRereadFailed",
+                &[("error", &error.to_string())],
+            )
+        })?;
     }
 
     match settings.authorization_status {
         AuthorizationStatus::Denied => {
-            return Err(
-                "macOSの通知権限が拒否されています。システム設定 > 通知 > RELICOで許可してください"
-                    .to_string(),
-            );
+            return Err(i18n::text(locale, "notify.permissionDenied"));
         }
         AuthorizationStatus::NotDetermined => {
-            return Err("macOSの通知権限が未確定のままです".to_string());
+            return Err(i18n::text(locale, "notify.permissionUndetermined"));
         }
         AuthorizationStatus::Unknown => {
-            return Err("macOSから未知の通知権限状態が返されました".to_string());
+            return Err(i18n::text(locale, "notify.permissionUnknown"));
         }
         AuthorizationStatus::Authorized
         | AuthorizationStatus::Provisional
@@ -151,21 +203,18 @@ pub async fn desktop(
     if settings.alert_enabled == NotificationSettingStatus::Disabled
         && settings.notification_center_enabled == NotificationSettingStatus::Disabled
     {
-        return Err(
-            "macOSでバナーと通知センターが両方無効です。システム設定 > 通知 > RELICOを確認してください"
-                .to_string(),
-        );
+        return Err(i18n::text(locale, "notify.alertsDisabled"));
     }
 
     let warning = if settings.authorization_status == AuthorizationStatus::Provisional {
-        Some("macOSは暫定許可のため、通知は目立たない形で届く可能性があります".to_string())
+        Some(i18n::text(locale, "notify.provisionalWarning"))
     } else if settings.alert_enabled == NotificationSettingStatus::Disabled {
-        Some("macOSのバナー表示は無効です（通知センターへの登録のみ）".to_string())
+        Some(i18n::text(locale, "notify.bannerDisabledWarning"))
     } else {
         None
     };
 
-    let payload = desktop_payload(fissure, now);
+    let payload = desktop_payload_for_locale(fissure, now, locale);
     let handle = Notification::new()
         .id(&format!("relico-{}", fissure.id))
         .title(payload.title)
@@ -173,7 +222,13 @@ pub async fn desktop(
         .default_sound()
         .send()
         .await
-        .map_err(|error| format!("macOSが通知要求を拒否: {error}"))?;
+        .map_err(|error| {
+            i18n::format(
+                locale,
+                "notify.requestRejected",
+                &[("error", &error.to_string())],
+            )
+        })?;
 
     Ok(DesktopReceipt {
         request_id: handle.notification_id().to_string(),
@@ -182,17 +237,30 @@ pub async fn desktop(
 }
 
 #[cfg(not(target_os = "macos"))]
-pub async fn desktop(
+pub async fn desktop_for_locale(
     _fissure: &Fissure,
     _now: DateTime<Utc>,
     _interactive: bool,
+    locale: AppLocale,
 ) -> Result<DesktopReceipt, String> {
-    Err("デスクトップ通知は現在macOSだけに対応しています".to_string())
+    Err(i18n::text(locale, "notify.desktopUnsupported"))
 }
 
 pub fn discord_request_url(webhook_url: &str) -> Result<reqwest::Url, String> {
-    let mut url = reqwest::Url::parse(webhook_url)
-        .map_err(|error| format!("Discord Webhook URLが不正です: {error}"))?;
+    discord_request_url_for_locale(webhook_url, AppLocale::Ja)
+}
+
+pub fn discord_request_url_for_locale(
+    webhook_url: &str,
+    locale: AppLocale,
+) -> Result<reqwest::Url, String> {
+    let mut url = reqwest::Url::parse(webhook_url).map_err(|error| {
+        i18n::format(
+            locale,
+            "notify.webhookInvalid",
+            &[("error", &error.to_string())],
+        )
+    })?;
     let pairs: Vec<(String, String)> = url
         .query_pairs()
         .filter(|(key, _)| key != "wait")
@@ -217,10 +285,17 @@ struct DiscordMessageReceipt {
 }
 
 pub fn discord_message_id(response_body: &str) -> Result<String, String> {
+    discord_message_id_for_locale(response_body, AppLocale::Ja)
+}
+
+pub fn discord_message_id_for_locale(
+    response_body: &str,
+    locale: AppLocale,
+) -> Result<String, String> {
     let receipt: DiscordMessageReceipt = serde_json::from_str(response_body)
-        .map_err(|_| "Discord応答にMessage IDがありません".to_string())?;
+        .map_err(|_| i18n::text(locale, "notify.discordMissingId"))?;
     if receipt.id.trim().is_empty() {
-        return Err("Discordが空のMessage IDを返しました".to_string());
+        return Err(i18n::text(locale, "notify.discordEmptyId"));
     }
     Ok(receipt.id)
 }
@@ -230,22 +305,34 @@ pub async fn discord(
     webhook_url: &str,
     fissure: &Fissure,
 ) -> Result<String, String> {
+    discord_for_locale(client, webhook_url, fissure, AppLocale::Ja).await
+}
+
+pub async fn discord_for_locale(
+    client: &reqwest::Client,
+    webhook_url: &str,
+    fissure: &Fissure,
+    locale: AppLocale,
+) -> Result<String, String> {
     // 鋼は赤、通常はアンバー(OPS CONSOLEパレット)
     let color = if fissure.is_hard { 0xFF6B5E } else { 0xFFB454 };
     // <t:unix:R> はDiscordの動的タイムスタンプ。閲覧時点の相対時間で表示される
     let body = serde_json::json!({
         "embeds": [{
-            "title": title_for(fissure),
-            "description": format!(
-                "{} / 消滅 <t:{}:R>",
-                fissure.enemy,
-                fissure.expiry.timestamp()
+            "title": title_for_locale(fissure, locale),
+            "description": i18n::format(
+                locale,
+                "notify.discordExpiry",
+                &[
+                    ("faction", &fissure.enemy),
+                    ("timestamp", &format!("<t:{}:R>", fissure.expiry.timestamp())),
+                ],
             ),
             "color": color
         }]
     });
     let response = client
-        .post(discord_request_url(webhook_url)?)
+        .post(discord_request_url_for_locale(webhook_url, locale)?)
         .json(&body)
         .send()
         .await
@@ -253,7 +340,7 @@ pub async fn discord(
         .error_for_status()
         .map_err(sanitize_reqwest_error)?;
     let response_body = response.text().await.map_err(sanitize_reqwest_error)?;
-    discord_message_id(&response_body)
+    discord_message_id_for_locale(&response_body, locale)
 }
 
 /// 設定に応じてデスクトップ+Discordへ通知要求を出す。
@@ -261,7 +348,7 @@ pub async fn discord(
 pub async fn send(client: &reqwest::Client, cfg: &AppConfig, fissure: &Fissure) {
     let now = Utc::now();
     if cfg.desktop_notification {
-        match desktop(fissure, now, false).await {
+        match desktop_for_locale(fissure, now, false, cfg.locale).await {
             Ok(receipt) => {
                 if let Some(warning) = receipt.warning {
                     eprintln!("desktop notification warning: {warning}");
@@ -272,7 +359,7 @@ pub async fn send(client: &reqwest::Client, cfg: &AppConfig, fissure: &Fissure) 
     }
     if let Some(url) = cfg.discord_webhook_url.as_deref() {
         if !url.is_empty() {
-            if let Err(error) = discord(client, url, fissure).await {
+            if let Err(error) = discord_for_locale(client, url, fissure, cfg.locale).await {
                 eprintln!("discord webhook failed: {error}");
             }
         }
