@@ -56,6 +56,24 @@ pub fn http_client() -> reqwest::Client {
         .expect("http client")
 }
 
+/// 合致亀裂のうち未通知のものを記録し、通知対象を返す。
+/// seed_only(起動直後の初回ポーリング)では記録のみ行い、通知対象は常に空。SPEC: POL-002
+pub fn select_notifications(
+    notified: &mut NotifiedSet,
+    matching: Vec<Fissure>,
+    seed_only: bool,
+) -> Vec<Fissure> {
+    let fresh: Vec<Fissure> = matching
+        .into_iter()
+        .filter(|f| notified.mark(&f.id, f.expiry))
+        .collect();
+    if seed_only {
+        Vec::new()
+    } else {
+        fresh
+    }
+}
+
 /// 常駐ポーリングループ。設定変更(watch)で即時に再評価する
 pub async fn run(
     app: AppHandle,
@@ -65,6 +83,7 @@ pub async fn run(
 ) {
     let client = http_client();
     let mut backoff = Backoff::new(60, 600);
+    let mut seeded = false;
 
     loop {
         let cfg = cfg_rx.borrow().clone();
@@ -75,8 +94,9 @@ pub async fn run(
             });
             3600 // 再開はwatch変更で即起きる
         } else {
-            match poll_once(&app, &client, &cfg, &state, &notified_path).await {
+            match poll_once(&app, &client, &cfg, &state, &notified_path, !seeded).await {
                 Ok(()) => {
+                    seeded = true;
                     backoff.on_success();
                     cfg.effective_poll_secs()
                 }
@@ -111,6 +131,7 @@ async fn poll_once(
     cfg: &AppConfig,
     state: &Arc<Mutex<PollerState>>,
     notified_path: &PathBuf,
+    seed_only: bool,
 ) -> Result<(), String> {
     let fissures: Vec<Fissure> = client
         .get(API_URL)
@@ -130,12 +151,12 @@ async fn poll_once(
         let mut st = state.lock().expect("poller state");
         st.notified.prune(now);
 
-        let to_notify: Vec<Fissure> = fissures
+        let matching: Vec<Fissure> = fissures
             .iter()
             .filter(|f| filter::matches(&fcfg, f, now))
-            .filter(|f| st.notified.mark(&f.id, f.expiry))
             .cloned()
             .collect();
+        let to_notify = select_notifications(&mut st.notified, matching, seed_only);
 
         if let Err(e) = st.notified.save(notified_path) {
             eprintln!("notified set save failed: {e}");

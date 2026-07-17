@@ -10,6 +10,7 @@ use warframe_fissure_notifier_lib::backoff::Backoff;
 use warframe_fissure_notifier_lib::dedup::NotifiedSet;
 use warframe_fissure_notifier_lib::filter::{self, FilterConfig, Mode};
 use warframe_fissure_notifier_lib::model::Fissure;
+use warframe_fissure_notifier_lib::poller;
 
 const TIERS: &[&str] = &["Lith", "Meso", "Neo", "Axi", "Requiem", "Omnia"];
 const MISSIONS: &[&str] = &[
@@ -224,6 +225,17 @@ proptest! {
         for fail in ops {
             let v = if fail { b.on_failure() } else { b.on_success() };
             prop_assert!((60..=600).contains(&v), "SPEC POL-001 違反: APIバックオフの遅延は失敗・成功がどう並んでも常に[60s, 600s]に収まる (v={})", v);
+        }
+    }
+
+    /// POL-002: 起動直後の初回ポーリングはシードのみ: 既存の合致亀裂を通知済みとして記録するが、通知は1件も発火しない(起動時の通知洪水を防ぐ)
+    #[test]
+    fn pol_002(fs in proptest::collection::vec(arb_fissure(), 0..30)) {
+        let mut set = NotifiedSet::new();
+        let out = poller::select_notifications(&mut set, fs.clone(), true);
+        prop_assert!(out.is_empty(), "SPEC POL-002 違反: 起動直後の初回ポーリングはシードのみ: 既存の合致亀裂を通知済みとして記録するが、通知は1件も発火しない(起動時の通知洪水を防ぐ) (通知が発火した)");
+        for f in &fs {
+            prop_assert!(set.contains(&f.id), "SPEC POL-002 違反: 起動直後の初回ポーリングはシードのみ: 既存の合致亀裂を通知済みとして記録するが、通知は1件も発火しない(起動時の通知洪水を防ぐ) (シードされていないidがある)");
         }
     }
 }

@@ -64,6 +64,13 @@ class Bounded extends Clause {
   maxSecs: Int
 }
 
+/// シードモード(起動直後の初回ポーリング)では、合致亀裂を通知済みとして
+/// 記録するだけで、通知対象には1件も選ばれない
+class SeedSilent extends Clause {
+  pattern = "seed_silent"
+  label = "property-tested"
+}
+
 /// 機械検証しない残余。手動確認手順をSPEC.mdに列挙する
 class Manual extends Clause {
   pattern = "manual"

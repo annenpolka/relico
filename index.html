@@ -1,43 +1,66 @@
 <!doctype html>
-<html lang="en">
+<html lang="ja">
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
+    <title>FISSURE OPS — PC WORLDSTATE</title>
     <script type="module" src="/src/main.ts" defer></script>
   </head>
 
   <body>
-    <main class="container">
-      <h1>Welcome to Tauri</h1>
+    <main class="console">
+      <section class="tablewrap">
+        <table>
+          <thead>
+            <tr>
+              <th>TIER</th>
+              <th>NODE</th>
+              <th>MISSION</th>
+              <th>FACTION</th>
+              <th>T-REMAIN</th>
+              <th>FLAGS</th>
+            </tr>
+          </thead>
+          <tbody id="fissure-rows">
+            <tr><td colspan="6" class="empty">WAITING FOR WORLDSTATE…</td></tr>
+          </tbody>
+        </table>
+      </section>
 
-      <div class="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/src/assets/vite.svg" class="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img
-            src="/src/assets/tauri.svg"
-            class="logo tauri"
-            alt="Tauri logo"
-          />
-        </a>
-        <a href="https://www.typescriptlang.org/docs" target="_blank">
-          <img
-            src="/src/assets/typescript.svg"
-            class="logo typescript"
-            alt="typescript logo"
-          />
-        </a>
-      </div>
-      <p>Click on the Tauri logo to learn more about the framework</p>
+      <aside class="rail">
+        <h3>TIER FILTER</h3>
+        <div id="tier-checks"></div>
+        <hr />
+        <h3>MODE</h3>
+        <div id="mode-checks"></div>
+        <button class="check" id="storm-check"><span class="box">[ ]</span> INCL. STORMS</button>
+        <hr />
+        <h3>MISSION</h3>
+        <div id="mission-checks" class="scrolllist"></div>
+        <hr />
+        <h3>PLANET</h3>
+        <div id="planet-checks" class="scrolllist"></div>
+        <hr />
+        <h3>NOTIFY</h3>
+        <button class="check" id="desktop-check"><span class="box">[x]</span> DESKTOP</button>
+        <input id="webhook-input" type="text" placeholder="DISCORD WEBHOOK URL" spellcheck="false" />
+        <div class="rowbtns">
+          <button id="test-btn" class="action">TEST</button>
+          <button id="pause-btn" class="action">PAUSE</button>
+        </div>
+        <div class="kv"><span>MIN-REMAIN</span><input id="minremain-input" type="number" min="0" step="60" /></div>
+        <div class="kv"><span>POLL SECS</span><input id="poll-input" type="number" min="30" step="10" /></div>
+        <p id="rail-msg"></p>
+      </aside>
 
-      <form class="row" id="greet-form">
-        <input id="greet-input" placeholder="Enter a name..." />
-        <button type="submit">Greet</button>
-      </form>
-      <p id="greet-msg"></p>
+      <footer class="statusbar">
+        <span id="sb-poll">POLL --s</span>
+        <span id="sb-api">API --</span>
+        <span id="sb-next">NEXT REFRESH --s</span>
+        <span id="sb-notified">NOTIFIED TODAY: 0</span>
+        <span id="sb-watch" class="grow"></span>
+      </footer>
     </main>
   </body>
 </html>

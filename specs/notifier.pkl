@@ -67,6 +67,10 @@ clauses: Listing<patterns.Clause> = new {
     minSecs = 60
     maxSecs = 600
   }
+  new patterns.SeedSilent {
+    id = "POL-002"
+    desc = "起動直後の初回ポーリングはシードのみ: 既存の合致亀裂を通知済みとして記録するが、通知は1件も発火しない(起動時の通知洪水を防ぐ)"
+  }
   new patterns.Manual {
     id = "MAN-001"
     desc = "デスクトップ通知がmacOS通知センターに実際に表示される"

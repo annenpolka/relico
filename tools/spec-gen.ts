@@ -135,6 +135,18 @@ ${indent(c.fissureOverride ?? "", 8)}
             prop_assert!((${c.minSecs}..=${c.maxSecs}).contains(&v), "${msg} (v={})", v);
         }
     }`;
+    case "seed_silent":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(fs in proptest::collection::vec(arb_fissure(), 0..30)) {
+        let mut set = NotifiedSet::new();
+        let out = poller::select_notifications(&mut set, fs.clone(), true);
+        prop_assert!(out.is_empty(), "${msg} (通知が発火した)");
+        for f in &fs {
+            prop_assert!(set.contains(&f.id), "${msg} (シードされていないidがある)");
+        }
+    }`;
     case "manual":
       return ""; // 機械検証なし。SPEC.mdのみ
     default:
@@ -156,6 +168,7 @@ use warframe_fissure_notifier_lib::backoff::Backoff;
 use warframe_fissure_notifier_lib::dedup::NotifiedSet;
 use warframe_fissure_notifier_lib::filter::{self, FilterConfig, Mode};
 use warframe_fissure_notifier_lib::model::Fissure;
+use warframe_fissure_notifier_lib::poller;
 
 const TIERS: &[&str] = &["Lith", "Meso", "Neo", "Axi", "Requiem", "Omnia"];
 const MISSIONS: &[&str] = &[
