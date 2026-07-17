@@ -1,13 +1,25 @@
+use std::sync::{Arc, Mutex};
+
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     Manager, WindowEvent,
 };
+use tokio::sync::watch;
 
 pub mod backoff;
+pub mod commands;
+pub mod config;
 pub mod dedup;
 pub mod filter;
 pub mod model;
+pub mod notify;
+pub mod poller;
+
+use commands::AppState;
+use config::AppConfig;
+use dedup::NotifiedSet;
+use poller::PollerState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,6 +29,30 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            let config_dir = app.path().app_config_dir()?;
+            let config_path = config_dir.join("config.json");
+            let notified_path = config_dir.join("notified.json");
+
+            let cfg = AppConfig::load(&config_path);
+            let (cfg_tx, cfg_rx) = watch::channel(cfg);
+            let poller_state = Arc::new(Mutex::new(PollerState::new(NotifiedSet::load(
+                &notified_path,
+            ))));
+
+            app.manage(AppState {
+                cfg_tx,
+                poller: poller_state.clone(),
+                config_path,
+                client: poller::http_client(),
+            });
+
+            tauri::async_runtime::spawn(poller::run(
+                app.handle().clone(),
+                cfg_rx,
+                poller_state,
+                notified_path,
+            ));
 
             let open = MenuItem::with_id(app, "open", "OPEN CONSOLE", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "QUIT", true, None::<&str>)?;
@@ -45,7 +81,12 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![])
+        .invoke_handler(tauri::generate_handler![
+            commands::get_config,
+            commands::set_config,
+            commands::get_status,
+            commands::test_notification
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

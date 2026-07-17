@@ -15,13 +15,15 @@ impl Backoff {
         }
     }
 
-    /// 失敗時: 次の遅延(秒)を返す。倍々でmaxまで
+    /// 失敗時: 次の遅延(秒)を返す。倍々でmaxまで。SPEC: POL-001
     pub fn on_failure(&mut self) -> u64 {
-        todo!("SPEC: POL-001")
+        self.current = self.current.saturating_mul(2).min(self.max);
+        self.current
     }
 
-    /// 成功時: baseにリセットして返す
+    /// 成功時: baseにリセットして返す。SPEC: POL-001
     pub fn on_success(&mut self) -> u64 {
-        todo!("SPEC: POL-001")
+        self.current = self.base;
+        self.current
     }
 }
