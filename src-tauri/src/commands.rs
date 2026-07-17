@@ -36,7 +36,7 @@ pub fn set_config(app: AppHandle, state: State<AppState>, config: AppConfig) -> 
     persist(&app, &state, config)
 }
 
-/// パレット候補のビュー(on状態は編集中ルール基準。runtime enabledとは独立)
+/// パレット候補のビュー(on状態は編集中ルール基準。表示選択・通知参加とは独立)
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CandView {
@@ -52,7 +52,7 @@ pub struct CandView {
 pub fn query_candidates(state: State<AppState>, q: String, active: usize) -> Vec<CandView> {
     let cfg = state.cfg_tx.borrow().clone();
     let rule = cfg.rules.get(active.min(cfg.rules.len().saturating_sub(1)));
-    let catalog = palette::catalog();
+    let catalog = palette::catalog_with_rules(&cfg.rules);
     palette::query_catalog(&catalog, &q)
         .into_iter()
         .map(|r| {
@@ -78,6 +78,13 @@ pub fn query_candidates(state: State<AppState>, q: String, active: usize) -> Vec
                     )
                 }),
                 Facet::Action => c.value == "pause" && cfg.paused,
+                // RULE候補のonは対象ルールの一覧表示選択(編集中ルール基準ではない)
+                Facet::Rule => c
+                    .value
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|i| cfg.rules.get(i))
+                    .is_some_and(|r| r.enabled),
             };
             CandView {
                 id: c.id.clone(),
@@ -107,7 +114,7 @@ pub fn apply_candidate(
     active: usize,
 ) -> Result<ApplyResult, String> {
     let mut cfg = state.cfg_tx.borrow().clone();
-    let catalog = palette::catalog();
+    let catalog = palette::catalog_with_rules(&cfg.rules);
     let cand = catalog
         .iter()
         .find(|c| c.id == id)
@@ -146,7 +153,7 @@ pub fn clear_filter(app: AppHandle, state: State<AppState>) -> Result<AppConfig,
     Ok(cfg)
 }
 
-/// ルールの通知参加状態を保存する。編集フォーカスとは独立。SPEC: EDT-001
+/// ルールの一覧表示選択を保存する。通知参加・編集フォーカスとは独立。SPEC: EDT-001
 #[tauri::command]
 pub fn set_rule_enabled(
     app: AppHandle,
@@ -160,6 +167,27 @@ pub fn set_rule_enabled(
         active: index.min(cfg.rules.len().saturating_sub(1)),
     };
     if !palette::set_rule_enabled(&mut editor, index, enabled) {
+        return Err(format!("未知のルールindex: {index}"));
+    }
+    cfg.rules = editor.rules;
+    persist(&app, &state, cfg.clone())?;
+    Ok(cfg)
+}
+
+/// ルールの通知参加状態を保存する。一覧表示選択・編集フォーカスとは独立。SPEC: EDT-001 / NTY-001
+#[tauri::command]
+pub fn set_rule_notify(
+    app: AppHandle,
+    state: State<AppState>,
+    index: usize,
+    notify: bool,
+) -> Result<AppConfig, String> {
+    let mut cfg = state.cfg_tx.borrow().clone();
+    let mut editor = palette::EditorState {
+        rules: cfg.rules.clone(),
+        active: index.min(cfg.rules.len().saturating_sub(1)),
+    };
+    if !palette::set_rule_notify(&mut editor, index, notify) {
         return Err(format!("未知のルールindex: {index}"));
     }
     cfg.rules = editor.rules;

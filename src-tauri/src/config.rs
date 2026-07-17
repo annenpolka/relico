@@ -8,7 +8,7 @@ use crate::filter::{FilterSettings, WatchRule};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
-    /// 監視ルール(OR)。空なら何も監視しない
+    /// 監視ルール。enabledのORが一覧表示、notifyのORが通知。空なら通知なし・全件表示
     pub rules: Vec<WatchRule>,
     pub min_remaining_secs: u64,
     pub poll_interval_secs: u64,

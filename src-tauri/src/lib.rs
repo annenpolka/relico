@@ -7,6 +7,7 @@ use tauri::{
 };
 use tokio::sync::watch;
 
+pub mod autostart;
 pub mod backoff;
 pub mod commands;
 pub mod config;
@@ -30,21 +31,24 @@ pub struct TrayHandles {
 }
 
 pub fn watch_line(cfg: &AppConfig) -> String {
-    let enabled: Vec<_> = cfg.rules.iter().filter(|rule| rule.enabled).collect();
-    match enabled.len() {
-        0 => "WATCH: NO ENABLED RULES".to_string(),
+    let notifying: Vec<_> = cfg.rules.iter().filter(|rule| rule.notify).collect();
+    match notifying.len() {
+        0 => "WATCH: NO NOTIFICATION RULES".to_string(),
         1 if cfg.rules.len() == 1 => {
-            format!("WATCH: {}", palette::rule_summary(enabled[0]))
+            format!("WATCH: {}", palette::rule_summary(notifying[0]))
         }
         n if n == cfg.rules.len() => format!("WATCH: {n} RULES"),
         n => format!("WATCH: {n}/{} RULES", cfg.rules.len()),
     }
 }
 
-fn next_line(snap: &StatusSnapshot) -> String {
-    // snapshot.fissuresは合致のみ・消滅が近い順(VIS-001)なので先頭が次の対象
-    snap.fissures
-        .first()
+fn next_line(cfg: &AppConfig, snap: &StatusSnapshot) -> String {
+    if !cfg.rules.iter().any(|rule| rule.notify) {
+        return "NEXT: --".to_string();
+    }
+    // 表示一覧とは別に保持した通知scope側の先頭を使う。SPEC: NTY-001
+    snap.next_notification
+        .as_ref()
         .map(|f| format!("NEXT: {} {}", f.tier.to_uppercase(), f.node))
         .unwrap_or_else(|| "NEXT: --".to_string())
 }
@@ -52,7 +56,7 @@ fn next_line(snap: &StatusSnapshot) -> String {
 /// メニュー操作はmacOSではメインスレッド限定のため、run_on_main_thread経由で更新する
 pub fn update_tray(app: &AppHandle, cfg: &AppConfig, snap: &StatusSnapshot) {
     let watch = watch_line(cfg);
-    let next = next_line(snap);
+    let next = next_line(cfg, snap);
     let paused = cfg.paused;
     let api_ok = snap.api_ok;
     let app2 = app.clone();
@@ -130,7 +134,9 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            // Login Itemsへ内部Unix実行ファイルではなく.app bundleを登録し、
+            // System Settingsでも配布アイコンを表示させる。SPEC: STA-003
+            tauri_plugin_autostart::MacosLauncher::AppleScript,
             None,
         ));
 
@@ -142,6 +148,13 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            match autostart::migrate_legacy_launch_agent(app.handle()) {
+                Ok(true) => eprintln!("migrated legacy RELICO LaunchAgent to app Login Item"),
+                Ok(false) => {}
+                Err(error) => eprintln!("legacy autostart migration failed: {error}"),
+            }
+
             set_console_activation_policy(app.handle(), true);
 
             let config_dir = app.path().app_config_dir()?;
@@ -238,7 +251,8 @@ pub fn run() {
             commands::query_candidates,
             commands::apply_candidate,
             commands::clear_filter,
-            commands::set_rule_enabled
+            commands::set_rule_enabled,
+            commands::set_rule_notify
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

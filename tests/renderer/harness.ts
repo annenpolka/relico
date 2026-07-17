@@ -6,8 +6,14 @@
 import type { Page } from "@playwright/test";
 
 export interface BootOptions {
-  /** 全ルールをdisabledで起動する(NO ENABLED表示・empty rowの検査用) */
+  /** 全ルールをVIEW未選択で起動する(通知参加は維持) */
   allRulesDisabled?: boolean;
+  /** 亀裂0件のworldstateで起動する(empty rowの検査用) */
+  noFissures?: boolean;
+  /** 先頭亀裂が指定秒後に失効する(期限到達時の即時除去検査用) */
+  firstExpirySecs?: number;
+  /** apply_candidateの応答遅延(候補の多重確定を再現する) */
+  applyCandidateDelayMs?: number;
 }
 
 export interface MockCall {
@@ -17,7 +23,12 @@ export interface MockCall {
 
 /** mockを注入してコンソールを起動し、init()完了(ステータスバー描画)まで待つ */
 export async function bootConsole(page: Page, options: BootOptions = {}): Promise<void> {
-  await page.addInitScript(installMock, { allRulesDisabled: options.allRulesDisabled ?? false });
+  await page.addInitScript(installMock, {
+    allRulesDisabled: options.allRulesDisabled ?? false,
+    noFissures: options.noFissures ?? false,
+    firstExpirySecs: options.firstExpirySecs ?? 1800,
+    applyCandidateDelayMs: options.applyCandidateDelayMs ?? 0,
+  });
   await page.goto("/");
   await page.waitForFunction(() => {
     const watch = document.getElementById("sb-watch");
@@ -32,9 +43,21 @@ export async function calls(page: Page): Promise<MockCall[]> {
 
 // ---- ここからはブラウザ内で実行される(シリアライズされてinit scriptになる) ----
 
-function installMock({ allRulesDisabled }: { allRulesDisabled: boolean }) {
+function installMock({
+  allRulesDisabled,
+  noFissures,
+  firstExpirySecs,
+  applyCandidateDelayMs,
+}: {
+  allRulesDisabled: boolean;
+  noFissures: boolean;
+  firstExpirySecs: number;
+  applyCandidateDelayMs: number;
+}) {
   type Rule = {
     enabled: boolean;
+    notify: boolean;
+    name: string | null;
     tiers: string[];
     missionTypes: string[];
     planets: string[];
@@ -43,8 +66,10 @@ function installMock({ allRulesDisabled }: { allRulesDisabled: boolean }) {
   };
 
   const iso = (offsetSecs: number) => new Date(Date.now() + offsetSecs * 1000).toISOString();
-  const rule = (enabled: boolean): Rule => ({
+  const rule = (enabled: boolean, notify = true): Rule => ({
     enabled,
+    notify,
+    name: null,
     tiers: [],
     missionTypes: [],
     planets: [],
@@ -52,17 +77,18 @@ function installMock({ allRulesDisabled }: { allRulesDisabled: boolean }) {
     storms: "Exclude",
   });
 
-  // MAN-011の代表的な長い値を含むfixture
-  const fissures = allRulesDisabled
+  // MAN-011の代表的な長い値を含むfixture。
+  // 無指定(全ルール無効)でもbackendは全件をsnapshotへ入れる(VIS-001)ためfissuresは空にしない
+  const fissures = noFissures
     ? []
     : [
         {
           id: "fx-requiem",
           activation: iso(-3600),
-          expiry: iso(1800),
+          expiry: iso(firstExpirySecs),
           node: "Taveuni (Kuva Fortress)",
           missionType: "Mobile Defense",
-          enemy: "Corrupted",
+          enemy: "The Murmur",
           tier: "Requiem",
           tierNum: 5,
           isStorm: false,
@@ -113,6 +139,7 @@ function installMock({ allRulesDisabled }: { allRulesDisabled: boolean }) {
     },
     status: {
       fissures,
+      nextNotification: fissures[0] ?? null,
       apiOk: true,
       lastError: null as string | null,
       lastPoll: iso(0),
@@ -143,11 +170,35 @@ function installMock({ allRulesDisabled }: { allRulesDisabled: boolean }) {
     { id: "planet:Void", label: "Void", facet: "planet" },
     { id: "action:new-rule", label: "NEW RULE", facet: "action" },
     { id: "action:delete-rule", label: "DELETE RULE", facet: "action" },
+    { id: "action:rename-rule", label: "RENAME RULE", facet: "action" },
+    { id: "action:toggle-rule", label: "TOGGLE VIEW", facet: "action" },
+    { id: "action:deselect-all-rules", label: "DESELECT ALL RULES", facet: "action" },
+    { id: "action:notify-rule", label: "TOGGLE NOTIFY", facet: "action" },
     { id: "action:clear", label: "CLEAR FILTERS", facet: "action" },
     { id: "action:pause", label: "PAUSE WATCH", facet: "action" },
   ];
 
   const activeRule = (): Rule => state.config.rules[state.active] ?? state.config.rules[0];
+  const isEmptyDraft = (candidate: Rule | undefined): boolean =>
+    candidate !== undefined &&
+    !candidate.enabled &&
+    !candidate.notify &&
+    candidate.tiers.length === 0 &&
+    candidate.missionTypes.length === 0 &&
+    candidate.planets.length === 0 &&
+    candidate.mode === "Both" &&
+    candidate.storms === "Exclude";
+  const prepareFilterTarget = (): Rule => {
+    if (state.config.rules.some((candidate) => candidate.enabled)) return activeRule();
+    const active = activeRule();
+    if (!isEmptyDraft(active)) {
+      state.config.rules.push(rule(false, false));
+      state.active = state.config.rules.length - 1;
+    }
+    const target = activeRule();
+    target.enabled = true;
+    return target;
+  };
   const candOn = (cand: Cand): boolean => {
     const r = activeRule();
     if (!r) return false;
@@ -163,13 +214,23 @@ function installMock({ allRulesDisabled }: { allRulesDisabled: boolean }) {
         return r.mode === value;
       case "storm":
         return r.storms === value;
+      case "rule":
+        // RULE候補のonは対象ルールのVIEW選択(編集中ルール基準ではない)
+        return state.config.rules[Number(value)]?.enabled ?? false;
       default:
         return false;
     }
   };
+  // 実行時カタログ: 静的語彙 + 現在ルールのトグル候補(label=名前またはR{n})
+  const ruleCands = (): Cand[] =>
+    state.config.rules.map((r, i) => ({
+      id: "rule:" + i,
+      label: r.name ?? "R" + (i + 1),
+      facet: "rule",
+    }));
   const candView = (q: string) => {
     const query = q.trim().toLowerCase();
-    return catalog
+    return [...catalog, ...ruleCands()]
       .filter((cand) => query === "" || cand.label.toLowerCase().includes(query))
       .map((cand) => ({
         id: cand.id,
@@ -186,7 +247,7 @@ function installMock({ allRulesDisabled }: { allRulesDisabled: boolean }) {
     else list.push(value);
   };
 
-  const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
+  const handlers: Record<string, (args: Record<string, unknown>) => unknown | Promise<unknown>> = {
     get_config: () => state.config,
     get_status: () => state.status,
     get_autostart: () => state.autostart,
@@ -198,32 +259,53 @@ function installMock({ allRulesDisabled }: { allRulesDisabled: boolean }) {
       state.active = Number(args.active ?? 0);
       return candView(String(args.q ?? ""));
     },
-    apply_candidate: (args) => {
+    apply_candidate: async (args) => {
+      if (applyCandidateDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, applyCandidateDelayMs));
+      }
       state.active = Number(args.active ?? 0);
       const id = String(args.id);
       const value = id.slice(id.indexOf(":") + 1);
-      const r = activeRule();
       if (id === "action:new-rule") {
-        state.config.rules.push(rule(false));
+        state.config.rules.push(rule(false, false));
         state.active = state.config.rules.length - 1;
       } else if (id === "action:delete-rule") {
         state.config.rules.splice(state.active, 1);
-        if (state.config.rules.length === 0) state.config.rules.push(rule(true));
-        state.active = Math.min(state.active, state.config.rules.length - 1);
+        state.active = Math.min(state.active, Math.max(0, state.config.rules.length - 1));
       } else if (id === "action:clear") {
         state.config.rules = [rule(true)];
         state.active = 0;
       } else if (id === "action:pause") {
         state.config.paused = !state.config.paused;
+      } else if (id === "action:toggle-rule") {
+        // 編集中(active)ルールのVIEW選択(enabled)だけを反転する
+        const target = state.config.rules[state.active];
+        if (target) target.enabled = !target.enabled;
+      } else if (id === "action:deselect-all-rules") {
+        // 全VIEW選択だけを解除し、notify・ルール構成・edit focusは保持する
+        for (const target of state.config.rules) target.enabled = false;
+      } else if (id === "action:notify-rule") {
+        // 編集中(active)ルールのnotifyだけを反転する
+        const target = state.config.rules[state.active];
+        if (target) target.notify = !target.notify;
+      } else if (id.startsWith("rule:")) {
+        // 対象ルールのVIEW選択(enabled)だけを反転し、editフォーカス(active)は動かさない
+        const target = state.config.rules[Number(value)];
+        if (target) target.enabled = !target.enabled;
       } else if (id.startsWith("tier:")) {
+        const r = prepareFilterTarget();
         toggle(r.tiers, value);
       } else if (id.startsWith("mission:")) {
+        const r = prepareFilterTarget();
         toggle(r.missionTypes, value);
       } else if (id.startsWith("planet:")) {
+        const r = prepareFilterTarget();
         toggle(r.planets, value);
       } else if (id.startsWith("mode:")) {
+        const r = prepareFilterTarget();
         r.mode = value;
       } else if (id.startsWith("storm:")) {
+        const r = prepareFilterTarget();
         r.storms = value;
       }
       return { config: state.config, active: state.active };
@@ -232,6 +314,12 @@ function installMock({ allRulesDisabled }: { allRulesDisabled: boolean }) {
       const rules = state.config.rules;
       const index = Number(args.index);
       if (rules[index]) rules[index].enabled = Boolean(args.enabled);
+      return state.config;
+    },
+    set_rule_notify: (args) => {
+      const rules = state.config.rules;
+      const index = Number(args.index);
+      if (rules[index]) rules[index].notify = Boolean(args.notify);
       return state.config;
     },
     clear_filter: () => {
@@ -250,6 +338,7 @@ function installMock({ allRulesDisabled }: { allRulesDisabled: boolean }) {
   let callbackId = 1;
   const target = window as unknown as Record<string, unknown>;
   target.__MOCK_CALLS__ = recorded;
+  target.__MOCK_STATE__ = state;
   target.__TAURI_INTERNALS__ = {
     transformCallback: () => callbackId++,
     unregisterCallback: () => undefined,

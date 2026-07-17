@@ -2,9 +2,9 @@
 /// このファイル(と patterns.pkl)だけが手編集対象。docs/SPEC.md と
 /// src-tauri/tests/oracles_generated.rs はここから生成される。
 ///
-/// フィルタの意味論: 設定は監視ルール(WatchRule)のリスト。各ルールはAND条件で、
-/// 亀裂がenabled=trueのどれか1つのルールに合致すれば通知・表示対象になる
-/// (有効ルールOR)。enabled=falseのルールは保存・編集できるが判定には参加しない。
+/// フィルタの意味論: 設定は監視ルール(WatchRule)のリスト。各ルールはAND条件。
+/// 一覧表示はenabled=trueのルールをORし、通知はnotify=trueのルールをORする。
+/// enabled(表示選択)とnotify(通知参加)は独立で、非表示ルールも通知対象になり得る。
 module notifier
 
 import "patterns.pkl"
@@ -67,21 +67,26 @@ clauses: Listing<patterns.Clause> = new {
     desc = "残り時間がmin_remaining_secs未満の亀裂は、ルール構成に依らず合致しない(期限切れ含む)"
     fissureOverride = "f.expiry = now + Duration::seconds((s.min_remaining_secs as i64) - 1);"
   }
+  new patterns.SettingsRejectWhen {
+    id = "FLT-015"
+    desc = "expiryが現在時刻以下の亀裂は、min_remaining_secs=0でもルール構成に依らず合致しない(生存条件はexpiry > now)"
+    fissureOverride = "s.min_remaining_secs = 0; f.expiry = now;"
+  }
   new patterns.SingleRuleEmbedding {
     id = "FLT-008"
-    desc = "ルール1つの設定では、全体合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致)"
+    desc = "ルール1つの一覧表示判定では、全体合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致)"
   }
   new patterns.RuleAdditivity {
     id = "FLT-009"
-    desc = "有効ルールを追加しても、それまで合致していた亀裂は合致し続ける(有効ルールORの単調性)"
+    desc = "表示選択(enabled=true)ルールを追加しても、それまで一覧表示に合致していた亀裂は合致し続ける(表示ルールORの単調性)"
   }
   new patterns.EnabledRulesOr {
     id = "FLT-013"
-    desc = "全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。disabledルールだけ、またはルールなしでは合致しない"
+    desc = "一覧表示の全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。表示選択なし、またはルールなしではフィルタ合致しない"
   }
-  new patterns.EnabledProjection {
+  new patterns.NotificationProjection {
     id = "FLT-014"
-    desc = "enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される"
+    desc = "notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない)"
   }
   new patterns.AtMostOnce {
     id = "DED-001"
@@ -93,7 +98,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.OverlappingRulesAtMostOnce {
     id = "DED-003"
-    desc = "同じ亀裂へ複数の有効ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない"
+    desc = "同じ亀裂へ複数の表示ルールまたは通知ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない"
   }
   new patterns.ParseTotal {
     id = "PRS-001"
@@ -111,11 +116,15 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.NotificationScopeChange {
     id = "POL-003"
-    desc = "初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない"
+    desc = "初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない"
+  }
+  new patterns.NotifyCandidates {
+    id = "NTY-001"
+    desc = "通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない"
   }
   new patterns.FilteredView {
     id = "VIS-001"
-    desc = "一覧に表示されるのはいずれかの有効ルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない"
+    desc = "表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる"
   }
   new patterns.FuzzySubsequence {
     id = "FZY-001"
@@ -139,11 +148,19 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.EditorActivationIndependent {
     id = "EDT-001"
-    desc = "edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる"
+    desc = "edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない"
   }
   new patterns.NewRuleDisabled {
     id = "EDT-002"
-    desc = "NEW RULEは既存ルールを一切変更せず、enabled=falseのdraftを末尾へ追加し、そのdraftをedit対象にする"
+    desc = "NEW RULEは既存ルールを一切変更せず、enabled=falseかつnotify=falseの安全な空draftを末尾へ追加し、そのdraftをedit対象にする。VIEW選択0本でその空draftへ最初のfilter候補を適用すると、名前が付いていても別ルールを増やさずdraftをenabled=true・notify=falseのVIEWルールとして確定する"
+  }
+  new patterns.UnselectedApplyCreatesRule {
+    id = "EDT-004"
+    desc = "表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する"
+  }
+  new patterns.RuleToggleCandidates {
+    id = "EDT-003"
+    desc = "パレットの実行時カタログは各ルールをrule:{index}候補(label=ルール名、未設定ならR{n}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる"
   }
   new patterns.ClearResets {
     id = "CLR-001"
@@ -155,7 +172,15 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.LegacyRuleEnabled {
     id = "CFG-002"
-    desc = "enabledを持たない既存WatchRule JSONはenabled=trueとして読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する"
+    desc = "enabledを持たない既存WatchRule JSONはenabled=true(一覧表示へ参加)として読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する"
+  }
+  new patterns.RuleNameConfig {
+    id = "CFG-003"
+    desc = "WatchRuleのnameは省略可能な表示用メタデータで、nameを持たない旧JSONは名前なしとして読み込み、設定したnameはserialize/deserializeを往復しても他のフィールドと共に保持される"
+  }
+  new patterns.RuleNotifyConfig {
+    id = "CFG-004"
+    desc = "WatchRuleのnotifyはenabledから独立した通知参加フラグで、notifyを持たない旧JSONは旧enabled値(それも欠落ならtrue)を引き継ぐ。明示したnotify=true/falseはenabledの値に関係なくserialize/deserializeを往復しても保持される"
   }
   new patterns.NotificationExample {
     id = "NTF-001"
@@ -187,6 +212,11 @@ clauses: Listing<patterns.Clause> = new {
     desc = "トレイは専用tray-icon.pngをテンプレート画像として登録する配線を持ち、PNGはモノクロ(+アルファ)形式である"
     scenario = "tray_template_icon"
   }
+  new patterns.StaticCheck {
+    id = "STA-003"
+    desc = "macOS AUTOSTARTは内部のUnix実行ファイルをLaunchAgent登録せず、アプリアイコンを保持するAppleScript Login Itemとして.app bundleを登録し、旧relico.plistを一度だけ移行する配線を持つ"
+    scenario = "autostart_bundle_icon"
+  }
   new patterns.ApprovedAsset {
     id = "AST-001"
     desc = "メニューバー用tray-icon.pngは目視承認済みの内容から変わっていない(変えたらMAN-005の手順で再承認しsha256を更新する)"
@@ -211,7 +241,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-001"
-    desc = "パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは条件クリアを呼び、IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力できる(renderer統合)"
+    desc = "パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)。一覧画面のSpaceはパレットを開かずに編集中ルールの表示選択(enabled)をトグルし(action:toggle-rule)、一覧画面の↑/↓はedit focusを前後のルールへ巡回移動し、Cmd/Ctrl+1..9は対応indexのルールへedit focusを移す(パレット表示中も有効。フォーカス移動は設定を変更しない)。IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力でき、DESELECT ALL RULES候補は全表示選択を解除して通知参加を変えない(renderer統合)"
     scenario = "palette_keyboard"
   }
   new patterns.RendererScenario {
@@ -221,18 +251,38 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-003"
-    desc = "ルール行のenabled切替はset_rule_enabledだけを呼びedit focus表示を変えず、行本体はパレットを開くだけで切替を呼ばない。全ルール無効では一覧とステータスバーにNO ENABLED表示が出る(renderer統合)"
+    desc = "ルール行のenabled切替は一覧表示だけを変えるset_rule_enabledを呼びedit focus・notifyを変えず、行のnotify切替はset_rule_notifyだけを呼びenabledもedit focusも変えず、行本体はedit focusをそのルールへ移すだけでパレットも切替も呼ばない。DEL/CLEARは2度押し確認で、1クリック目はSURE?表示になるだけで実行せず、2秒で自動復帰し、SURE?表示中のクリックだけが実行する。全ルールの表示選択を解除しても一覧は全亀裂を表示し、notify=trueのルールはWATCH表示と通知参加を維持する(renderer統合)"
     scenario = "rule_row_controls"
   }
   new patterns.RendererScenario {
     id = "RND-004"
-    desc = "最小720x480でも右サイドバーは縦スクロールなしでルールnavigator・NEW/DEL/CLEAR・5軸launcher・配送設定・TEST/PAUSE・時間設定へ到達でき、launcherはパレットをその軸に絞って開く(renderer統合)"
+    desc = "最小720x480でも右サイドバーは縦スクロールなしでルール一覧・NEW/DEL/CLEAR・5軸launcher・配送設定・TEST/PAUSE・時間設定へ到達でき、ルール一覧はrail高さの固定比率領域に全ルール行を保持して内側だけ縦スクロールし、launcherはパレットをその軸に絞って開く(renderer統合)"
     scenario = "sidebar_fit"
   }
   new patterns.RendererScenario {
+    id = "RND-006"
+    desc = "FILTERSのNAME入力は編集中ルールの名前をdebounce保存し、ルール行は名前を要約より優先表示し、パレットは名前でRULE候補を検索でき、適用はenabledのトグルだけでedit focus表示を変えない。RENAME RULE候補の適用はパレット入力を改名モードへ切り替え、Enterで編集中ルールの名前を保存して通常モードへ戻り、Escは保存せず通常モードへ戻る(renderer統合)"
+    scenario = "rule_naming"
+  }
+  new patterns.RendererScenario {
     id = "RND-005"
-    desc = "亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合)"
+    desc = "亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持する一方でFACTIONのTHE MURMURは950pxでも省略せず全文表示し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合)"
     scenario = "compact_table"
+  }
+  new patterns.RendererScenario {
+    id = "RND-008"
+    desc = "一覧表示中の亀裂は次回pollを待たずexpiry到達後1秒以内にDOMとfrontend snapshotから除去され、他の生存中亀裂・設定・通知状態を変えない(renderer統合)"
+    scenario = "expiry_cleanup"
+  }
+  new patterns.RendererScenario {
+    id = "RND-007"
+    desc = "亀裂表のヘッダクリックで項目別ソートでき、同じ列の再クリックで昇順/降順をトグルし、ソート中の列にaria-sortが付く。既定はT-REMAIN昇順で、ソートは表示のみ(設定・通知の変更を呼ばない)(renderer統合)"
+    scenario = "table_sort"
+  }
+  new patterns.RendererScenario {
+    id = "RND-009"
+    desc = "VIEW選択0本からピッカーでfilter候補を適用すると既存ルールを変更せずVIEW ON・NOTIFY OFFの新ルールを作り、edit focusを新ルールへ移す。NEW RULE適用中に別のfilter候補を素早く確定しても操作を直列化し、旧edit対象を変更せず同じ新ルールへ適用する(renderer統合)"
+    scenario = "unselected_picker_create"
   }
   new patterns.E2eScenario {
     id = "E2E-001"
@@ -286,13 +336,13 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.Manual {
     id = "MAN-008"
-    desc = "ルール一覧のtoggleとedit focusが視覚的に区別でき、実アプリで複数有効ルールのOR監視が機能する"
-    procedure = "リリース前に実アプリで短く確認する。1) toggleとedit本体が視覚的に区別できる(誤操作しない)。2) 実ワールドステートで複数ルールをenabledにするとそのORが一覧・通知対象になる。OR・dedup・edit独立の意味論はFLT-013/014・DED-003・EDT-001/002で、UI結線(toggle/edit分離・NO ENABLED表示)はRND-003で、実IPCの設定変更とTEST DELIVERYの実backend経路はE2E-001/002で機械検証済み(TEST DELIVERYがルールに依存しないことはtest_notificationの実装がルールを参照しないことによる)。"
+    desc = "ルール一覧の表示toggle・通知toggle・edit focusが視覚的に区別でき、実アプリで表示と通知が独立して機能する"
+    procedure = "リリース前に実アプリで短く確認する。1) 表示toggle・通知toggle・edit本体が視覚的に区別できる(誤操作しない)。2) 実ワールドステートで複数のnotify=trueルールがORで通知対象になり、そのうちenabled=falseのルールだけに合致する亀裂も一覧からは隠れたまま通知される。3) DESELECT ALL RULESで全表示選択を解除してもnotifyは維持される。OR・dedup・edit独立の意味論はFLT-013/014・NTY-001・DED-003・EDT-001〜004で、UI結線はRND-001/003、実IPCの設定変更とTEST DELIVERYの実backend経路はE2E-001/002で機械検証済み(TEST DELIVERYがルールに依存しないことはtest_notificationの実装がルールを参照しないことによる)。"
   }
   new patterns.Manual {
     id = "MAN-009"
-    desc = "配布版・通知テスト版・DMG一時mountがLaunchServicesで競合せず、配布版のcanonical appだけがcom.annenpolka.relicoとして残る"
-    procedure = "機械検査部分は just macos-smoke で実行する(ビルド済みInfo.plistのproductName/identifier、通知テスト版プロセスが複数起動していないこと、/Volumes/dmg.*の残留登録がないこと、canonical登録が実在する1件だけであること。設定ファイル上のidentity分離はSTA-001で常時検証)。人間に残るのは、~/Applications/relico.appのコンソール表示中ウィンドウをDock・Paneru・Raycast Switch Windowsから選択できることの確認だけ。"
+    desc = "配布版・通知テスト版・DMG一時mount・旧AUTOSTART実行ファイルがmacOSのアプリ登録で競合せず、配布版のcanonical appだけがcom.annenpolka.relicoとして残る"
+    procedure = "機械検査部分は just macos-smoke で実行する(ビルド済みInfo.plistのproductName/identifier、通知テスト版プロセスが複数起動していないこと、/Volumes/dmg.*の残留登録がないこと、canonical登録が実在する1件だけであること、旧~/Library/LaunchAgents/relico.plistが残っていないこと。設定ファイル上のidentity分離はSTA-001、bundle型AUTOSTART配線はSTA-003で常時検証)。人間に残るのは、~/Applications/relico.appのコンソール表示中ウィンドウをDock・Paneru・Raycast Switch Windowsから選択できることと、AUTOSTART有効時にシステム設定のログイン項目がUnix実行ファイルではなくRELICOのアプリアイコンで表示されることの確認。Accessibility等へ手動追加する場合も内部実行ファイルではなくrelico.app bundleを選ぶ。"
   }
   new patterns.Manual {
     id = "MAN-010"

@@ -95,6 +95,11 @@ const STORMS: Record<string, string> = {
 const ACTIONS: Record<string, string> = {
   "new-rule": `<circle cx="10" cy="10" r="6.5"/><path d="M10 6v8M6 10h8"/>`,
   "delete-rule": `<circle cx="10" cy="10" r="6.5"/><path d="M6 10h8"/>`,
+  "rename-rule": `<path d="m12.5 3 4.5 4.5L7.5 17H3v-4.5Z"/><path d="m10.5 5 4.5 4.5"/>`,
+  "toggle-rule": `<rect x="2.5" y="6.5" width="15" height="7" rx="3.5"/><circle cx="13.5" cy="10" r="2"/>`,
+  "deselect-all-rules": `<rect x="3" y="3" width="5" height="5" rx="1"/><rect x="12" y="3" width="5" height="5" rx="1"/><rect x="3" y="12" width="5" height="5" rx="1"/><rect x="12" y="12" width="5" height="5" rx="1"/><path d="M2.5 2.5 17.5 17.5"/>`,
+  "notify-rule": `<path d="M10 3a4.5 4.5 0 0 1 4.5 4.5V11l1.5 2.5H4L5.5 11V7.5A4.5 4.5 0 0 1 10 3Z"/><path d="M8.5 16a1.5 1.5 0 0 0 3 0"/>`,
+  "notify-rule-off": `<path d="M10 3a4.5 4.5 0 0 1 4.5 4.5V11l1.5 2.5H4L5.5 11V7.5A4.5 4.5 0 0 1 10 3Z"/><path d="M8.5 16a1.5 1.5 0 0 0 3 0"/><path d="m3.5 3 13 14"/>`,
   clear: `<path d="m4 4 12 12M16 4 4 16"/>`,
   pause: `<circle cx="10" cy="10" r="6.5"/><path d="M8 7v6M12 7v6"/>`,
 };
@@ -175,6 +180,9 @@ export function candidateGlyphHtml(facet: Facet, id: string): string {
       return glyphHtml(facet, value);
     case "mode":
       return glyphHtml("difficulty", value);
+    case "rule":
+      // ルールトグル候補は汎用アクショングリフで表す
+      return glyphHtml("action", "rule");
   }
 }
 

@@ -40,17 +40,25 @@ fn arb_subset(pool: &'static [&'static str]) -> impl Strategy<Value = Vec<String
         .prop_map(|v| v.into_iter().map(String::from).collect())
 }
 
+fn arb_rule_name() -> impl Strategy<Value = Option<String>> {
+    proptest::option::of("[A-Za-z0-9 ]{1,12}")
+}
+
 fn arb_rule() -> impl Strategy<Value = WatchRule> {
     (
         any::<bool>(),
+        any::<bool>(),
+        arb_rule_name(),
         arb_subset(TIERS),
         arb_subset(MISSIONS),
         arb_subset(PLANETS),
         arb_mode(),
         arb_storm_mode(),
     )
-        .prop_map(|(enabled, tiers, mission_types, planets, mode, storms)| WatchRule {
+        .prop_map(|(enabled, notify, name, tiers, mission_types, planets, mode, storms)| WatchRule {
             enabled,
+            notify,
+            name,
             tiers,
             mission_types,
             planets,
@@ -249,20 +257,29 @@ proptest! {
         prop_assert!(!filter::matches(&s, &f, now), "SPEC FLT-007 違反: 残り時間がmin_remaining_secs未満の亀裂は、ルール構成に依らず合致しない(期限切れ含む)");
     }
 
-    /// FLT-008: ルール1つの設定では、全体合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致)
+    /// FLT-015: expiryが現在時刻以下の亀裂は、min_remaining_secs=0でもルール構成に依らず合致しない(生存条件はexpiry > now)
+    #[test]
+    fn flt_015(mut s in arb_settings(), mut f in arb_fissure()) {
+        let now = base_now();
+        s.min_remaining_secs = 0; f.expiry = now;
+        prop_assert!(!filter::matches(&s, &f, now), "SPEC FLT-015 違反: expiryが現在時刻以下の亀裂は、min_remaining_secs=0でもルール構成に依らず合致しない(生存条件はexpiry > now)");
+    }
+
+    /// FLT-008: ルール1つの一覧表示判定では、全体合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致)
     #[test]
     fn flt_008(rule in arb_rule(), f in arb_fissure(), min in 0u64..1800) {
         let now = base_now();
         let s = FilterSettings { rules: vec![rule.clone()], min_remaining_secs: min };
-        let remaining_ok = f.expiry.signed_duration_since(now).num_seconds() >= min as i64;
+        let remaining_ok = f.expiry > now
+            && f.expiry.signed_duration_since(now).num_seconds() >= min as i64;
         prop_assert_eq!(
             filter::matches(&s, &f, now),
             remaining_ok && rule.enabled && filter::rule_matches(&rule, &f),
-            "SPEC FLT-008 違反: ルール1つの設定では、全体合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致)"
+            "SPEC FLT-008 違反: ルール1つの一覧表示判定では、全体合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致)"
         );
     }
 
-    /// FLT-009: 有効ルールを追加しても、それまで合致していた亀裂は合致し続ける(有効ルールORの単調性)
+    /// FLT-009: 表示選択(enabled=true)ルールを追加しても、それまで一覧表示に合致していた亀裂は合致し続ける(表示ルールORの単調性)
     #[test]
     fn flt_009(s in arb_settings(), mut extra in arb_rule(), f in arb_fissure()) {
         let now = base_now();
@@ -270,23 +287,24 @@ proptest! {
             extra.enabled = true;
             let mut bigger = s.clone();
             bigger.rules.push(extra);
-            prop_assert!(filter::matches(&bigger, &f, now), "SPEC FLT-009 違反: 有効ルールを追加しても、それまで合致していた亀裂は合致し続ける(有効ルールORの単調性)");
+            prop_assert!(filter::matches(&bigger, &f, now), "SPEC FLT-009 違反: 表示選択(enabled=true)ルールを追加しても、それまで一覧表示に合致していた亀裂は合致し続ける(表示ルールORの単調性)");
         }
     }
 
-    /// FLT-013: 全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。disabledルールだけ、またはルールなしでは合致しない
+    /// FLT-013: 一覧表示の全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。表示選択なし、またはルールなしではフィルタ合致しない
     #[test]
     fn flt_013(s in arb_settings(), f in arb_fissure()) {
         let now = base_now();
-        let remaining_ok = f.expiry.signed_duration_since(now).num_seconds()
-            >= s.min_remaining_secs as i64;
+        let remaining_ok = f.expiry > now
+            && f.expiry.signed_duration_since(now).num_seconds()
+                >= s.min_remaining_secs as i64;
         let enabled_or = s.rules.iter().any(|rule|
             rule.enabled && filter::rule_matches(rule, &f)
         );
         prop_assert_eq!(
             filter::matches(&s, &f, now),
             remaining_ok && enabled_or,
-            "SPEC FLT-013 違反: 全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。disabledルールだけ、またはルールなしでは合致しない (有効ルールORの完全な等式)"
+            "SPEC FLT-013 違反: 一覧表示の全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。表示選択なし、またはルールなしではフィルタ合致しない (VIEWルールORの完全な等式)"
         );
 
         let mut all_disabled = s.clone();
@@ -297,7 +315,7 @@ proptest! {
         valid_fissure.expiry = now + Duration::seconds(s.min_remaining_secs as i64 + 1);
         prop_assert!(
             !filter::matches(&all_disabled, &valid_fissure, now),
-            "SPEC FLT-013 違反: 全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。disabledルールだけ、またはルールなしでは合致しない (全ルールdisabledなのに合致した)"
+            "SPEC FLT-013 違反: 一覧表示の全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。表示選択なし、またはルールなしではフィルタ合致しない (全ルールVIEW OFFなのに表示合致した)"
         );
 
         let empty = FilterSettings {
@@ -306,66 +324,101 @@ proptest! {
         };
         prop_assert!(
             !filter::matches(&empty, &valid_fissure, now),
-            "SPEC FLT-013 違反: 全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。disabledルールだけ、またはルールなしでは合致しない (ルールなしなのに合致した)"
+            "SPEC FLT-013 違反: 一覧表示の全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。表示選択なし、またはルールなしではフィルタ合致しない (ルールなしなのに合致した)"
         );
     }
 
-    /// FLT-014: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される
+    /// FLT-014: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない)
     #[test]
     fn flt_014(
         s in arb_settings(),
-        mut disabled in arb_rule(),
-        mut edited_disabled in arb_rule(),
-        mut enabled in arb_rule(),
+        mut muted in arb_rule(),
+        mut edited_muted in arb_rule(),
+        mut notifying in arb_rule(),
     ) {
-        let base = filter::enabled_projection(&s);
-        let expected: Vec<WatchRule> = s.rules.iter()
-            .filter(|rule| rule.enabled)
-            .cloned()
-            .collect();
-        prop_assert_eq!(base.rules.as_slice(), expected.as_slice(), "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (有効ルールと一致しない)");
-        prop_assert_eq!(base.min_remaining_secs, s.min_remaining_secs, "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (min_remaining_secsを保持しない)");
-
-        disabled.enabled = false;
-        let mut with_disabled = s.clone();
-        with_disabled.rules.push(disabled);
-        let added = filter::enabled_projection(&with_disabled);
-        prop_assert_eq!(added.rules.as_slice(), base.rules.as_slice(), "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (disabled追加で射影が変化した)");
-        prop_assert_eq!(added.min_remaining_secs, base.min_remaining_secs, "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (disabled追加で時間条件が変化した)");
-
-        edited_disabled.enabled = false;
-        *with_disabled.rules.last_mut().expect("disabled ruleを追加済み") = edited_disabled;
-        let edited = filter::enabled_projection(&with_disabled);
-        prop_assert_eq!(edited.rules.as_slice(), base.rules.as_slice(), "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (disabled条件編集で射影が変化した)");
-        with_disabled.rules.pop();
-        let removed = filter::enabled_projection(&with_disabled);
-        prop_assert_eq!(removed.rules.as_slice(), base.rules.as_slice(), "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (disabled削除で射影が変化した)");
-
-        enabled.enabled = true;
-        let mut with_enabled = s.clone();
-        with_enabled.rules.push(enabled.clone());
-        let enabled_added = filter::enabled_projection(&with_enabled);
-        prop_assert_eq!(enabled_added.rules.len(), base.rules.len() + 1, "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (enabled追加が射影へ反映されない)");
-        prop_assert_eq!(enabled_added.rules.last(), Some(&enabled), "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (enabled追加の条件を保持しない)");
-
-        let toggled_rule = WatchRule {
-            enabled: false,
-            ..WatchRule::default()
+        let normalize = |rule: &WatchRule| WatchRule {
+            enabled: true,
+            name: None,
+            ..rule.clone()
         };
+        let base = filter::notification_projection(&s);
+        let expected: Vec<WatchRule> = s.rules.iter()
+            .filter(|rule| rule.notify)
+            .map(normalize)
+            .collect();
+        prop_assert_eq!(base.rules.as_slice(), expected.as_slice(), "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (notify=trueルールと一致しない)");
+        prop_assert!(base.rules.iter().all(|rule| rule.enabled && rule.notify), "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (照合用にenabled=trueへ正規化しない)");
+        prop_assert_eq!(base.min_remaining_secs, s.min_remaining_secs, "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (min_remaining_secsを保持しない)");
+
+        // notify=false draftは表示選択や条件にかかわらず通知射影へ現れない
+        muted.notify = false;
+        let mut with_muted = s.clone();
+        with_muted.rules.push(muted);
+        let added = filter::notification_projection(&with_muted);
+        prop_assert_eq!(added.rules.as_slice(), base.rules.as_slice(), "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (notify=false追加で射影が変化した)");
+
+        edited_muted.notify = false;
+        *with_muted.rules.last_mut().expect("notify=false ruleを追加済み") = edited_muted;
+        let edited = filter::notification_projection(&with_muted);
+        prop_assert_eq!(edited.rules.as_slice(), base.rules.as_slice(), "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (notify=false条件編集で射影が変化した)");
+        with_muted.rules.pop();
+        let removed = filter::notification_projection(&with_muted);
+        prop_assert_eq!(removed.rules.as_slice(), base.rules.as_slice(), "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (notify=false削除で射影が変化した)");
+
+        // enabledは一覧表示だけ: 全ルールの表示選択を反転しても通知射影・scopeは不変
+        let mut display_toggled = s.clone();
+        for rule in &mut display_toggled.rules {
+            rule.enabled = !rule.enabled;
+        }
+        prop_assert_eq!(
+            filter::notification_projection(&display_toggled),
+            base.clone(),
+            "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (enabled変更で通知射影が変化した)"
+        );
+        prop_assert!(
+            !poller::notification_scope_changed(Some(&s), &display_toggled),
+            "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (enabled変更を通知範囲変更と誤判定した)"
+        );
+
+        // 非表示(enabled=false)でもnotify=trueなら射影へ入り、enabled=trueへ正規化される
+        notifying.enabled = false;
+        notifying.notify = true;
+        let mut with_notifying = s.clone();
+        with_notifying.rules.push(notifying.clone());
+        let notifying_added = filter::notification_projection(&with_notifying);
+        prop_assert_eq!(notifying_added.rules.len(), base.rules.len() + 1, "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (非表示通知ルール追加が射影へ反映されない)");
+        let normalized = normalize(&notifying);
+        prop_assert_eq!(notifying_added.rules.last(), Some(&normalized), "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (非表示通知ルールの条件を保持しない)");
+
+        // 名前は表示用メタデータ: 変更しても射影も通知範囲判定も変わらない
+        let mut renamed = s.clone();
+        for rule in &mut renamed.rules {
+            rule.name = Some("renamed".to_string());
+        }
+        prop_assert_eq!(filter::notification_projection(&renamed), base, "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (名前変更で射影が変化した)");
+        prop_assert!(
+            !poller::notification_scope_changed(Some(&s), &renamed),
+            "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (名前変更を通知範囲変更と誤判定した)"
+        );
+
         let mut toggled = FilterSettings {
-            rules: vec![toggled_rule],
+            rules: vec![WatchRule { enabled: false, notify: true, ..WatchRule::default() }],
             min_remaining_secs: s.min_remaining_secs,
         };
-        prop_assert!(filter::enabled_projection(&toggled).rules.is_empty(), "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (disabledを射影へ含めた)");
+        let hidden_projection = filter::notification_projection(&toggled);
+        prop_assert_eq!(hidden_projection.rules.len(), 1, "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (非表示通知ルールを射影から落とした)");
         toggled.rules[0].enabled = true;
-        prop_assert_eq!(filter::enabled_projection(&toggled).rules.len(), 1, "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (enabled切替が射影へ反映されない)");
+        prop_assert_eq!(filter::notification_projection(&toggled), hidden_projection, "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (enabled切替が射影へ影響した)");
+        toggled.rules[0].notify = false;
+        prop_assert!(filter::notification_projection(&toggled).rules.is_empty(), "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (notify=falseを射影へ含めた)");
+        toggled.rules[0].notify = true;
 
         let mut changed_condition = toggled.clone();
         changed_condition.rules[0].tiers = vec!["__projection_changed__".to_string()];
         prop_assert_ne!(
-            filter::enabled_projection(&toggled).rules,
-            filter::enabled_projection(&changed_condition).rules,
-            "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (有効ルール条件の変更が射影へ反映されない)"
+            filter::notification_projection(&toggled).rules,
+            filter::notification_projection(&changed_condition).rules,
+            "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (通知参加ルール条件の変更が射影へ反映されない)"
         );
 
         let changed_min = FilterSettings {
@@ -373,9 +426,9 @@ proptest! {
             min_remaining_secs: s.min_remaining_secs + 1,
         };
         prop_assert_ne!(
-            filter::enabled_projection(&s).min_remaining_secs,
-            filter::enabled_projection(&changed_min).min_remaining_secs,
-            "SPEC FLT-014 違反: enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される (min_remaining_secs変更が射影へ反映されない)"
+            filter::notification_projection(&s).min_remaining_secs,
+            filter::notification_projection(&changed_min).min_remaining_secs,
+            "SPEC FLT-014 違反: notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) (min_remaining_secs変更が射影へ反映されない)"
         );
     }
 
@@ -409,7 +462,7 @@ proptest! {
         }
     }
 
-    /// DED-003: 同じ亀裂へ複数の有効ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない
+    /// DED-003: 同じ亀裂へ複数の表示ルールまたは通知ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない
     #[test]
     fn ded_003(mut f in arb_fissure()) {
         let now = base_now();
@@ -420,15 +473,15 @@ proptest! {
             rules: vec![rule.clone(), rule],
             min_remaining_secs: 0,
         };
-        let visible = poller::visible_fissures(&settings, &[f.clone()], now);
-        prop_assert_eq!(visible.len(), 1, "SPEC DED-003 違反: 同じ亀裂へ複数の有効ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (複数ルール合致で一覧が重複した)");
+        let visible = poller::notify_candidates(&settings, &[f.clone()], now);
+        prop_assert_eq!(visible.len(), 1, "SPEC DED-003 違反: 同じ亀裂へ複数の表示ルールまたは通知ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (複数ルール合致で一覧が重複した)");
 
         let mut notified = NotifiedSet::new();
         let first = poller::select_notifications(&mut notified, visible.clone(), false);
-        prop_assert_eq!(first.len(), 1, "SPEC DED-003 違反: 同じ亀裂へ複数の有効ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (最初の通知候補が1件でない)");
-        prop_assert_eq!(first[0].id.as_str(), f.id.as_str(), "SPEC DED-003 違反: 同じ亀裂へ複数の有効ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (別idを通知した)");
+        prop_assert_eq!(first.len(), 1, "SPEC DED-003 違反: 同じ亀裂へ複数の表示ルールまたは通知ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (最初の通知候補が1件でない)");
+        prop_assert_eq!(first[0].id.as_str(), f.id.as_str(), "SPEC DED-003 違反: 同じ亀裂へ複数の表示ルールまたは通知ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (別idを通知した)");
         let second = poller::select_notifications(&mut notified, visible, false);
-        prop_assert!(second.is_empty(), "SPEC DED-003 違反: 同じ亀裂へ複数の有効ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (同じidを再通知した)");
+        prop_assert!(second.is_empty(), "SPEC DED-003 違反: 同じ亀裂へ複数の表示ルールまたは通知ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない (同じidを再通知した)");
     }
 
     /// PRS-001: 惑星抽出は任意文字列でパニックせず、"Node (Planet)" 形式でPlanetを返す (全入力でパニックしない)
@@ -467,88 +520,169 @@ proptest! {
         }
     }
 
-    /// POL-003: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (射影による変更判定)
+    /// POL-003: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (射影による変更判定)
     #[test]
     fn pol_003_projection(
         previous in arb_settings(),
         current in arb_settings(),
-        mut disabled in arb_rule(),
+        mut muted in arb_rule(),
     ) {
-        let previous_projection = filter::enabled_projection(&previous);
-        let current_projection = filter::enabled_projection(&current);
+        let previous_projection = filter::notification_projection(&previous);
+        let current_projection = filter::notification_projection(&current);
         let expected = previous_projection.min_remaining_secs != current_projection.min_remaining_secs
             || previous_projection.rules != current_projection.rules;
         prop_assert_eq!(
             poller::notification_scope_changed(Some(&previous), &current),
             expected,
-            "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (enabled projectionとの差分と一致しない)"
+            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (notification projectionとの差分と一致しない)"
         );
         prop_assert!(
             poller::notification_scope_changed(None, &current),
-            "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (初回評価をscope changeと判定しない)"
+            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (初回評価をscope changeと判定しない)"
         );
 
-        disabled.enabled = false;
-        let mut disabled_only_change = previous.clone();
-        disabled_only_change.rules.push(disabled);
+        // notify=false draftの追加・編集はscope changeではない
+        muted.notify = false;
+        let mut muted_only_change = previous.clone();
+        muted_only_change.rules.push(muted);
         prop_assert!(
-            !poller::notification_scope_changed(Some(&previous), &disabled_only_change),
-            "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (disabled draft追加をscope changeと誤判定した)"
+            !poller::notification_scope_changed(Some(&previous), &muted_only_change),
+            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (notify=false draft追加をscope changeと誤判定した)"
+        );
+
+        // enabledは表示選択だけなので任意に変えてもscope changeではない
+        let mut display_only_change = previous.clone();
+        for rule in &mut display_only_change.rules {
+            rule.enabled = !rule.enabled;
+        }
+        prop_assert!(
+            !poller::notification_scope_changed(Some(&previous), &display_only_change),
+            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (enabled変更をscope changeと誤判定した)"
         );
     }
 
-    /// POL-003: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (scope change時のsilent seed)
+    /// POL-003: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (scope change時のsilent seed)
     #[test]
     fn pol_003_silent_seed(mut f in arb_fissure()) {
         let now = base_now();
         f.expiry = now + Duration::hours(1);
         f.is_storm = false;
 
-        let enabled_rule = WatchRule::default();
-        let mut disabled_rule = enabled_rule.clone();
-        disabled_rule.enabled = false;
+        let mut hidden_notify_rule = WatchRule::default();
+        hidden_notify_rule.enabled = false;
+        hidden_notify_rule.notify = true;
+        let mut muted_rule = hidden_notify_rule.clone();
+        muted_rule.notify = false;
         let previous = FilterSettings {
-            rules: vec![disabled_rule],
+            rules: vec![muted_rule],
             min_remaining_secs: 0,
         };
         let current = FilterSettings {
-            rules: vec![enabled_rule],
+            rules: vec![hidden_notify_rule],
             min_remaining_secs: 0,
         };
         prop_assert!(
             poller::notification_scope_changed(Some(&previous), &current),
-            "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (ルール有効化をscope changeと判定しない)"
+            "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (notify有効化をscope changeと判定しない)"
         );
 
-        let existing = poller::visible_fissures(&current, &[f.clone()], now);
-        prop_assert_eq!(existing.len(), 1, "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (現存合致亀裂を取得できない)");
+        let existing = poller::notify_candidates(&current, &[f.clone()], now);
+        prop_assert_eq!(existing.len(), 1, "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (現存合致亀裂を取得できない)");
         let mut notified = NotifiedSet::new();
         let seeded = poller::select_notifications(&mut notified, existing.clone(), true);
-        prop_assert!(seeded.is_empty(), "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (scope change直後の現存亀裂を一括通知した)");
-        prop_assert!(notified.contains(&f.id), "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (現存亀裂をsilent seedしていない)");
+        prop_assert!(seeded.is_empty(), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (scope change直後の現存亀裂を一括通知した)");
+        prop_assert!(notified.contains(&f.id), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (現存亀裂をsilent seedしていない)");
         let repeated = poller::select_notifications(&mut notified, existing, false);
-        prop_assert!(repeated.is_empty(), "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (seed済み現存亀裂を次回通知した)");
+        prop_assert!(repeated.is_empty(), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (seed済み現存亀裂を次回通知した)");
 
         let mut new_fissure = f.clone();
         new_fissure.id = format!("{}-new", f.id);
-        let newly_visible = poller::visible_fissures(&current, &[new_fissure.clone()], now);
+        let newly_visible = poller::notify_candidates(&current, &[new_fissure.clone()], now);
         let fresh = poller::select_notifications(&mut notified, newly_visible.clone(), false);
-        prop_assert_eq!(fresh.len(), 1, "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (scope change後の新規idを通知候補にしない)");
-        prop_assert_eq!(fresh[0].id.as_str(), new_fissure.id.as_str(), "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (新規idを保持しない)");
+        prop_assert_eq!(fresh.len(), 1, "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (scope change後の新規idを通知候補にしない)");
+        prop_assert_eq!(fresh[0].id.as_str(), new_fissure.id.as_str(), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (新規idを保持しない)");
         let duplicate = poller::select_notifications(&mut notified, newly_visible, false);
-        prop_assert!(duplicate.is_empty(), "SPEC POL-003 違反: 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない (scope change後の新規idを再通知した)");
+        prop_assert!(duplicate.is_empty(), "SPEC POL-003 違反: 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない (scope change後の新規idを再通知した)");
     }
 
-    /// VIS-001: 一覧に表示されるのはいずれかの有効ルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない
+    /// NTY-001: 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない
+    #[test]
+    fn nty_001(
+        s in arb_settings(),
+        fs in proptest::collection::vec(arb_fissure(), 0..30),
+        mut hidden_fissure in arb_fissure(),
+    ) {
+        let now = base_now();
+        let candidates = poller::notify_candidates(&s, &fs, now);
+        let scope = filter::notification_projection(&s);
+        // 健全性: 候補はnotify=trueルールのORに合致する
+        for f in &candidates {
+            prop_assert!(filter::matches(&scope, f, now), "SPEC NTY-001 違反: 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない (通知対象外が候補になった)");
+        }
+        // 完全性: 通知参加ルールに合致する亀裂は1件も取りこぼさない
+        for f in fs.iter().filter(|f| filter::matches(&scope, f, now)) {
+            prop_assert!(candidates.iter().any(|c| c.id == f.id), "SPEC NTY-001 違反: 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない (通知候補の取りこぼし)");
+        }
+        // 明示反例: 非表示(enabled=false)通知ルールだけに合致する亀裂も通知し、一覧には出さない
+        hidden_fissure.expiry = now + Duration::hours(1);
+        let hidden_notify = WatchRule {
+            enabled: false,
+            notify: true,
+            mode: Mode::Both,
+            storms: StormMode::Include,
+            ..WatchRule::default()
+        };
+        let displayed_nonmatch = WatchRule {
+            enabled: true,
+            notify: false,
+            tiers: vec!["__never_matches__".to_string()],
+            mode: Mode::Both,
+            storms: StormMode::Include,
+            ..WatchRule::default()
+        };
+        let separated = FilterSettings {
+            rules: vec![displayed_nonmatch, hidden_notify],
+            min_remaining_secs: 0,
+        };
+        let hidden_candidates = poller::notify_candidates(&separated, &[hidden_fissure.clone()], now);
+        let visible = poller::visible_fissures(&separated, &[hidden_fissure.clone()], now);
+        prop_assert_eq!(hidden_candidates.len(), 1, "SPEC NTY-001 違反: 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない (非表示通知ルールの合致を候補にしない)");
+        prop_assert_eq!(hidden_candidates[0].id.as_str(), hidden_fissure.id.as_str(), "SPEC NTY-001 違反: 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない (非表示通知ルールで別idを選んだ)");
+        prop_assert!(visible.is_empty(), "SPEC NTY-001 違反: 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない (通知ルールを一覧表示へ混入した)");
+    }
+
+    /// VIS-001: 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる
     #[test]
     fn vis_001(s in arb_settings(), fs in proptest::collection::vec(arb_fissure(), 0..30)) {
         let now = base_now();
         let visible = poller::visible_fissures(&s, &fs, now);
-        for f in &visible {
-            prop_assert!(filter::matches(&s, f, now), "SPEC VIS-001 違反: 一覧に表示されるのはいずれかの有効ルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない (対象外が表示された)");
+        // notifyは表示判定へ影響しない
+        let mut notify_toggled = s.clone();
+        for rule in &mut notify_toggled.rules {
+            rule.notify = !rule.notify;
         }
-        for f in fs.iter().filter(|f| filter::matches(&s, f, now)) {
-            prop_assert!(visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 一覧に表示されるのはいずれかの有効ルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない (合致亀裂が欠落した)");
+        prop_assert_eq!(
+            poller::visible_fissures(&notify_toggled, &fs, now),
+            visible.clone(),
+            "SPEC VIS-001 違反: 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (notify変更で一覧表示が変化した)"
+        );
+        if s.rules.iter().any(|rule| rule.enabled) {
+            for f in &visible {
+                prop_assert!(filter::matches(&s, f, now), "SPEC VIS-001 違反: 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (対象外が表示された)");
+            }
+            for f in fs.iter().filter(|f| filter::matches(&s, f, now)) {
+                prop_assert!(visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (合致亀裂が欠落した)");
+            }
+        } else {
+            // 無指定(表示選択なし): 通知参加・min_remainingとは独立に生存中だけ全件表示する
+            let live: Vec<&Fissure> = fs.iter().filter(|f| f.expiry > now).collect();
+            prop_assert_eq!(visible.len(), live.len(), "SPEC VIS-001 違反: 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (無指定の生存中全件と一致しない)");
+            for f in live {
+                prop_assert!(visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (無指定で生存中亀裂が欠落した)");
+            }
+            for f in fs.iter().filter(|f| f.expiry <= now) {
+                prop_assert!(!visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (無指定で期限切れを表示した)");
+            }
         }
     }
 
@@ -616,7 +750,7 @@ proptest! {
         }
     }
 
-    /// EDT-001: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (enabled切替)
+    /// EDT-001: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (enabled切替)
     #[test]
     fn edt_001_set_enabled(
         rules in proptest::collection::vec(arb_rule(), 1..5),
@@ -632,21 +766,51 @@ proptest! {
         let before_active = state.active;
         prop_assert!(
             palette::set_rule_enabled(&mut state, target, enabled),
-            "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (有効なindexの切替に失敗した)"
+            "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (有効なindexの切替に失敗した)"
         );
-        prop_assert_eq!(state.active, before_active, "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (enabled切替でedit indexが変化した)");
-        prop_assert_eq!(state.rules.as_slice(), expected_rules.as_slice(), "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (enabled以外の条件が変化した)");
+        prop_assert_eq!(state.active, before_active, "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (enabled切替でedit indexが変化した)");
+        prop_assert_eq!(state.rules.as_slice(), expected_rules.as_slice(), "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (enabled以外の条件が変化した)");
 
         let before_invalid = state.clone();
         let invalid_index = state.rules.len();
         prop_assert!(
             !palette::set_rule_enabled(&mut state, invalid_index, enabled),
-            "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (範囲外indexを成功扱いした)"
+            "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (範囲外indexを成功扱いした)"
         );
-        prop_assert_eq!(state, before_invalid, "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (範囲外indexでstateを変更した)");
+        prop_assert_eq!(state, before_invalid, "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (範囲外indexでstateを変更した)");
     }
 
-    /// EDT-001: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (edit focus変更)
+    /// EDT-001: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (notify切替)
+    #[test]
+    fn edt_001_set_notify(
+        rules in proptest::collection::vec(arb_rule(), 1..5),
+        edit_pick in any::<prop::sample::Index>(),
+        target_pick in any::<prop::sample::Index>(),
+        notify in any::<bool>(),
+    ) {
+        let active = edit_pick.index(rules.len());
+        let target = target_pick.index(rules.len());
+        let mut expected_rules = rules.clone();
+        expected_rules[target].notify = notify;
+        let mut state = palette::EditorState { rules, active };
+        let before_active = state.active;
+        prop_assert!(
+            palette::set_rule_notify(&mut state, target, notify),
+            "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (有効なindexのnotify切替に失敗した)"
+        );
+        prop_assert_eq!(state.active, before_active, "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (notify切替でedit indexが変化した)");
+        prop_assert_eq!(state.rules.as_slice(), expected_rules.as_slice(), "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (notify以外が変化した)");
+
+        let before_invalid = state.clone();
+        let invalid_index = state.rules.len();
+        prop_assert!(
+            !palette::set_rule_notify(&mut state, invalid_index, notify),
+            "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (範囲外indexのnotify切替を成功扱いした)"
+        );
+        prop_assert_eq!(state, before_invalid, "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (範囲外indexでstateを変更した)");
+    }
+
+    /// EDT-001: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (edit focus変更)
     #[test]
     fn edt_001_edit_focus(
         rules in proptest::collection::vec(arb_rule(), 1..5),
@@ -655,17 +819,22 @@ proptest! {
         let before = rules.clone();
         let mut state = palette::EditorState { rules, active: 0 };
         state.active = pick.index(state.rules.len());
-        prop_assert_eq!(state.rules.as_slice(), before.as_slice(), "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (edit index変更でrulesが変化した)");
+        prop_assert_eq!(state.rules.as_slice(), before.as_slice(), "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (edit index変更でrulesが変化した)");
     }
 
-    /// EDT-001: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (disabled draftの条件編集)
+    /// EDT-001: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (非表示・通知OFF draftの条件編集)
     #[test]
     fn edt_001_disabled_edit(
         mut rule in arb_rule(),
+        mut guard in arb_rule(),
         ops in proptest::collection::vec(any::<prop::sample::Index>(), 0..40),
     ) {
         rule.enabled = false;
-        let mut state = palette::EditorState { rules: vec![rule], active: 0 };
+        rule.notify = false;
+        guard.enabled = true;
+        guard.notify = true;
+        let expected_projection = vec![WatchRule { name: None, ..guard.clone() }];
+        let mut state = palette::EditorState { rules: vec![rule, guard], active: 0 };
         let candidates: Vec<Candidate> = palette::catalog()
             .into_iter()
             .filter(|candidate| candidate.facet != Facet::Action)
@@ -673,23 +842,28 @@ proptest! {
         for op in ops {
             let candidate = &candidates[op.index(candidates.len())];
             palette::apply(&mut state, candidate);
-            prop_assert!(!state.rules[0].enabled, "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる ({} 適用でdisabled ruleを再有効化した)", candidate.id);
+            prop_assert_eq!(state.rules.len(), 2, "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない ({} 適用でルール数が変わった)", candidate.id);
+            prop_assert!(!state.rules[0].enabled, "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない ({} 適用で非表示ruleを表示選択した)", candidate.id);
+            prop_assert!(!state.rules[0].notify, "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない ({} 適用でdraftを通知参加させた)", candidate.id);
             let settings = FilterSettings {
                 rules: state.rules.clone(),
                 min_remaining_secs: 0,
             };
-            prop_assert!(
-                filter::enabled_projection(&settings).rules.is_empty(),
-                "SPEC EDT-001 違反: edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる (disabled編集中にruntime projectionへ現れた)"
+            let projection = filter::notification_projection(&settings);
+            prop_assert_eq!(
+                projection.rules.as_slice(),
+                expected_projection.as_slice(),
+                "SPEC EDT-001 違反: edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない (notify=false draft編集がnotification projectionへ現れた)"
             );
         }
     }
 
-    /// EDT-002: NEW RULEは既存ルールを一切変更せず、enabled=falseのdraftを末尾へ追加し、そのdraftをedit対象にする
+    /// EDT-002: NEW RULEは既存ルールを一切変更せず、enabled=falseかつnotify=falseの安全な空draftを末尾へ追加し、そのdraftをedit対象にする。VIEW選択0本でその空draftへ最初のfilter候補を適用すると、名前が付いていても別ルールを増やさずdraftをenabled=true・notify=falseのVIEWルールとして確定する
     #[test]
     fn edt_002(
         rules in proptest::collection::vec(arb_rule(), 0..5),
         pick in any::<prop::sample::Index>(),
+        cand_pick in any::<prop::sample::Index>(),
     ) {
         let active = if rules.is_empty() { 0 } else { pick.index(rules.len()) };
         let mut state = palette::EditorState { rules, active };
@@ -699,10 +873,174 @@ proptest! {
             .find(|candidate| candidate.id == "action:new-rule")
             .expect("NEW RULE candidateが存在すること");
         palette::apply(&mut state, new_rule);
-        prop_assert_eq!(state.rules.len(), before.len() + 1, "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseのdraftを末尾へ追加し、そのdraftをedit対象にする (draftが1本追加されない)");
-        prop_assert_eq!(&state.rules[..before.len()], before.as_slice(), "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseのdraftを末尾へ追加し、そのdraftをedit対象にする (既存ルールを変更した)");
-        prop_assert!(!state.rules.last().expect("draft追加済み").enabled, "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseのdraftを末尾へ追加し、そのdraftをedit対象にする (NEW RULEがenabledで作成された)");
-        prop_assert_eq!(state.active, state.rules.len() - 1, "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseのdraftを末尾へ追加し、そのdraftをedit対象にする (新しいdraftがedit対象でない)");
+        prop_assert_eq!(state.rules.len(), before.len() + 1, "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseかつnotify=falseの安全な空draftを末尾へ追加し、そのdraftをedit対象にする。VIEW選択0本でその空draftへ最初のfilter候補を適用すると、名前が付いていても別ルールを増やさずdraftをenabled=true・notify=falseのVIEWルールとして確定する (draftが1本追加されない)");
+        prop_assert_eq!(&state.rules[..before.len()], before.as_slice(), "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseかつnotify=falseの安全な空draftを末尾へ追加し、そのdraftをedit対象にする。VIEW選択0本でその空draftへ最初のfilter候補を適用すると、名前が付いていても別ルールを増やさずdraftをenabled=true・notify=falseのVIEWルールとして確定する (既存ルールを変更した)");
+        prop_assert!(!state.rules.last().expect("draft追加済み").enabled, "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseかつnotify=falseの安全な空draftを末尾へ追加し、そのdraftをedit対象にする。VIEW選択0本でその空draftへ最初のfilter候補を適用すると、名前が付いていても別ルールを増やさずdraftをenabled=true・notify=falseのVIEWルールとして確定する (NEW RULEがenabledで作成された)");
+        prop_assert!(!state.rules.last().expect("draft追加済み").notify, "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseかつnotify=falseの安全な空draftを末尾へ追加し、そのdraftをedit対象にする。VIEW選択0本でその空draftへ最初のfilter候補を適用すると、名前が付いていても別ルールを増やさずdraftをenabled=true・notify=falseのVIEWルールとして確定する (NEW RULEがnotify=trueで作成された)");
+        prop_assert_eq!(state.active, state.rules.len() - 1, "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseかつnotify=falseの安全な空draftを末尾へ追加し、そのdraftをedit対象にする。VIEW選択0本でその空draftへ最初のfilter候補を適用すると、名前が付いていても別ルールを増やさずdraftをenabled=true・notify=falseのVIEWルールとして確定する (新しいdraftがedit対象でない)");
+
+        // VIEW選択0本の明示draftへ最初のfilter候補を適用すると、draftを再利用してVIEWルールへ確定する
+        let mut no_view = before.clone();
+        for rule in &mut no_view {
+            rule.enabled = false;
+            rule.notify = true;
+        }
+        let prefix = no_view.clone();
+        let active = if no_view.is_empty() { 0 } else { pick.index(no_view.len()) };
+        let mut draft_state = palette::EditorState { rules: no_view, active };
+        palette::apply(&mut draft_state, new_rule);
+        let draft_index = draft_state.active;
+        // nameは判定条件ではないため、名前付きの空draftも同じルールとして再利用する
+        draft_state.rules[draft_index].name = Some("NAMED DRAFT".to_string());
+        let filter_candidates: Vec<Candidate> = palette::catalog()
+            .into_iter()
+            .filter(|candidate| !matches!(candidate.facet, Facet::Action | Facet::Rule))
+            .collect();
+        let filter_candidate = &filter_candidates[cand_pick.index(filter_candidates.len())];
+        palette::apply(&mut draft_state, filter_candidate);
+        prop_assert_eq!(draft_state.rules.len(), prefix.len() + 1, "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseかつnotify=falseの安全な空draftを末尾へ追加し、そのdraftをedit対象にする。VIEW選択0本でその空draftへ最初のfilter候補を適用すると、名前が付いていても別ルールを増やさずdraftをenabled=true・notify=falseのVIEWルールとして確定する (空draft適用時に別ルールを追加した)");
+        prop_assert_eq!(&draft_state.rules[..prefix.len()], prefix.as_slice(), "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseかつnotify=falseの安全な空draftを末尾へ追加し、そのdraftをedit対象にする。VIEW選択0本でその空draftへ最初のfilter候補を適用すると、名前が付いていても別ルールを増やさずdraftをenabled=true・notify=falseのVIEWルールとして確定する (空draft確定時に既存ルールを変更した)");
+        prop_assert_eq!(draft_state.active, draft_index, "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseかつnotify=falseの安全な空draftを末尾へ追加し、そのdraftをedit対象にする。VIEW選択0本でその空draftへ最初のfilter候補を適用すると、名前が付いていても別ルールを増やさずdraftをenabled=true・notify=falseのVIEWルールとして確定する (空draft確定時にedit対象を移動した)");
+        prop_assert!(draft_state.rules[draft_index].enabled, "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseかつnotify=falseの安全な空draftを末尾へ追加し、そのdraftをedit対象にする。VIEW選択0本でその空draftへ最初のfilter候補を適用すると、名前が付いていても別ルールを増やさずdraftをenabled=true・notify=falseのVIEWルールとして確定する (空draftをVIEWルールへ確定しない)");
+        prop_assert!(!draft_state.rules[draft_index].notify, "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseかつnotify=falseの安全な空draftを末尾へ追加し、そのdraftをedit対象にする。VIEW選択0本でその空draftへ最初のfilter候補を適用すると、名前が付いていても別ルールを増やさずdraftをenabled=true・notify=falseのVIEWルールとして確定する (空draftを暗黙に通知参加させた)");
+        prop_assert_eq!(draft_state.rules[draft_index].name.as_deref(), Some("NAMED DRAFT"), "SPEC EDT-002 違反: NEW RULEは既存ルールを一切変更せず、enabled=falseかつnotify=falseの安全な空draftを末尾へ追加し、そのdraftをedit対象にする。VIEW選択0本でその空draftへ最初のfilter候補を適用すると、名前が付いていても別ルールを増やさずdraftをenabled=true・notify=falseのVIEWルールとして確定する (空draft確定時に名前を失った)");
+    }
+
+    /// EDT-004: 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する
+    #[test]
+    fn edt_004(
+        mut rules in proptest::collection::vec(arb_rule(), 1..5),
+        pick in any::<prop::sample::Index>(),
+        first_pick in any::<prop::sample::Index>(),
+        second_pick in any::<prop::sample::Index>(),
+    ) {
+        for rule in rules.iter_mut() {
+            rule.enabled = false;
+            // 既存ルールを安全な空draftと区別し、必ず新規作成経路を検査する
+            rule.notify = true;
+        }
+        let active = pick.index(rules.len());
+        let candidates: Vec<Candidate> = palette::catalog()
+            .into_iter()
+            .filter(|candidate| !matches!(candidate.facet, Facet::Action | Facet::Rule))
+            .collect();
+        let first = &candidates[first_pick.index(candidates.len())];
+        let second = &candidates[second_pick.index(candidates.len())];
+
+        // VIEW選択0本では既存ルールを保持し、VIEW ON・NOTIFY OFFの新ルールへ適用する
+        let mut state = palette::EditorState { rules: rules.clone(), active };
+        palette::apply(&mut state, first);
+        prop_assert_eq!(state.rules.len(), rules.len() + 1, "SPEC EDT-004 違反: 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する (新しいVIEWルールを1本追加しない)");
+        prop_assert_eq!(&state.rules[..rules.len()], rules.as_slice(), "SPEC EDT-004 違反: 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する (既存ルールを変更した)");
+        prop_assert_eq!(state.active, rules.len(), "SPEC EDT-004 違反: 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する (新しいルールをedit対象にしない)");
+
+        let mut expected = palette::EditorState {
+            rules: vec![WatchRule { enabled: true, notify: false, ..WatchRule::default() }],
+            active: 0,
+        };
+        palette::apply(&mut expected, first);
+        prop_assert_eq!(state.rules.last(), expected.rules.first(), "SPEC EDT-004 違反: 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する (最初の候補を新ルールへ正しく適用しない)");
+        let expected_after_first = expected.rules[0].clone();
+        prop_assert!(state.rules.last().expect("新ルール追加済み").enabled, "SPEC EDT-004 違反: 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する (新ルールがVIEW OFF)");
+        prop_assert!(!state.rules.last().expect("新ルール追加済み").notify, "SPEC EDT-004 違反: 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する (新ルールを暗黙に通知参加させた)");
+
+        // 2候補目は同じ新ルールへ連続適用し、さらにルールを増やさない
+        palette::apply(&mut state, second);
+        palette::apply(&mut expected, second);
+        prop_assert_eq!(state.rules.len(), rules.len() + 1, "SPEC EDT-004 違反: 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する (後続候補でルールが増殖した)");
+        prop_assert_eq!(&state.rules[..rules.len()], rules.as_slice(), "SPEC EDT-004 違反: 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する (後続候補で既存ルールを変更した)");
+        prop_assert_eq!(state.active, rules.len(), "SPEC EDT-004 違反: 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する (後続候補でedit対象が移動した)");
+        prop_assert_eq!(state.rules.last(), expected.rules.first(), "SPEC EDT-004 違反: 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する (後続候補を同じ新ルールへ適用しない)");
+
+        // ルール自体が0本でも同じVIEW ON・NOTIFY OFFルールを1本だけ作る
+        let mut empty = palette::EditorState { rules: vec![], active: 0 };
+        palette::apply(&mut empty, first);
+        prop_assert_eq!(empty.rules, vec![expected_after_first], "SPEC EDT-004 違反: 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する (ルール0本から正しい新VIEWルールを作らない)");
+        prop_assert_eq!(empty.active, 0, "SPEC EDT-004 違反: 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する (ルール0本から作成したルールをedit対象にしない)");
+    }
+
+    /// EDT-003: パレットの実行時カタログは各ルールをrule:{index}候補(label=ルール名、未設定ならR{n}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる
+    #[test]
+    fn edt_003(
+        rules in proptest::collection::vec(arb_rule(), 1..5),
+        edit_pick in any::<prop::sample::Index>(),
+        target_pick in any::<prop::sample::Index>(),
+    ) {
+        let active = edit_pick.index(rules.len());
+        let target = target_pick.index(rules.len());
+        let catalog = palette::catalog_with_rules(&rules);
+        // 静的カタログの語彙は据え置きで、各ルールのrule:{index}候補が追加される
+        for (i, rule) in rules.iter().enumerate() {
+            let cand = catalog.iter()
+                .find(|c| c.id == format!("rule:{i}"))
+                .expect("rule候補が存在すること");
+            let expected_label = rule.name.clone().unwrap_or_else(|| format!("R{}", i + 1));
+            prop_assert_eq!(&cand.label, &expected_label, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (labelが名前/R{{n}}でない)");
+            prop_assert_eq!(cand.facet, Facet::Rule, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (facetがRULEでない)");
+        }
+        // 適用は対象ルールのenabledだけを反転し、条件・順序・edit indexを変えない
+        let cand = catalog.iter()
+            .find(|c| c.id == format!("rule:{target}"))
+            .expect("rule候補が存在すること");
+        let mut state = palette::EditorState { rules: rules.clone(), active };
+        palette::apply(&mut state, cand);
+        prop_assert_eq!(state.active, active, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (edit indexが変化した)");
+        let mut expected = rules.clone();
+        expected[target].enabled = !rules[target].enabled;
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (enabled反転以外が変化した)");
+        // 再適用で元に戻る(トグル)
+        palette::apply(&mut state, cand);
+        prop_assert_eq!(state.rules.as_slice(), rules.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (再適用で往復しない)");
+
+        // action:toggle-rule は編集中(active)ルールのenabledだけを同様に反転する
+        let toggle_cand = catalog.iter()
+            .find(|c| c.id == "action:toggle-rule")
+            .expect("TOGGLE RULE候補が存在すること");
+        let mut state = palette::EditorState { rules: rules.clone(), active };
+        palette::apply(&mut state, toggle_cand);
+        prop_assert_eq!(state.active, active, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (toggle-ruleでedit indexが変化した)");
+        let mut expected = rules.clone();
+        expected[active].enabled = !rules[active].enabled;
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (toggle-ruleがactive以外を変更した)");
+        palette::apply(&mut state, toggle_cand);
+        prop_assert_eq!(state.rules.as_slice(), rules.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (toggle-rule再適用で往復しない)");
+
+        // action:notify-rule は編集中(active)ルールのnotifyだけを同様に反転する
+        let notify_cand = catalog.iter()
+            .find(|c| c.id == "action:notify-rule")
+            .expect("TOGGLE NOTIFY候補が存在すること");
+        let mut state = palette::EditorState { rules: rules.clone(), active };
+        palette::apply(&mut state, notify_cand);
+        prop_assert_eq!(state.active, active, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (notify-ruleでedit indexが変化した)");
+        let mut expected = rules.clone();
+        expected[active].notify = !rules[active].notify;
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (notify-ruleがnotify以外を変更した)");
+        palette::apply(&mut state, notify_cand);
+        prop_assert_eq!(state.rules.as_slice(), rules.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (notify-rule再適用で往復しない)");
+
+        // action:deselect-all-rules は全enabledだけをfalseにし、通知射影・条件・順序・edit indexを保持する
+        let deselect_cand = catalog.iter()
+            .find(|c| c.id == "action:deselect-all-rules")
+            .expect("DESELECT ALL RULES候補が存在すること");
+        let before_projection = filter::notification_projection(&FilterSettings {
+            rules: rules.clone(),
+            min_remaining_secs: 123,
+        });
+        let mut state = palette::EditorState { rules: rules.clone(), active };
+        palette::apply(&mut state, deselect_cand);
+        prop_assert_eq!(state.active, active, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (全ルール解除でedit indexが変化した)");
+        let mut expected = rules.clone();
+        for rule in &mut expected {
+            rule.enabled = false;
+        }
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (全ルール解除がenabled以外を変更した)");
+        let after_projection = filter::notification_projection(&FilterSettings {
+            rules: state.rules.clone(),
+            min_remaining_secs: 123,
+        });
+        prop_assert_eq!(after_projection, before_projection, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (全ルール解除で通知射影が変化した)");
+        palette::apply(&mut state, deselect_cand);
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (全ルール解除が冪等でない)");
     }
 
     /// CLR-001: クリア操作は1回でルール構成を既定(enabled=trueの全対象ルール1本、ストーム除外、両方モード)に戻す
@@ -736,23 +1074,84 @@ proptest! {
 }
 
 
-/// CFG-002: enabledを持たない既存WatchRule JSONはenabled=trueとして読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する
+/// CFG-002: enabledを持たない既存WatchRule JSONはenabled=true(一覧表示へ参加)として読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する
 #[test]
 fn cfg_002() {
     let legacy: WatchRule = serde_json::from_str(
         r#"{"tiers":["Axi"],"includeStorms":false}"#,
     )
     .expect("enabled欠落の旧WatchRule JSONを読み込めること");
-    assert!(legacy.enabled, "SPEC CFG-002 違反: enabledを持たない既存WatchRule JSONはenabled=trueとして読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する (enabled欠落をfalseへ移行した)");
+    assert!(legacy.enabled, "SPEC CFG-002 違反: enabledを持たない既存WatchRule JSONはenabled=true(一覧表示へ参加)として読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する (enabled欠落をfalseへ移行した)");
 
     let explicit_disabled: WatchRule = serde_json::from_str(r#"{"enabled":false}"#)
         .expect("enabled=falseを読み込めること");
-    assert!(!explicit_disabled.enabled, "SPEC CFG-002 違反: enabledを持たない既存WatchRule JSONはenabled=trueとして読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する (明示falseをtrueへ変更した)");
+    assert!(!explicit_disabled.enabled, "SPEC CFG-002 違反: enabledを持たない既存WatchRule JSONはenabled=true(一覧表示へ参加)として読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する (明示falseをtrueへ変更した)");
     let encoded = serde_json::to_string(&explicit_disabled)
         .expect("enabled=falseをserializeできること");
     let round_trip: WatchRule = serde_json::from_str(&encoded)
         .expect("serialize済みWatchRuleを再読込できること");
-    assert!(!round_trip.enabled, "SPEC CFG-002 違反: enabledを持たない既存WatchRule JSONはenabled=trueとして読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する (round-tripで明示falseを失った)");
+    assert!(!round_trip.enabled, "SPEC CFG-002 違反: enabledを持たない既存WatchRule JSONはenabled=true(一覧表示へ参加)として読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する (round-tripで明示falseを失った)");
+}
+
+/// CFG-003: WatchRuleのnameは省略可能な表示用メタデータで、nameを持たない旧JSONは名前なしとして読み込み、設定したnameはserialize/deserializeを往復しても他のフィールドと共に保持される
+#[test]
+fn cfg_003() {
+    let legacy: WatchRule = serde_json::from_str(
+        r#"{"tiers":["Axi"],"includeStorms":false}"#,
+    )
+    .expect("name欠落の旧WatchRule JSONを読み込めること");
+    assert!(legacy.name.is_none(), "SPEC CFG-003 違反: WatchRuleのnameは省略可能な表示用メタデータで、nameを持たない旧JSONは名前なしとして読み込み、設定したnameはserialize/deserializeを往復しても他のフィールドと共に保持される (name欠落を名前ありへ移行した)");
+
+    let named = WatchRule {
+        name: Some("MY FARM".to_string()),
+        tiers: vec!["Axi".to_string()],
+        enabled: false,
+        ..WatchRule::default()
+    };
+    let encoded = serde_json::to_string(&named).expect("name付きWatchRuleをserializeできること");
+    let round_trip: WatchRule = serde_json::from_str(&encoded)
+        .expect("serialize済みWatchRuleを再読込できること");
+    assert_eq!(round_trip, named, "SPEC CFG-003 違反: WatchRuleのnameは省略可能な表示用メタデータで、nameを持たない旧JSONは名前なしとして読み込み、設定したnameはserialize/deserializeを往復しても他のフィールドと共に保持される (nameまたは他フィールドがround-tripで変わった)");
+}
+
+/// CFG-004: WatchRuleのnotifyはenabledから独立した通知参加フラグで、notifyを持たない旧JSONは旧enabled値(それも欠落ならtrue)を引き継ぐ。明示したnotify=true/falseはenabledの値に関係なくserialize/deserializeを往復しても保持される
+#[test]
+fn cfg_004() {
+    let legacy_enabled: WatchRule = serde_json::from_str(
+        r#"{"tiers":["Axi"],"includeStorms":false}"#,
+    )
+    .expect("notify欠落の旧WatchRule JSONを読み込めること");
+    assert!(legacy_enabled.enabled && legacy_enabled.notify, "SPEC CFG-004 違反: WatchRuleのnotifyはenabledから独立した通知参加フラグで、notifyを持たない旧JSONは旧enabled値(それも欠落ならtrue)を引き継ぐ。明示したnotify=true/falseはenabledの値に関係なくserialize/deserializeを往復しても保持される (enabled欠落時の既定trueをnotifyへ引き継がない)");
+
+    let legacy_disabled: WatchRule = serde_json::from_str(
+        r#"{"enabled":false,"tiers":["Axi"]}"#,
+    )
+    .expect("notify欠落・enabled=falseの旧WatchRule JSONを読み込めること");
+    assert!(!legacy_disabled.notify, "SPEC CFG-004 違反: WatchRuleのnotifyはenabledから独立した通知参加フラグで、notifyを持たない旧JSONは旧enabled値(それも欠落ならtrue)を引き継ぐ。明示したnotify=true/falseはenabledの値に関係なくserialize/deserializeを往復しても保持される (旧disabled draftを通知ONへ移行した)");
+
+    let hidden_notify: WatchRule = serde_json::from_str(
+        r#"{"enabled":false,"notify":true,"tiers":["Axi"]}"#,
+    )
+    .expect("明示notify=trueの非表示WatchRule JSONを読み込めること");
+    assert!(!hidden_notify.enabled && hidden_notify.notify, "SPEC CFG-004 違反: WatchRuleのnotifyはenabledから独立した通知参加フラグで、notifyを持たない旧JSONは旧enabled値(それも欠落ならtrue)を引き継ぐ。明示したnotify=true/falseはenabledの値に関係なくserialize/deserializeを往復しても保持される (明示notify=trueをenabledへ結合した)");
+
+    let display_only = WatchRule {
+        notify: false,
+        enabled: true,
+        tiers: vec!["Axi".to_string()],
+        ..WatchRule::default()
+    };
+    let encoded =
+        serde_json::to_string(&display_only).expect("notify=falseのWatchRuleをserializeできること");
+    let round_trip: WatchRule = serde_json::from_str(&encoded)
+        .expect("serialize済みWatchRuleを再読込できること");
+    assert_eq!(round_trip, display_only, "SPEC CFG-004 違反: WatchRuleのnotifyはenabledから独立した通知参加フラグで、notifyを持たない旧JSONは旧enabled値(それも欠落ならtrue)を引き継ぐ。明示したnotify=true/falseはenabledの値に関係なくserialize/deserializeを往復しても保持される (notifyまたは他フィールドがround-tripで変わった)");
+
+    let encoded = serde_json::to_string(&hidden_notify)
+        .expect("enabled=false, notify=trueのWatchRuleをserializeできること");
+    let round_trip: WatchRule = serde_json::from_str(&encoded)
+        .expect("非表示通知WatchRuleを再読込できること");
+    assert_eq!(round_trip, hidden_notify, "SPEC CFG-004 違反: WatchRuleのnotifyはenabledから独立した通知参加フラグで、notifyを持たない旧JSONは旧enabled値(それも欠落ならtrue)を引き継ぐ。明示したnotify=true/falseはenabledの値に関係なくserialize/deserializeを往復しても保持される (enabledとnotifyの独立状態をround-tripで失った)");
 }
 
 /// NTF-001: 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する
@@ -974,6 +1373,37 @@ fn sta_002() {
     assert!(
         lib_rs.contains(".icon_as_template("),
         "SPEC STA-002 違反: トレイは専用tray-icon.pngをテンプレート画像として登録する配線を持ち、PNGはモノクロ(+アルファ)形式である (テンプレート登録の配線が失われた)"
+    );
+}
+
+/// STA-003: macOS AUTOSTARTは内部のUnix実行ファイルをLaunchAgent登録せず、アプリアイコンを保持するAppleScript Login Itemとして.app bundleを登録し、旧relico.plistを一度だけ移行する配線を持つ
+#[test]
+fn sta_003() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let lib_rs = std::fs::read_to_string(manifest.join("src/lib.rs"))
+        .expect("src/lib.rsを読めること");
+    assert!(
+        lib_rs.contains("MacosLauncher::AppleScript"),
+        "SPEC STA-003 違反: macOS AUTOSTARTは内部のUnix実行ファイルをLaunchAgent登録せず、アプリアイコンを保持するAppleScript Login Itemとして.app bundleを登録し、旧relico.plistを一度だけ移行する配線を持つ (.app bundleをLogin Item登録するlauncherでない)"
+    );
+    assert!(
+        !lib_rs.contains("MacosLauncher::LaunchAgent"),
+        "SPEC STA-003 違反: macOS AUTOSTARTは内部のUnix実行ファイルをLaunchAgent登録せず、アプリアイコンを保持するAppleScript Login Itemとして.app bundleを登録し、旧relico.plistを一度だけ移行する配線を持つ (内部Unix実行ファイルをLaunchAgent登録している)"
+    );
+    assert!(
+        lib_rs.contains("migrate_legacy_launch_agent"),
+        "SPEC STA-003 違反: macOS AUTOSTARTは内部のUnix実行ファイルをLaunchAgent登録せず、アプリアイコンを保持するAppleScript Login Itemとして.app bundleを登録し、旧relico.plistを一度だけ移行する配線を持つ (旧relico.plistの移行配線がない)"
+    );
+    let legacy = r#"<key>Label</key><string>relico</string><key>ProgramArguments</key><array><string>/Users/test/Applications/relico.app/Contents/MacOS/relico</string></array>"#;
+    assert!(
+        relico_lib::autostart::is_legacy_relico_launch_agent(legacy),
+        "SPEC STA-003 違反: macOS AUTOSTARTは内部のUnix実行ファイルをLaunchAgent登録せず、アプリアイコンを保持するAppleScript Login Itemとして.app bundleを登録し、旧relico.plistを一度だけ移行する配線を持つ (正規の旧plistを移行対象と認識しない)"
+    );
+    assert!(
+        !relico_lib::autostart::is_legacy_relico_launch_agent(
+            r#"<key>Label</key><string>other</string><key>ProgramArguments</key><array><string>/tmp/other</string></array>"#,
+        ),
+        "SPEC STA-003 違反: macOS AUTOSTARTは内部のUnix実行ファイルをLaunchAgent登録せず、アプリアイコンを保持するAppleScript Login Itemとして.app bundleを登録し、旧relico.plistを一度だけ移行する配線を持つ (無関係な同名plistを移行対象にした)"
     );
 }
 

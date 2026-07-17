@@ -11,10 +11,10 @@ test("ICN-001 icn_001", () => {
     ["tier", ["Lith","Meso","Neo","Axi","Requiem","Omnia"]],
     ["planet", ["Mars","Ceres","Sedna","Void","Saturn","Phobos","Zariman","Veil Proxima","Kuva Fortress","Lua"]],
     ["mission", ["Defense","Survival","Capture","Extermination","Rescue","Disruption","Mobile Defense","Void Flood","Void Cascade","Volatile"]],
-    ["faction", ["Grineer","Corpus","Infested","Orokin","Corrupted","Murmur"]],
+    ["faction", ["Grineer","Corpus","Infested","Orokin","Corrupted","Murmur","The Murmur"]],
     ["difficulty", ["Normal","SteelPath","Both"]],
     ["storm", ["Exclude","Include","Only"]],
-    ["action", ["new-rule","delete-rule","clear","pause"]],
+    ["action", ["new-rule","delete-rule","rename-rule","toggle-rule","notify-rule","deselect-all-rules","clear","pause"]],
   ];
   for (const [kind, values] of pools) {
     // 未知値はカテゴリ別の汎用グリフへフォールバックし、例外を出さない

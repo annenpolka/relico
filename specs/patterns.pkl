@@ -1,10 +1,9 @@
 /// パターン語彙のスキーマ定義。
 /// dspec方式の「対応するパターンだけを書ける狭い語彙」。全域表現は意図的に捨てる。
 ///
-/// フィルタの意味論は有効ルールOR: 設定は WatchRule のリストで、亀裂が
-/// enabled=true のどれか1つのルールに合致すれば全体として合致する。
-/// enabled=false のルールは保存・編集できるがruntime判定には参加しない。
-/// ルール内はAND。
+/// ルール内はAND、複数ルールは用途ごとにORする。
+/// 一覧表示はenabled=trueのルール、通知はnotify=trueのルールを使い、両者は独立する。
+/// enabled=false, notify=trueの非表示ルールも通知判定へ参加する。
 ///
 /// Rustスニペット(ruleOverride / fissureOverride)内で使える束縛:
 ///   rule: WatchRule(mut) / s: FilterSettings(mut) / f: Fissure(mut) / now: DateTime<Utc>
@@ -68,8 +67,8 @@ class SingleRuleEmbedding extends Clause {
   label = "property-tested"
 }
 
-/// enabled=trueのルールを追加しても、それまで合致していた亀裂は合致し続ける
-/// (有効ルールORの単調性)
+/// enabled=trueのルールを追加しても、それまで表示合致していた亀裂は合致し続ける
+/// (VIEWルールORの単調性)
 class RuleAdditivity extends Clause {
   pattern = "rule_additivity"
   label = "property-tested"
@@ -82,10 +81,10 @@ class EnabledRulesOr extends Clause {
   label = "property-tested"
 }
 
-/// runtime通知範囲を表す射影は、enabled=trueのルールを元の順序で残し、
-/// 共通の残り時間条件を保持する。disabled draftの追加・削除・条件編集は射影を変えない。
-class EnabledProjection extends Clause {
-  pattern = "enabled_projection"
+/// runtime通知範囲を表す射影は、notify=trueのルールを表示選択(enabled)と独立に
+/// 元の順序で残し、共通の残り時間条件を保持する。notify=false draftの変更は射影を変えない。
+class NotificationProjection extends Clause {
+  pattern = "notification_projection"
   label = "property-tested"
 }
 
@@ -101,7 +100,7 @@ class PrunePreservesLive extends Clause {
   label = "property-tested"
 }
 
-/// 同じ亀裂へ複数の有効ルールが合致しても、一覧・通知候補では亀裂id単位の1件であり、
+/// 同じ亀裂へ複数のVIEWルールまたは通知ルールが合致しても、各候補集合では亀裂id単位の1件であり、
 /// dedupにより高々1回しか通知されない。
 class OverlappingRulesAtMostOnce extends Clause {
   pattern = "overlapping_rules_at_most_once"
@@ -129,8 +128,8 @@ class SeedSilent extends Clause {
   label = "property-tested"
 }
 
-/// 初回起動または有効ルール射影の変更時だけ通知範囲変更と判定し、
-/// 変更時点の現存対象はsilent seedする。disabled draftだけの変更では再seedしない。
+/// 初回起動または通知ルール射影の変更時だけ通知範囲変更と判定し、
+/// 変更時点の現存対象はsilent seedする。表示選択だけの変更では再seedしない。
 class NotificationScopeChange extends Clause {
   pattern = "notification_scope_change"
   label = "property-tested"
@@ -140,6 +139,13 @@ class NotificationScopeChange extends Clause {
 /// 合致する亀裂を1件も取りこぼさない(完全性)
 class FilteredView extends Clause {
   pattern = "filtered_view"
+  label = "property-tested"
+}
+
+/// 通知候補はnotify=trueのルールのORに合致する亀裂のみ(健全性)・取りこぼしなし(完全性)。
+/// enabled=falseの非表示ルールも通知へ参加し、一覧表示とは独立する。
+class NotifyCandidates extends Clause {
+  pattern = "notify_candidates"
   label = "property-tested"
 }
 
@@ -175,16 +181,23 @@ class SatisfiableAfterOps extends Clause {
   label = "property-tested"
 }
 
-/// edit focusとruntime activationを独立に扱う。enabled変更は条件とedit indexを変えず、
-/// disabledルールの条件編集はそのルールを有効化しない。
+/// edit focus・一覧表示選択(enabled)・通知参加(notify)を独立に扱う。
+/// enabled/notify変更は条件とedit indexを変えず、非表示ルールの条件編集も表示選択を変えない。
 class EditorActivationIndependent extends Clause {
   pattern = "editor_activation_independent"
   label = "property-tested"
 }
 
-/// NEW RULEは既存ルールを変えず、disabled draftを末尾へ追加してedit対象にする。
+/// NEW RULEは既存ルールを変えず、表示OFF・通知OFFのdraftを末尾へ追加してedit対象にする。
 class NewRuleDisabled extends Clause {
   pattern = "new_rule_disabled"
+  label = "property-tested"
+}
+
+/// 表示選択が0本でfilter候補を適用すると、安全な新しいVIEWルールを作る。
+/// 明示的な空draftがedit対象ならそれを再利用し、後続候補は同じルールへ連続適用する。
+class UnselectedApplyCreatesRule extends Clause {
+  pattern = "unselected_apply_creates_rule"
   label = "property-tested"
 }
 
@@ -194,15 +207,37 @@ class ClearResets extends Clause {
   label = "property-tested"
 }
 
+/// 実行時カタログは各ルールをrule:{index}候補(label=ルール名、未設定ならR{n})として含み、
+/// 適用は対象ルールのenabledだけを反転して条件・順序・edit indexを変えない(再適用で往復)。
+/// 全ルール解除は全enabledだけをfalseにし、ルール本体・notify・edit indexを保持する。
+class RuleToggleCandidates extends Clause {
+  pattern = "rule_toggle_candidates"
+  label = "property-tested"
+}
+
 /// 旧WatchRule JSONのincludeStorms:booleanを新StormModeへ無損失移行する。
 class LegacyStormConfig extends Clause {
   pattern = "legacy_storm_config"
   label = "property-tested"
 }
 
-/// enabledを持たない旧WatchRule JSONは有効として読み込み、明示falseはround-tripで保持する。
+/// enabledを持たない旧WatchRule JSONは表示選択として読み込み、明示falseはround-tripで保持する。
 class LegacyRuleEnabled extends Clause {
   pattern = "legacy_rule_enabled"
+  label = "example-tested"
+}
+
+/// ルール名は省略可能な表示用メタデータ。欠落した旧JSONは名前なしで読み込み、
+/// 設定した名前はserialize/deserializeを往復しても保持される。
+class RuleNameConfig extends Clause {
+  pattern = "rule_name_config"
+  label = "example-tested"
+}
+
+/// ルールのnotifyは通知参加フラグ。欠落した旧JSONは旧enabled値を引き継ぎ、
+/// 明示したtrue/falseはenabledと独立にround-tripで保持される。
+class RuleNotifyConfig extends Clause {
+  pattern = "rule_notify_config"
   label = "example-tested"
 }
 
@@ -219,7 +254,7 @@ class NotificationExample extends Clause {
 class StaticCheck extends Clause {
   pattern = "static_check"
   label = "example-tested"
-  scenario: "bundle_identity" | "tray_template_icon"
+  scenario: "bundle_identity" | "tray_template_icon" | "autostart_bundle_icon"
 }
 
 /// 人間が一度目視承認したアセットをsha256で固定する。
@@ -247,7 +282,7 @@ class RendererGlyphs extends Clause {
 class RendererScenario extends Clause {
   pattern = "renderer_scenario"
   label = "example-tested"
-  scenario: "palette_keyboard" | "delivery_flush" | "rule_row_controls" | "sidebar_fit" | "compact_table"
+  scenario: "palette_keyboard" | "delivery_flush" | "rule_row_controls" | "sidebar_fit" | "compact_table" | "expiry_cleanup" | "rule_naming" | "table_sort" | "unselected_picker_create"
 }
 
 /// 実アプリ(実IPC・実WKWebView)を通すWDIO Tauri E2E。renderer統合(RendererScenario)が

@@ -75,14 +75,20 @@ col.col-mission {
 }
 
 col.col-faction {
-  width: 98px;
+  /* グリフ込みで実API値 "THE MURMUR" を標準幅でも省略しない。RND-005 */
+  width: 120px;
 }
 
+/* ソートマーク込みでT-REMAINが折り返さない幅 */
 col.col-timer {
-  width: 82px;
+  width: 92px;
 }
 
-col.col-mode,
+/* NORMALフラグ(グリフ+6文字)が収まる幅 */
+col.col-mode {
+  width: 86px;
+}
+
 col.col-storm {
   width: 78px;
 }
@@ -98,6 +104,18 @@ th {
   letter-spacing: 0.14em;
   padding: 6px 8px;
   border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  user-select: none;
+}
+
+th:hover {
+  color: var(--amber);
+}
+
+th .sort-mark {
+  margin-left: 3px;
+  color: var(--amber);
+  font-size: 8px;
 }
 
 td {
@@ -180,13 +198,15 @@ td .flag > span:last-child {
     background: var(--bg);
   }
 
+  /* 2段が同じ4トラックを共有し、全列を上下ペアで揃える:
+     左=TIER/MISSION 中=NODE/FACTION(1frでellipsis) 旗=MODE/STORM縦積み 右端=T-REMAIN(2段中央) */
   thead tr,
   tbody tr {
     display: grid;
-    grid-template-columns: 90px minmax(0, 1fr) 90px 72px 72px;
+    grid-template-columns: 128px minmax(0, 1fr) 76px 84px;
     grid-template-areas:
-      "tier node node timer timer"
-      "mission mission faction mode storm";
+      "tier node mode timer"
+      "mission faction storm timer";
     width: 100%;
     align-items: center;
   }
@@ -202,7 +222,6 @@ td .flag > span:last-child {
   th,
   td {
     min-width: 0;
-    padding: 5px;
     overflow: hidden;
     border-bottom: 0;
   }
@@ -238,6 +257,30 @@ td .flag > span:last-child {
 
   .col-storm {
     grid-area: storm;
+  }
+
+  /* 1段目(主情報)と2段目(付帯情報)を詰めて1カードとして読ませる */
+  .col-tier,
+  .col-node,
+  .col-mode {
+    padding: 6px 6px 1px;
+  }
+
+  .col-mission,
+  .col-faction,
+  .col-storm {
+    padding: 1px 6px 6px;
+  }
+
+  .col-timer {
+    padding: 6px;
+  }
+
+  tbody .col-mission,
+  tbody .col-faction,
+  tbody .col-mode,
+  tbody .col-storm {
+    font-size: 11px;
   }
 
   tbody td .icon-label,
@@ -335,8 +378,7 @@ td .flag > span:last-child {
 }
 
 .rail-tab:focus-visible,
-.facet-launch:focus-visible,
-.rule-nav:focus-visible {
+.facet-launch:focus-visible {
   outline: 1px solid var(--amber);
   outline-offset: -2px;
 }
@@ -415,10 +457,54 @@ input:focus-visible {
   color: var(--dim);
 }
 
+/* NEW/DEL/CLEAR: 枠付き三等分をやめ、グリフ付きの細いツールバーにする。
+   CLEAR(全リセット)は右端へ分離し、破壊系はhoverで赤系に変える */
 .rowbtns {
   display: flex;
-  gap: 5px;
-  margin-top: 5px;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.rowbtns .action {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-color: transparent;
+  color: var(--dim);
+  font-size: 10px;
+  padding: 3px 7px;
+  min-height: 22px;
+}
+
+.rowbtns .action .glyph {
+  width: 12px;
+  height: 12px;
+}
+
+.rowbtns .action:hover {
+  border-color: var(--line);
+  color: var(--amber);
+}
+
+.rowbtns #clear-btn {
+  margin-left: auto;
+}
+
+.rowbtns #rule-del:hover,
+.rowbtns #clear-btn:hover {
+  color: var(--red);
+  border-color: rgba(255, 107, 94, 0.45);
+  background: rgba(255, 107, 94, 0.08);
+}
+
+/* 2度押し確認中(SURE?)。クリックで実行、2秒で復帰 */
+.rowbtns .action.armed,
+.rowbtns .action.armed:hover {
+  color: #14100a;
+  background: var(--red);
+  border-color: var(--red);
+  font-weight: 700;
 }
 
 .action {
@@ -516,47 +602,113 @@ input:focus-visible {
   color: var(--amber);
 }
 
-/* ---- ルール一覧 ---- */
-#rules-list .rule-focus {
-  display: grid;
-  grid-template-columns: 21px 26px minmax(0, 1fr) 21px;
-  align-items: stretch;
-  width: 100%;
-  min-height: 30px;
-  border: 1px solid var(--line);
-  background: rgba(255, 180, 84, 0.05);
+/* ---- ルール一覧 ----
+   railの固定比率(30%)を占め、ルールが増えても一覧の内側だけ縦スクロールする */
+.rail-rules {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 30%;
+  min-height: 0;
 }
 
-#rules-list .rule-nav,
+#rules-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+#rules-list .rule-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 24px;
+  align-items: stretch;
+  width: 100%;
+  min-height: 28px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.025);
+  margin-bottom: 3px;
+}
+
+#rules-list .rule-row.rule-focus {
+  border-color: var(--line);
+  background: rgba(255, 180, 84, 0.05);
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
 #rules-list .rule-toggle,
-#rules-list .rule-edit {
+#rules-list .rule-edit,
+#rules-list .rule-notify {
   min-width: 0;
   border: 0;
-  border-right: 1px solid var(--line);
   background: none;
   font: inherit;
   cursor: pointer;
 }
 
-#rules-list .rule-nav:last-child {
-  border-right: 0;
-}
-
-#rules-list .rule-nav {
-  color: var(--dim);
+/* 通知トグルはVIEW選択と独立。OFFは斜線入りベル */
+#rules-list .rule-notify {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--amber);
   padding: 0;
-  font-size: 15px;
 }
 
-#rules-list .rule-nav:disabled {
-  opacity: 0.35;
-  cursor: default;
+#rules-list .rule-notify:hover {
+  background: rgba(255, 180, 84, 0.12);
+}
+
+#rules-list .rule-notify .glyph {
+  width: 13px;
+  height: 13px;
+}
+
+#rules-list .rule-notify.off {
+  color: var(--dim);
+  opacity: 0.6;
+}
+
+#rules-list .rule-toggle:hover,
+#rules-list .rule-edit:hover {
+  background: rgba(255, 180, 84, 0.07);
+}
+
+/* NEWはリスト末尾のゴースト行(「リストに足す」導線) */
+#rules-list .rule-ghost {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 100%;
+  min-height: 26px;
+  margin-bottom: 3px;
+  border: 1px dashed rgba(255, 180, 84, 0.35);
+  background: none;
+  color: var(--amber);
+  font: inherit;
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+}
+
+#rules-list .rule-ghost:hover {
+  background: rgba(255, 180, 84, 0.08);
+}
+
+#rules-list .rule-ghost .glyph {
+  width: 12px;
+  height: 12px;
+}
+
+#rules-list .rule-ghost:focus-visible {
+  outline: 1px solid var(--amber);
+  outline-offset: -2px;
 }
 
 #rules-list .rule-toggle {
   color: var(--amber);
   padding: 0;
   text-align: center;
+  border-right: 1px solid var(--rowline);
 }
 
 #rules-list .rule-edit {
@@ -575,13 +727,13 @@ input:focus-visible {
   text-overflow: ellipsis;
 }
 
-#rules-list .rule-focus.disabled .rule-toggle,
-#rules-list .rule-focus.disabled .rule-edit,
-#rules-list .rule-focus.disabled .rno {
+#rules-list .rule-row.disabled .rule-toggle,
+#rules-list .rule-row.disabled .rule-edit,
+#rules-list .rule-row.disabled .rno {
   color: var(--dim);
 }
 
-#rules-list .rule-focus .rno {
+#rules-list .rule-row .rno {
   flex: 0 0 auto;
   color: var(--amber);
   margin-right: 4px;

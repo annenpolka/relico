@@ -48,7 +48,15 @@ else
   ng "notification-testプロセスが${count}個起動している"
 fi
 
-# 3) LaunchServices: DMG一時mountの残留登録がなく、relico.appの登録が実在パスだけであること
+# 3) 旧AUTOSTARTは内部Unix実行ファイルをLaunchAgent登録するため、移行後に残さない(STA-003)
+legacy_autostart="$HOME/Library/LaunchAgents/relico.plist"
+if [[ -e "$legacy_autostart" ]]; then
+  ng "旧AUTOSTART LaunchAgentが残っている: $legacy_autostart"
+else
+  ok "旧AUTOSTART LaunchAgentなし"
+fi
+
+# 4) LaunchServices: DMG一時mountの残留登録がなく、relico.appの登録が実在パスだけであること
 dump_paths=$("$lsregister" -dump | grep -Eo 'path: +/[^ ].*relico\.app' | sed -E 's/^path: +//' | sort -u || true)
 if [[ -z "$dump_paths" ]]; then
   skip "LaunchServicesにrelico.app登録なし"

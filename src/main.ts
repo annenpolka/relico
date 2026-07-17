@@ -6,7 +6,15 @@ if (import.meta.env.VITE_E2E) {
   void import("@wdio/tauri-plugin");
 }
 import { candidateGlyphHtml, glyphHtml, planetForFissure } from "./icons";
-import type { AppConfig, ApplyResult, CandView, Facet, StatusSnapshot, WatchRule } from "./types";
+import type {
+  AppConfig,
+  ApplyResult,
+  CandView,
+  Facet,
+  Fissure,
+  StatusSnapshot,
+  WatchRule,
+} from "./types";
 
 let config: AppConfig | null = null;
 let status: StatusSnapshot | null = null;
@@ -14,7 +22,8 @@ let autostart = false;
 let editingRuleIndex = 0;
 let catalogView: CandView[] = []; // q="" の全候補(レール描画用)
 let nextRefresh = 0;
-type RuleFacet = Exclude<Facet, "action">;
+// facet絞りlauncherの対象5軸(actionとruleトグル候補は対象外)
+type RuleFacet = Exclude<Facet, "action" | "rule">;
 let railTab: "filters" | "delivery" = "filters";
 let paletteFacet: RuleFacet | null = null;
 
@@ -79,6 +88,19 @@ async function setRuleEnabled(index: number, enabled: boolean) {
   }
 }
 
+async function setRuleNotify(index: number, notify: boolean) {
+  try {
+    config = await invoke<AppConfig>("set_rule_notify", { index, notify });
+    editingRuleIndex = Math.max(0, Math.min(editingRuleIndex, config.rules.length - 1));
+    await refreshCatalog();
+    renderRail();
+    renderTable();
+    renderStatusbar();
+  } catch (e) {
+    railMsg(String(e), "err");
+  }
+}
+
 async function focusRule(index: number) {
   const count = config?.rules.length ?? 0;
   if (!count) return;
@@ -102,60 +124,109 @@ function summarize(r: WatchRule): string {
 function renderRules() {
   const box = $("rules-list");
   const rules = config?.rules ?? [];
-  const enabledCount = rules.filter((rule) => rule.enabled).length;
-  $("rules-meta").textContent = `${enabledCount}/${rules.length} ON`;
+  const viewCount = rules.filter((rule) => rule.enabled).length;
+  $("rules-meta").textContent = `${viewCount}/${rules.length} VIEW`;
+  // NEWゴースト行は静的な#rule-newノードを流用し、リスト末尾へ置き直す(リスナー維持)
+  const ghost = $("rule-new");
   if (!rules.length) {
     $("editing-meta").textContent = "NO RULE";
-    box.innerHTML = `<p class="norules">NO ENABLED NOTIFICATION RULES</p>`;
+    const p = document.createElement("p");
+    p.className = "norules";
+    p.textContent = "NO RULES";
+    box.replaceChildren(p, ghost);
+    renderRuleButtons(null);
     return;
   }
 
   editingRuleIndex = Math.max(0, Math.min(editingRuleIndex, rules.length - 1));
-  const r = rules[editingRuleIndex];
   $("editing-meta").textContent = `R${editingRuleIndex + 1}/${rules.length}`;
+  renderRuleButtons(editingRuleIndex);
 
-  const row = document.createElement("div");
-  row.className = `rule-focus${r.enabled ? "" : " disabled"}`;
+  box.replaceChildren(
+    ...rules.map((r, i) => {
+      const focused = i === editingRuleIndex;
+      const row = document.createElement("div");
+      row.className = `rule-row${focused ? " rule-focus" : ""}${r.enabled ? "" : " disabled"}`;
 
-  const prev = document.createElement("button");
-  prev.className = "rule-nav";
-  prev.type = "button";
-  prev.textContent = "‹";
-  prev.disabled = rules.length < 2;
-  prev.setAttribute("aria-label", "前の通知ルールを編集");
-  prev.addEventListener("click", () => focusRule(editingRuleIndex - 1));
+      const toggle = document.createElement("button");
+      toggle.className = "rule-toggle";
+      toggle.type = "button";
+      toggle.innerHTML = `<span class="box">[${r.enabled ? "x" : " "}]</span>`;
+      toggle.setAttribute("aria-pressed", String(r.enabled));
+      toggle.setAttribute(
+        "aria-label",
+        `${r.enabled ? "一覧表示から外す" : "一覧表示に含める"}: ルール R${i + 1}`,
+      );
+      toggle.title = r.enabled
+        ? "VIEW ON — クリックで一覧表示から外す"
+        : "VIEW OFF — クリックで一覧表示に含める";
+      toggle.addEventListener("click", () => setRuleEnabled(i, !r.enabled));
 
-  const toggle = document.createElement("button");
-  toggle.className = "rule-toggle";
-  toggle.type = "button";
-  toggle.innerHTML = `<span class="box">[${r.enabled ? "x" : " "}]</span>`;
-  toggle.setAttribute("aria-pressed", String(r.enabled));
-  toggle.setAttribute(
-    "aria-label",
-    `${r.enabled ? "無効にする" : "有効にする"}: 通知ルール R${editingRuleIndex + 1}`,
+      const edit = document.createElement("button");
+      edit.className = "rule-edit";
+      edit.type = "button";
+      // 名前があれば要約より優先して表示する(要約はtooltipに残す)
+      edit.innerHTML = `<span class="rno">R${i + 1}</span><span class="rule-summary">${esc(r.name ?? summarize(r))}</span>`;
+      if (focused) edit.setAttribute("aria-current", "true");
+      edit.setAttribute("aria-label", `ルール ${r.name ?? `R${i + 1}`} を編集対象にする: ${summarize(r)}`);
+      edit.title = `${summarize(r)} — クリックして編集対象にする`;
+      // 行本体はedit focusを移すだけ。パレットは打鍵かfacet launcherで開く(RND-003)
+      edit.addEventListener("click", () => {
+        if (i !== editingRuleIndex) void focusRule(i);
+      });
+
+      // 通知トグル。一覧表示(enabled)とは独立し、OFFは斜線入りベルで明示する
+      const notifyBtn = document.createElement("button");
+      notifyBtn.className = `rule-notify${r.notify ? "" : " off"}`;
+      notifyBtn.type = "button";
+      notifyBtn.innerHTML = glyphHtml("action", r.notify ? "notify-rule" : "notify-rule-off");
+      notifyBtn.setAttribute("aria-pressed", String(r.notify));
+      notifyBtn.setAttribute(
+        "aria-label",
+        `${r.notify ? "通知を無効にする" : "通知を有効にする"}: ルール R${i + 1}`,
+      );
+      notifyBtn.title = r.notify
+        ? "NOTIFY ON — クリックで通知対象から外す"
+        : "NOTIFY OFF — クリックで通知対象に含める";
+      notifyBtn.addEventListener("click", () => setRuleNotify(i, !r.notify));
+
+      row.replaceChildren(toggle, edit, notifyBtn);
+      return row;
+    }),
+    ghost,
   );
-  toggle.title = r.enabled ? "通知ルールを無効にする" : "通知ルールを有効にする";
-  toggle.addEventListener("click", () => setRuleEnabled(editingRuleIndex, !r.enabled));
+  box.querySelector(".rule-focus")?.scrollIntoView({ block: "nearest" });
+}
 
-  const edit = document.createElement("button");
-  edit.className = "rule-edit";
-  edit.type = "button";
-  edit.innerHTML = `<span class="rno">R${editingRuleIndex + 1}</span><span class="rule-summary">${esc(summarize(r))}</span>`;
-  edit.setAttribute("aria-current", "true");
-  edit.setAttribute("aria-label", `通知ルール R${editingRuleIndex + 1} をパレットで編集: ${summarize(r)}`);
-  edit.title = `${summarize(r)} — クリックして全候補を開く`;
-  edit.addEventListener("click", () => openPalette(""));
+/** DEL/CLEARツールバー。DELは削除対象(編集中ルール)をラベルで明示する。
+    再描画は2度押し確認(SURE?)を解除する */
+let armTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const next = document.createElement("button");
-  next.className = "rule-nav";
-  next.type = "button";
-  next.textContent = "›";
-  next.disabled = rules.length < 2;
-  next.setAttribute("aria-label", "次の通知ルールを編集");
-  next.addEventListener("click", () => focusRule(editingRuleIndex + 1));
+function renderRuleButtons(editingIndex: number | null) {
+  clearTimeout(armTimer);
+  armTimer = undefined;
+  $("rule-del").classList.remove("armed");
+  $("clear-btn").classList.remove("armed");
+  $("rule-del").innerHTML = `${glyphHtml("action", "delete-rule")}<span>DEL${editingIndex === null ? "" : ` R${editingIndex + 1}`}</span>`;
+  $("clear-btn").innerHTML = `${glyphHtml("action", "clear")}<span>CLEAR</span>`;
+  $("rule-del").title = "編集中ルールを削除(2度押しで実行)";
+  $("clear-btn").title = "ルール構成を既定(全対象1本)に戻す(2度押しで実行)";
+}
 
-  row.replaceChildren(prev, toggle, edit, next);
-  box.replaceChildren(row);
+/** 破壊系の2度押し確認: 1クリック目はSURE?表示のみ、2秒で復帰、SURE?中のクリックだけ実行(RND-003) */
+function armOrFire(id: "rule-del" | "clear-btn", fire: () => void) {
+  const btn = $(id);
+  if (btn.classList.contains("armed")) {
+    renderRuleButtons(config?.rules.length ? editingRuleIndex : null);
+    fire();
+    return;
+  }
+  renderRuleButtons(config?.rules.length ? editingRuleIndex : null);
+  btn.classList.add("armed");
+  btn.innerHTML = `<span>SURE?</span>`;
+  armTimer = setTimeout(() => {
+    renderRuleButtons(config?.rules.length ? editingRuleIndex : null);
+  }, 2000);
 }
 
 const FACET_LABELS: Record<RuleFacet, string> = {
@@ -207,6 +278,14 @@ function renderRail() {
   setCheck("desktop-check", config.desktopNotification);
   setCheck("autostart-check", autostart);
 
+  // 編集中ルールの名前を同期する(入力中のclobberを避けるためfocus中は触らない)
+  const nameInput = $("rulename-input") as HTMLInputElement;
+  const editingRule = config.rules[Math.min(editingRuleIndex, config.rules.length - 1)];
+  nameInput.placeholder = editingRule ? `RULE NAME (R${editingRuleIndex + 1})` : "RULE NAME";
+  if (document.activeElement !== nameInput) {
+    nameInput.value = editingRule?.name ?? "";
+  }
+
   ($("webhook-input") as HTMLInputElement).value = config.discordWebhookUrl ?? "";
   ($("minremain-input") as HTMLInputElement).value = String(config.minRemainingSecs);
   ($("poll-input") as HTMLInputElement).value = String(config.pollIntervalSecs);
@@ -235,14 +314,74 @@ function setRailTab(next: "filters" | "delivery") {
 }
 
 // ---- テーブル ----
+// 項目別ソート: 表示のみで設定・通知に影響しない(SPEC: RND-007)
+type SortKey = "tier" | "node" | "mission" | "faction" | "timer" | "mode" | "storm";
+let sortKey: SortKey = "timer";
+let sortDir: 1 | -1 = 1;
+const SORT_ACCESSORS: Record<SortKey, (f: Fissure) => number | string> = {
+  tier: (f) => f.tierNum,
+  node: (f) => f.node.toLowerCase(),
+  mission: (f) => f.missionType.toLowerCase(),
+  faction: (f) => f.enemy.toLowerCase(),
+  timer: (f) => Date.parse(f.expiry),
+  mode: (f) => (f.isHard ? 1 : 0),
+  storm: (f) => (f.isStorm ? 1 : 0),
+};
+
+function sortedFissures(fissures: Fissure[]): Fissure[] {
+  const get = SORT_ACCESSORS[sortKey];
+  return [...fissures].sort((a, b) => {
+    const av = get(a);
+    const bv = get(b);
+    if (av !== bv) return (av < bv ? -1 : 1) * sortDir;
+    return Date.parse(a.expiry) - Date.parse(b.expiry); // 同値は消滅が近い順で安定させる
+  });
+}
+
+function thSortKey(th: HTMLTableCellElement): SortKey | null {
+  const cls = Array.from(th.classList).find((c) => c.startsWith("col-"));
+  const key = cls?.slice("col-".length) ?? "";
+  return key in SORT_ACCESSORS ? (key as SortKey) : null;
+}
+
+function renderSortHeaders() {
+  document.querySelectorAll<HTMLTableCellElement>("thead th[scope=col]").forEach((th) => {
+    const active = thSortKey(th) === sortKey;
+    th.querySelector(".sort-mark")?.remove();
+    if (active) {
+      th.setAttribute("aria-sort", sortDir === 1 ? "ascending" : "descending");
+      const mark = document.createElement("span");
+      mark.className = "sort-mark";
+      mark.textContent = sortDir === 1 ? "▲" : "▼";
+      th.appendChild(mark);
+    } else {
+      th.removeAttribute("aria-sort");
+    }
+  });
+}
+
+function initSortHeaders() {
+  document.querySelectorAll<HTMLTableCellElement>("thead th[scope=col]").forEach((th) => {
+    const key = thSortKey(th);
+    if (!key) return;
+    th.addEventListener("click", () => {
+      if (sortKey === key) {
+        sortDir = sortDir === 1 ? -1 : 1;
+      } else {
+        sortKey = key;
+        sortDir = 1;
+      }
+      renderSortHeaders();
+      renderTable();
+    });
+  });
+  renderSortHeaders();
+}
+
 function renderTable() {
   const rows = $("fissure-rows");
-  // 表示されるのは合致亀裂のみ(SPEC: VIS-001)
-  const fissures = status?.fissures ?? [];
-  if (!config?.rules.some((rule) => rule.enabled)) {
-    rows.innerHTML = `<tr><td colspan="7" class="empty">NO ENABLED NOTIFICATION RULES</td></tr>`;
-    return;
-  }
+  // 有効ルールがあれば合致のみ、無指定なら全件がsnapshotに入っている(SPEC: VIS-001)
+  const fissures = sortedFissures(status?.fissures ?? []);
   if (fissures.length === 0) {
     const msg =
       status?.apiOk === false
@@ -284,11 +423,23 @@ function renderTable() {
   tickTimers();
 }
 
+/** poll待ちやAPI障害・PAUSE中でも、失効した行をfrontend snapshotから除去する。RND-008 */
+function pruneExpiredFissures(now: number): boolean {
+  if (!status) return false;
+  const before = status.fissures.length;
+  status.fissures = status.fissures.filter((fissure) => Date.parse(fissure.expiry) > now);
+  return status.fissures.length !== before;
+}
+
 function tickTimers() {
   const now = Date.now();
+  if (pruneExpiredFissures(now)) {
+    renderTable();
+    return;
+  }
   document.querySelectorAll<HTMLElement>(".t-timer").forEach((el) => {
     const expiry = Date.parse(el.dataset.expiry ?? "");
-    const rest = Math.max(0, Math.floor((expiry - now) / 1000));
+    const rest = Math.floor((expiry - now) / 1000);
     const h = Math.floor(rest / 3600);
     const m = Math.floor((rest % 3600) / 60);
     const s = rest % 60;
@@ -321,15 +472,15 @@ function renderStatusbar() {
 function renderWatchLine() {
   if (!config) return;
   const total = config.rules.length;
-  const enabled = config.rules.filter((rule) => rule.enabled);
+  const notifying = config.rules.filter((rule) => rule.notify);
   $("sb-watch").textContent =
-    enabled.length === 0
-      ? "WATCH: NO ENABLED NOTIFICATION RULES"
-      : enabled.length === 1 && total === 1
-        ? `WATCH: ${summarize(enabled[0])}`
-        : enabled.length === total
-          ? `WATCH: ${enabled.length} RULES`
-          : `WATCH: ${enabled.length}/${total} RULES`;
+    notifying.length === 0
+      ? "WATCH: NO NOTIFICATION RULES"
+      : notifying.length === 1 && total === 1
+        ? `WATCH: ${summarize(notifying[0])}`
+        : notifying.length === total
+          ? `WATCH: ${notifying.length} RULES`
+          : `WATCH: ${notifying.length}/${total} RULES`;
 }
 
 function tickStatusbar() {
@@ -345,8 +496,13 @@ function tickStatusbar() {
 // ---- ファジーパレット ----
 let paletteOpen = false;
 let paletteComposing = false;
+/** RENAME RULE適用中: 入力は検索クエリではなく新しいルール名(RND-006) */
+let paletteRenaming = false;
 let paletteSel = 0;
 let paletteResults: CandView[] = [];
+let paletteApplying = false;
+let paletteApplyingId: string | null = null;
+const palettePendingIds: string[] = [];
 const PALETTE_MAX = 12;
 
 function hl(text: string, indices: number[]): string {
@@ -374,7 +530,7 @@ function renderPalette() {
   const rules = config?.rules ?? [];
   const index = Math.min(editingRuleIndex, rules.length - 1);
   $("palette-rule").textContent = rules.length
-    ? `EDIT R${index + 1}/${rules.length} · ${rules[index].enabled ? "ON" : "OFF"}${paletteFacet ? ` · ${FACET_LABELS[paletteFacet]}` : ""}`
+    ? `EDIT R${index + 1}/${rules.length} · VIEW ${rules[index].enabled ? "ON" : "OFF"} · NOTIFY ${rules[index].notify ? "ON" : "OFF"}${paletteFacet ? ` · ${FACET_LABELS[paletteFacet]}` : ""}`
     : "NO RULES";
   const box = $("palette-cands");
   if (!paletteResults.length) {
@@ -397,18 +553,88 @@ function renderPalette() {
   );
 }
 
-async function paletteApply() {
+async function drainPaletteApply(firstId: string) {
+  paletteApplying = true;
+  $("palette-overlay").setAttribute("aria-busy", "true");
+  let id: string | undefined = firstId;
+  try {
+    while (id) {
+      paletteApplyingId = id;
+      await applyCand(id);
+      const input = $("palette-input") as HTMLInputElement;
+      input.value = ""; // 連続入力: 開いたままクエリだけリセット
+      paletteSel = 0;
+      await paletteQuery();
+      id = palettePendingIds.shift();
+    }
+  } finally {
+    paletteApplying = false;
+    paletteApplyingId = null;
+    palettePendingIds.length = 0;
+    $("palette-overlay").removeAttribute("aria-busy");
+  }
+}
+
+function paletteApply() {
   const c = paletteResults[paletteSel];
   if (!c) return;
-  await applyCand(c.id);
+  if (c.id === "action:rename-rule") {
+    if (paletteApplying) return;
+    enterRenameMode();
+    return;
+  }
+
+  if (paletteApplying) {
+    // 同じEnterのkey repeatは捨て、異なる後続候補だけを最新activeへ順番に適用する。
+    const lastQueued = palettePendingIds[palettePendingIds.length - 1] ?? paletteApplyingId;
+    if (lastQueued !== c.id) palettePendingIds.push(c.id);
+    return;
+  }
+  void drainPaletteApply(c.id);
+}
+
+// ---- 改名モード: 入力を検索ではなく編集中ルールの新しい名前として扱う ----
+function enterRenameMode() {
+  const rules = config?.rules ?? [];
+  const rule = rules[Math.min(editingRuleIndex, rules.length - 1)];
+  if (!rule) return;
+  paletteRenaming = true;
   const input = $("palette-input") as HTMLInputElement;
-  input.value = ""; // 連続入力: 開いたままクエリだけリセット
+  input.value = rule.name ?? "";
+  input.placeholder = `RENAME R${editingRuleIndex + 1}…`;
+  input.select();
+  $("palette-rule").textContent = `RENAME R${editingRuleIndex + 1}`;
+  $("palette-cands").innerHTML =
+    `<div class="cand none">新しい名前を入力して⏎(空欄で名前解除 / ESCで戻る)</div>`;
+}
+
+function exitRenameMode() {
+  paletteRenaming = false;
+  const input = $("palette-input") as HTMLInputElement;
+  input.value = "";
+  input.placeholder = paletteFacet ? `SEARCH ${FACET_LABELS[paletteFacet]}…` : "SEARCH ALL FILTERS…";
   paletteSel = 0;
-  await paletteQuery();
+  void paletteQuery();
+}
+
+async function commitRename() {
+  const rule = config?.rules[editingRuleIndex];
+  if (rule) {
+    const v = ($("palette-input") as HTMLInputElement).value.trim();
+    rule.name = v === "" ? null : v;
+    try {
+      await flushSave();
+    } catch (e) {
+      railMsg(`保存失敗: ${e}`, "err");
+    }
+    renderRail();
+  }
+  exitRenameMode();
 }
 
 function openPalette(seed: string, facet: RuleFacet | null = null) {
   paletteOpen = true;
+  paletteRenaming = false;
   paletteFacet = facet;
   $("palette-overlay").hidden = false;
   const input = $("palette-input") as HTMLInputElement;
@@ -422,6 +648,7 @@ function openPalette(seed: string, facet: RuleFacet | null = null) {
 function closePalette() {
   paletteOpen = false;
   paletteComposing = false;
+  paletteRenaming = false;
   paletteFacet = null;
   $("palette-overlay").hidden = true;
   ($("palette-input") as HTMLInputElement).blur();
@@ -469,9 +696,13 @@ async function init() {
     renderStatusbar();
   });
 
+  initSortHeaders();
+  $("rule-new").innerHTML = `${glyphHtml("action", "new-rule")}<span>NEW RULE</span>`;
   $("rule-new").addEventListener("click", () => applyCand("action:new-rule"));
-  $("rule-del").addEventListener("click", () => applyCand("action:delete-rule"));
-  $("clear-btn").addEventListener("click", clearFilter);
+  $("rule-del").addEventListener("click", () =>
+    armOrFire("rule-del", () => void applyCand("action:delete-rule")),
+  );
+  $("clear-btn").addEventListener("click", () => armOrFire("clear-btn", () => void clearFilter()));
   $("pause-btn").addEventListener("click", () => applyCand("action:pause"));
   $("filters-tab").addEventListener("click", () => setRailTab("filters"));
   $("delivery-tab").addEventListener("click", () => setRailTab("delivery"));
@@ -500,6 +731,15 @@ async function init() {
       railMsg(String(e), "err");
     }
   });
+  ($("rulename-input") as HTMLInputElement).addEventListener("input", (e) => {
+    if (!config) return;
+    const rule = config.rules[editingRuleIndex];
+    if (!rule) return;
+    const v = (e.target as HTMLInputElement).value.trim();
+    rule.name = v === "" ? null : v;
+    save();
+    renderRules();
+  });
   ($("webhook-input") as HTMLInputElement).addEventListener("input", (e) => {
     if (!config) return;
     const v = (e.target as HTMLInputElement).value.trim();
@@ -520,13 +760,32 @@ async function init() {
 
   // どこでも打鍵でパレット起動(入力欄フォーカス時を除く)。MAN-003
   document.addEventListener("keydown", (e) => {
+    // Cmd/Ctrl+1..9: 対応indexのルールへedit focusを移す(一覧・パレット共通)。RND-001
+    const digitCombo = (e.metaKey || e.ctrlKey) && !e.altKey && /^Digit([1-9])$/.exec(e.code);
+    if (digitCombo && !paletteRenaming) {
+      const index = Number(digitCombo[1]) - 1;
+      if (config && index < config.rules.length) {
+        e.preventDefault();
+        void focusRule(index).then(() => {
+          if (paletteOpen) return paletteQuery();
+        });
+      }
+      return;
+    }
     if (!paletteOpen) {
       const t = e.target as HTMLElement;
       const inField = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement;
       const plainKey = !e.metaKey && !e.ctrlKey && !e.altKey;
-      if (!inField && plainKey && e.key === "Escape") {
+      // 一覧画面のSpaceは編集中ルールのVIEW選択トグル(パレットは開かない)。RND-001
+      if (!inField && plainKey && e.key === " ") {
         e.preventDefault();
-        void clearFilter();
+        void applyCand("action:toggle-rule");
+        return;
+      }
+      // 一覧画面の↑/↓はedit focusを前後のルールへ巡回移動する。RND-001
+      if (!inField && plainKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+        e.preventDefault();
+        void focusRule(editingRuleIndex + (e.key === "ArrowDown" ? 1 : -1));
         return;
       }
       // macOS IMEは最初のkeydownをProcess/229として送ることがある。
@@ -543,6 +802,17 @@ async function init() {
     }
     // 変換確定のEnterを候補適用として扱わない。
     if (paletteComposing || e.isComposing || e.key === "Process" || e.keyCode === 229) return;
+    if (paletteRenaming) {
+      // 改名モード: Enterで保存、Escで保存せず通常モードへ戻る(パレットは閉じない)
+      if (e.key === "Enter") {
+        e.preventDefault();
+        void commitRename();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        exitRenameMode();
+      }
+      return;
+    }
     if (e.key === "Escape") {
       e.preventDefault();
       closePalette();
@@ -569,7 +839,7 @@ async function init() {
     paletteQuery();
   });
   paletteInput.addEventListener("input", () => {
-    if (paletteComposing) return;
+    if (paletteComposing || paletteRenaming) return;
     paletteSel = 0;
     paletteQuery();
   });

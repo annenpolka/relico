@@ -14,6 +14,7 @@ pub enum Facet {
     Mode,
     Storm,
     Action,
+    Rule,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +172,26 @@ pub fn catalog() -> Vec<Candidate> {
     for (label, value, aliases) in [
         ("NEW RULE", "new-rule", vec!["新ルール", "rule", ";"]),
         ("DELETE RULE", "delete-rule", vec!["ルール削除", "delrule"]),
+        (
+            "RENAME RULE",
+            "rename-rule",
+            vec!["改名", "名前変更", "rename", "name"],
+        ),
+        (
+            "TOGGLE VIEW",
+            "toggle-rule",
+            vec!["表示切替", "表示トグル", "toggle view", "onoff"],
+        ),
+        (
+            "TOGGLE NOTIFY",
+            "notify-rule",
+            vec!["ミュート", "通知切替", "mute", "notify"],
+        ),
+        (
+            "DESELECT ALL RULES",
+            "deselect-all-rules",
+            vec!["全ルール解除", "全表示解除", "表示ルール全解除", "show all"],
+        ),
         ("CLEAR", "clear", vec!["クリア", "リセット", "reset"]),
         ("PAUSE / RESUME", "pause", vec!["一時停止", "teishi"]),
     ] {
@@ -185,11 +206,33 @@ pub fn catalog() -> Vec<Candidate> {
     out
 }
 
-/// SAT-001の操作空間: ルール構成に影響する候補のみ(pauseを除く)
+/// 実行時カタログ: 静的語彙 + 現在ルールのenabledトグル候補。
+/// labelはルール名(未設定ならR{n})。SPEC: EDT-003
+pub fn catalog_with_rules(rules: &[WatchRule]) -> Vec<Candidate> {
+    let mut out = catalog();
+    for (i, rule) in rules.iter().enumerate() {
+        let fallback = format!("R{}", i + 1);
+        let mut aliases = vec!["rule".to_string(), rule_summary(rule)];
+        if rule.name.is_some() {
+            aliases.push(fallback.clone());
+        }
+        out.push(Candidate {
+            id: format!("rule:{i}"),
+            label: rule.name.clone().unwrap_or(fallback),
+            value: i.to_string(),
+            aliases,
+            facet: Facet::Rule,
+        });
+    }
+    out
+}
+
+/// SAT-001の操作空間: ルール構成に影響する候補のみ
+/// (pauseと、フロント側で改名モードへ切り替えるだけのrename-ruleを除く)
 pub fn filter_catalog() -> Vec<Candidate> {
     catalog()
         .into_iter()
-        .filter(|c| c.id != "action:pause")
+        .filter(|c| c.id != "action:pause" && c.id != "action:rename-rule")
         .collect()
 }
 
@@ -386,7 +429,7 @@ pub fn clear(state: &mut EditorState) {
     state.active = 0;
 }
 
-/// 通知への参加状態だけを変更する。編集対象や条件本体は変えない。SPEC: EDT-001
+/// 表示への参加状態だけを変更する。編集対象や条件本体は変えない。SPEC: EDT-001
 pub fn set_rule_enabled(state: &mut EditorState, index: usize, enabled: bool) -> bool {
     let Some(rule) = state.rules.get_mut(index) else {
         return false;
@@ -395,11 +438,59 @@ pub fn set_rule_enabled(state: &mut EditorState, index: usize, enabled: bool) ->
     true
 }
 
+/// 通知への参加状態(表示は残す)だけを変更する。編集対象や条件本体は変えない。SPEC: EDT-001
+pub fn set_rule_notify(state: &mut EditorState, index: usize, notify: bool) -> bool {
+    let Some(rule) = state.rules.get_mut(index) else {
+        return false;
+    };
+    rule.notify = notify;
+    true
+}
+
+/// 全ルールの一覧表示選択だけを解除する。通知・条件・順序・edit focusは保持。SPEC: EDT-003
+pub fn deselect_all_rules(state: &mut EditorState) {
+    for rule in &mut state.rules {
+        rule.enabled = false;
+    }
+}
+
 fn draft_rule() -> WatchRule {
     WatchRule {
         enabled: false,
+        notify: false,
         ..WatchRule::default()
     }
+}
+
+fn is_empty_draft(rule: &WatchRule) -> bool {
+    !rule.enabled
+        && !rule.notify
+        && rule.tiers.is_empty()
+        && rule.mission_types.is_empty()
+        && rule.planets.is_empty()
+        && rule.mode == Mode::Both
+        && rule.storms == StormMode::Exclude
+}
+
+/// VIEW選択0本からfilter候補を適用するときの編集先を確定する。
+/// NEW RULE直後の安全な空draftは再利用し、それ以外は既存ルールを触らず末尾へ追加する。
+fn prepare_filter_target(state: &mut EditorState) {
+    if state.rules.iter().any(|rule| rule.enabled) {
+        state.active = state.active.min(state.rules.len().saturating_sub(1));
+        return;
+    }
+
+    let active = state.active.min(state.rules.len().saturating_sub(1));
+    let reuse_active_draft = state.rules.get(active).is_some_and(is_empty_draft);
+    if reuse_active_draft {
+        state.active = active;
+    } else {
+        state.rules.push(draft_rule());
+        state.active = state.rules.len() - 1;
+    }
+
+    // 暗黙作成は一覧を絞るVIEWルールとして確定するが、通知には暗黙参加させない。
+    state.rules[state.active].enabled = true;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -447,6 +538,15 @@ fn toggle_member(rule: &mut WatchRule, axis: Axis, value: &str) {
 
 /// パレット候補をエディタ状態に適用する。SPEC: SAT-001
 pub fn apply(state: &mut EditorState, cand: &Candidate) {
+    if cand.facet == Facet::Rule {
+        // 対象ルールのenabledだけを反転する。edit indexは動かさない。SPEC: EDT-003
+        if let Ok(index) = cand.value.parse::<usize>() {
+            if let Some(enabled) = state.rules.get(index).map(|rule| !rule.enabled) {
+                set_rule_enabled(state, index, enabled);
+            }
+        }
+        return;
+    }
     if cand.facet == Facet::Action {
         match cand.value.as_str() {
             "new-rule" => {
@@ -461,16 +561,29 @@ pub fn apply(state: &mut EditorState, cand: &Candidate) {
                 }
             }
             "clear" => clear(state),
+            "toggle-rule" => {
+                // 編集中(active)ルールのenabledだけを反転する。SPEC: EDT-003
+                let index = state.active.min(state.rules.len().saturating_sub(1));
+                if let Some(enabled) = state.rules.get(index).map(|rule| !rule.enabled) {
+                    set_rule_enabled(state, index, enabled);
+                }
+            }
+            "notify-rule" => {
+                // 編集中(active)ルールのnotifyだけを反転する。SPEC: EDT-003
+                let index = state.active.min(state.rules.len().saturating_sub(1));
+                if let Some(notify) = state.rules.get(index).map(|rule| !rule.notify) {
+                    set_rule_notify(state, index, notify);
+                }
+            }
+            "deselect-all-rules" => deselect_all_rules(state),
             _ => {}
         }
         return;
     }
 
-    if state.rules.is_empty() {
-        state.rules.push(draft_rule());
-        state.active = 0;
-    }
-    state.active = state.active.min(state.rules.len() - 1);
+    // VIEW選択0本では既存ルールを編集せず、安全な新VIEWルールへ適用する。
+    // 明示的なNEW RULE直後の空draftだけは再利用する。SPEC: EDT-001 / EDT-002 / EDT-004
+    prepare_filter_target(state);
     let rule = &mut state.rules[state.active];
 
     let changed = match cand.facet {
@@ -502,7 +615,7 @@ pub fn apply(state: &mut EditorState, cand: &Candidate) {
             };
             Changed::Storms
         }
-        Facet::Action => unreachable!(),
+        Facet::Action | Facet::Rule => unreachable!(),
     };
     resolve(rule, changed);
 }
@@ -571,6 +684,8 @@ fn resolve(rule: &mut WatchRule, changed: Changed) {
         // 最終手段: 変更した内容だけ残して他は全対象
         let mut u = WatchRule {
             enabled: t.enabled,
+            notify: t.notify,
+            name: t.name.clone(),
             mode: t.mode,
             storms: t.storms,
             ..WatchRule::default()

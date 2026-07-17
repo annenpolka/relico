@@ -40,13 +40,14 @@
 
       <aside class="rail">
         <section class="rail-rules">
-          <div class="rail-heading">
-            <h3>NOTIFY RULES (OR)</h3>
+          <div class="rail-heading" title="␣ VIEW切替 / ↑↓ フォーカス移動 / ⌘·Ctrl+1-9 ジャンプ / 任意文字 パレット">
+            <h3>RULES</h3>
             <span id="rules-meta">--</span>
           </div>
-          <div id="rules-list"></div>
+          <div id="rules-list">
+            <button id="rule-new" class="rule-ghost" type="button">+ NEW RULE</button>
+          </div>
           <div class="rowbtns">
-            <button id="rule-new" class="action">NEW</button>
             <button id="rule-del" class="action">DEL</button>
             <button id="clear-btn" class="action">CLEAR</button>
           </div>
@@ -62,6 +63,7 @@
             <h3>EDIT RULE</h3>
             <span id="editing-meta">--</span>
           </div>
+          <input id="rulename-input" type="text" placeholder="RULE NAME" spellcheck="false" maxlength="24" autocomplete="off" />
           <div class="facet-launchers">
             <button id="tier-checks" class="facet-launch" type="button"></button>
             <button id="mode-checks" class="facet-launch" type="button"></button>
@@ -73,7 +75,7 @@
 
         <section id="delivery-panel" class="rail-panel" role="tabpanel" aria-labelledby="delivery-tab" hidden>
           <div class="rail-heading panel-heading">
-            <h3>ALL ENABLED RULES</h3>
+            <h3>NOTIFICATION DELIVERY</h3>
           </div>
           <div class="delivery-toggles">
             <button class="check" id="desktop-check"><span class="box">[x]</span> DESKTOP</button>
@@ -111,7 +113,7 @@
         </div>
         <div class="cands" id="palette-cands"></div>
         <div class="hint">
-          <span>↑↓ 選択</span><span>⏎ トグル(連続入力)</span><span>esc 閉じる</span><span>TYPE ANYWHERE</span>
+          <span>↑↓ 選択</span><span>⏎ トグル(連続入力)</span><span>⌘1-9 編集対象</span><span>esc 閉じる</span><span>TYPE ANYWHERE</span>
         </div>
       </div>
     </div>

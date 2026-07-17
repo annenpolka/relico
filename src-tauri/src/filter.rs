@@ -60,11 +60,15 @@ impl<'de> Deserialize<'de> for StormMode {
 }
 
 /// 監視ルール1本。各Vecは空なら「その軸は全対象」。ルール内はAND
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WatchRule {
-    /// 通知判定へ参加するか。旧設定では欠落するためDefault(true)で移行する。
+    /// 一覧表示フィルタへ参加するか。通知参加とは独立。旧フィールド名を互換維持する。
     pub enabled: bool,
+    /// 通知へ参加するか。enabled=falseでもtrueなら通知候補。SPEC: CFG-004 / NTY-001
+    pub notify: bool,
+    /// 表示用の任意名。判定・notification projectionには関与しない。SPEC: CFG-003 / FLT-014
+    pub name: Option<String>,
     pub tiers: Vec<String>,
     pub mission_types: Vec<String>,
     pub planets: Vec<String>,
@@ -77,12 +81,65 @@ impl Default for WatchRule {
     fn default() -> Self {
         Self {
             enabled: true,
+            notify: true,
+            name: None,
             tiers: vec![],
             mission_types: vec![],
             planets: vec![],
             mode: Mode::Both,
             storms: StormMode::Exclude,
         }
+    }
+}
+
+/// notify導入前のJSONではenabledが表示・通知を兼ねていたため、notify欠落時だけ
+/// 旧enabled値を引き継ぐ。明示notifyはenabledと独立に保持する。SPEC: CFG-002 / CFG-004
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct WatchRuleWire {
+    enabled: bool,
+    notify: Option<bool>,
+    name: Option<String>,
+    tiers: Vec<String>,
+    mission_types: Vec<String>,
+    planets: Vec<String>,
+    mode: Mode,
+    #[serde(alias = "includeStorms", alias = "include_storms")]
+    storms: StormMode,
+}
+
+impl Default for WatchRuleWire {
+    fn default() -> Self {
+        let rule = WatchRule::default();
+        Self {
+            enabled: rule.enabled,
+            notify: None,
+            name: rule.name,
+            tiers: rule.tiers,
+            mission_types: rule.mission_types,
+            planets: rule.planets,
+            mode: rule.mode,
+            storms: rule.storms,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WatchRule {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = WatchRuleWire::deserialize(deserializer)?;
+        Ok(Self {
+            enabled: wire.enabled,
+            notify: wire.notify.unwrap_or(wire.enabled),
+            name: wire.name,
+            tiers: wire.tiers,
+            mission_types: wire.mission_types,
+            planets: wire.planets,
+            mode: wire.mode,
+            storms: wire.storms,
+        })
     }
 }
 
@@ -93,15 +150,20 @@ pub struct FilterSettings {
     pub min_remaining_secs: u64,
 }
 
-/// 通知対象を変える設定だけを抜き出す。
-/// 無効ルールの編集中の変更は通知scopeを変えない。SPEC: FLT-014
-pub fn enabled_projection(settings: &FilterSettings) -> FilterSettings {
+/// 通知対象を変える設定だけを抜き出す(通知範囲の射影)。
+/// notify=trueをenabledに依らず残し、matches()用にenabled=trueへ正規化する。
+/// enabledとnameは表示用なので落とし、notify=false draftの変更もscopeへ含めない。SPEC: FLT-014
+pub fn notification_projection(settings: &FilterSettings) -> FilterSettings {
     FilterSettings {
         rules: settings
             .rules
             .iter()
-            .filter(|rule| rule.enabled)
-            .cloned()
+            .filter(|rule| rule.notify)
+            .map(|rule| WatchRule {
+                enabled: true,
+                name: None,
+                ..rule.clone()
+            })
             .collect(),
         min_remaining_secs: settings.min_remaining_secs,
     }
@@ -149,7 +211,9 @@ pub fn rule_matches(rule: &WatchRule, fissure: &Fissure) -> bool {
 /// 全体判定: 残り時間OK ∧ いずれかのルールに合致。SPEC: FLT-007..009
 pub fn matches(settings: &FilterSettings, fissure: &Fissure, now: DateTime<Utc>) -> bool {
     let remaining = fissure.expiry.signed_duration_since(now).num_seconds();
-    if remaining < settings.min_remaining_secs as i64 {
+    // num_seconds()は1秒未満の負値を0へ丸め得るため、expiry自体でも生存を判定する。
+    // SPEC: FLT-007 / FLT-015
+    if fissure.expiry <= now || remaining < settings.min_remaining_secs as i64 {
         return false;
     }
     settings

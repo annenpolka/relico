@@ -39,6 +39,23 @@ where
         .serialize(serializer)
 }
 
+fn serialize_optional_fissure<S>(
+    fissure: &Option<Fissure>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match fissure {
+        Some(fissure) => FissureView {
+            fissure,
+            planet: filter::extract_planet(&fissure.node),
+        }
+        .serialize(serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
 /// フロントエンドとトレイに配る現在状態
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +63,9 @@ pub struct StatusSnapshot {
     /// フィルタ合致亀裂のみ(SPEC: VIS-001)。消滅が近い順
     #[serde(serialize_with = "serialize_fissures")]
     pub fissures: Vec<Fissure>,
+    /// 通知scope側で次に期限を迎える合致亀裂。表示一覧とは独立。SPEC: NTY-001
+    #[serde(serialize_with = "serialize_optional_fissure")]
+    pub next_notification: Option<Fissure>,
     pub api_ok: bool,
     pub last_error: Option<String>,
     pub last_poll: Option<DateTime<Utc>>,
@@ -80,19 +100,49 @@ pub fn http_client() -> reqwest::Client {
         .expect("http client")
 }
 
-/// 一覧に出す亀裂 = いずれかのルールに合致するもののみ。消滅が近い順。SPEC: VIS-001
+/// 指定された表示選択ルールに合致するもの。消滅が近い順。SPEC: FLT-013 / DED-003
+pub fn matching_fissures(
+    settings: &FilterSettings,
+    fissures: &[Fissure],
+    now: DateTime<Utc>,
+) -> Vec<Fissure> {
+    let mut matching: Vec<Fissure> = fissures
+        .iter()
+        .filter(|f| filter::matches(settings, f, now))
+        .cloned()
+        .collect();
+    matching.sort_by_key(|f| f.expiry);
+    matching
+}
+
+/// 一覧に出す生存中の亀裂。表示選択ルールがあれば合致のみ、
+/// 無指定(enabled=trueが0本)はexpiry > nowの全件をブラウズ表示する。
+/// 通知参加・min_remaining_secsとは独立。SPEC: VIS-001
 pub fn visible_fissures(
     settings: &FilterSettings,
     fissures: &[Fissure],
     now: DateTime<Utc>,
 ) -> Vec<Fissure> {
-    let mut visible: Vec<Fissure> = fissures
-        .iter()
-        .filter(|f| filter::matches(settings, f, now))
-        .cloned()
-        .collect();
-    visible.sort_by_key(|f| f.expiry);
-    visible
+    if !settings.rules.iter().any(|rule| rule.enabled) {
+        let mut all: Vec<Fissure> = fissures
+            .iter()
+            .filter(|fissure| fissure.expiry > now)
+            .cloned()
+            .collect();
+        all.sort_by_key(|f| f.expiry);
+        return all;
+    }
+    matching_fissures(settings, fissures, now)
+}
+
+/// 通知候補 = notification projection(notify=true、enabled非依存)に合致するもののみ。
+/// 非表示ルールだけに合致する亀裂も通知する。SPEC: NTY-001
+pub fn notify_candidates(
+    settings: &FilterSettings,
+    fissures: &[Fissure],
+    now: DateTime<Utc>,
+) -> Vec<Fissure> {
+    matching_fissures(&filter::notification_projection(settings), fissures, now)
 }
 
 /// 合致亀裂のうち未通知のものを記録し、通知対象を返す。
@@ -113,16 +163,16 @@ pub fn select_notifications(
     }
 }
 
-/// 起動直後または有効な通知scope変更後は、現存分を通知せず既知IDとしてseedする。
-/// 無効ルールの編集や通知先だけの変更はscope変更ではない。SPEC: POL-003
+/// 起動直後または通知scope変更後は、現存分を通知せず既知IDとしてseedする。
+/// 表示選択、notify=false draft、通知先だけの変更はscope変更ではない。SPEC: POL-003
 pub fn notification_scope_changed(
     previous: Option<&FilterSettings>,
     current: &FilterSettings,
 ) -> bool {
-    let current = filter::enabled_projection(current);
+    let current = filter::notification_projection(current);
     match previous {
         None => true,
-        Some(previous) => filter::enabled_projection(previous) != current,
+        Some(previous) => filter::notification_projection(previous) != current,
     }
 }
 
@@ -150,7 +200,7 @@ pub async fn run(
             let seed_only = notification_scope_changed(seeded_scope.as_ref(), &current_scope);
             match poll_once(&app, &client, &cfg, &state, &notified_path, seed_only).await {
                 Ok(()) => {
-                    seeded_scope = Some(filter::enabled_projection(&current_scope));
+                    seeded_scope = Some(filter::notification_projection(&current_scope));
                     backoff.on_success();
                     cfg.effective_poll_secs()
                 }
@@ -200,19 +250,23 @@ async fn poll_once(
 
     let now = Utc::now();
     let fcfg = cfg.filter();
+    // 表示(enabled、無指定なら全件)と通知候補(notify、表示とは独立)を分離する。SPEC: VIS-001 / NTY-001
     let visible = visible_fissures(&fcfg, &fissures, now);
+    let candidates = notify_candidates(&fcfg, &fissures, now);
+    let next_notification = candidates.first().cloned();
 
     let to_notify: Vec<Fissure> = {
         let mut st = state.lock().expect("poller state");
         st.notified.prune(now);
 
-        let to_notify = select_notifications(&mut st.notified, visible.clone(), seed_only);
+        let to_notify = select_notifications(&mut st.notified, candidates, seed_only);
 
         if let Err(e) = st.notified.save(notified_path) {
             eprintln!("notified set save failed: {e}");
         }
 
         st.snapshot.fissures = visible;
+        st.snapshot.next_notification = next_notification;
         st.snapshot.api_ok = true;
         st.snapshot.last_error = None;
         st.snapshot.last_poll = Some(now);

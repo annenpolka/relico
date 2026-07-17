@@ -6,7 +6,7 @@
 import { expect, test } from "@playwright/test";
 import { bootConsole, calls } from "./harness";
 
-// RND-001: パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは条件クリアを呼び、IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力できる(renderer統合)
+// RND-001: パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)。一覧画面のSpaceはパレットを開かずに編集中ルールの表示選択(enabled)をトグルし(action:toggle-rule)、一覧画面の↑/↓はedit focusを前後のルールへ巡回移動し、Cmd/Ctrl+1..9は対応indexのルールへedit focusを移す(パレット表示中も有効。フォーカス移動は設定を変更しない)。IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力でき、DESELECT ALL RULES候補は全表示選択を解除して通知参加を変えない(renderer統合)
 test("RND-001 palette keyboard", async ({ page }) => {
   await bootConsole(page);
   // どこでも打鍵で開き、入力を引き継ぐ
@@ -16,10 +16,61 @@ test("RND-001 palette keyboard", async ({ page }) => {
   // Escで閉じる
   await page.keyboard.press("Escape");
   await expect(page.locator("#palette-overlay")).toBeHidden();
-  // パレットが閉じた一覧画面のEscは条件クリア(CLR-001の結線)
+  // 一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)
   await page.keyboard.press("Escape");
-  await expect(page.locator("#rail-msg")).toHaveText("ルールを既定に戻した");
-  expect((await calls(page)).some((entry) => entry.cmd === "clear_filter")).toBe(true);
+  await expect(page.locator("#rules-meta")).toHaveText("1/2 VIEW");
+  expect((await calls(page)).some((entry) => entry.cmd === "clear_filter")).toBe(false);
+  // 一覧画面のSpaceはパレットを開かず、編集中ルールのVIEW選択(enabled)をトグルする
+  await page.keyboard.press(" ");
+  await expect(page.locator("#palette-overlay")).toBeHidden();
+  await expect(page.locator("#rules-meta")).toHaveText("0/2 VIEW");
+  await expect(page.locator(".rule-row .rule-toggle").first()).toHaveText("[ ]");
+  expect(
+    (await calls(page)).filter(
+      (entry) => entry.cmd === "apply_candidate" && entry.args.id === "action:toggle-rule",
+    ).length,
+  ).toBe(1);
+  // 再度Spaceで元に戻る(トグル)
+  await page.keyboard.press(" ");
+  await expect(page.locator("#rules-meta")).toHaveText("1/2 VIEW");
+  await expect(page.locator(".rule-row .rule-toggle").first()).toHaveText("[x]");
+  // DESELECT ALL RULESは全VIEW選択だけを解除し、notify・ルール数・edit focusを保持する
+  await page.keyboard.press("d");
+  await page.locator("#palette-input").fill("deselect all rules");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#rules-meta")).toHaveText("0/2 VIEW");
+  await expect(page.locator("#rules-list .rule-row")).toHaveCount(2);
+  await expect(page.locator(".rule-row .rule-toggle").first()).toHaveText("[ ]");
+  await expect(page.locator(".rule-row .rule-toggle").nth(1)).toHaveText("[ ]");
+  await expect(page.locator(".rule-row .rule-notify").first()).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".rule-row .rule-notify").nth(1)).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#editing-meta")).toHaveText("R1/2");
+  await expect(page.locator("#sb-watch")).toHaveText("WATCH: 2 RULES");
+  const deselectCalls = (await calls(page)).filter(
+    (entry) => entry.cmd === "apply_candidate" && entry.args.id === "action:deselect-all-rules",
+  );
+  expect(deselectCalls).toHaveLength(1);
+  expect((await calls(page)).some((entry) => entry.cmd === "set_rule_notify")).toBe(false);
+  expect((await calls(page)).some((entry) => entry.cmd === "clear_filter")).toBe(false);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#palette-overlay")).toBeHidden();
+  // 一覧画面の↑/↓はedit focusを前後のルールへ巡回移動する(設定は変更しない)
+  const mutations = async () =>
+    (await calls(page)).filter(
+      (entry) => entry.cmd === "set_config" || entry.cmd === "set_rule_enabled",
+    ).length;
+  const mutationsBefore = await mutations();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator("#editing-meta")).toHaveText("R2/2");
+  await expect(page.locator(".rule-row").nth(1)).toHaveClass(/rule-focus/);
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator("#editing-meta")).toHaveText("R1/2");
+  await page.keyboard.press("ArrowUp");
+  await expect(page.locator("#editing-meta")).toHaveText("R2/2");
+  // Cmd/Ctrl+1..9は対応indexのルールへ直接ジャンプする
+  await page.keyboard.press("ControlOrMeta+1");
+  await expect(page.locator("#editing-meta")).toHaveText("R1/2");
+  expect(await mutations()).toBe(mutationsBefore);
   // IME変換中(composition中)のEnterは候補を適用しない
   await page.keyboard.press("a");
   await expect(page.locator("#palette-overlay")).toBeVisible();
@@ -36,6 +87,10 @@ test("RND-001 palette keyboard", async ({ page }) => {
   expect(applied[applied.length - 1].args.id).toBe("tier:Axi");
   await expect(page.locator("#palette-overlay")).toBeVisible();
   await expect(page.locator("#palette-input")).toHaveValue("");
+  // パレット表示中もCmd/Ctrl+数字で編集対象を切り替えられる(開いたまま)
+  await page.keyboard.press("ControlOrMeta+2");
+  await expect(page.locator("#palette-rule")).toContainText("EDIT R2");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
 });
 
 // RND-002: Webhook URL入力直後のTEST DELIVERYは、遅延保存を先にflushしてから通知テストを実行する(renderer統合)
@@ -56,38 +111,73 @@ test("RND-002 delivery flush", async ({ page }) => {
   expect(testIndex).toBeGreaterThan(saveIndex);
 });
 
-// RND-003: ルール行のenabled切替はset_rule_enabledだけを呼びedit focus表示を変えず、行本体はパレットを開くだけで切替を呼ばない。全ルール無効では一覧とステータスバーにNO ENABLED表示が出る(renderer統合)
+// RND-003: ルール行のenabled切替は一覧表示だけを変えるset_rule_enabledを呼びedit focus・notifyを変えず、行のnotify切替はset_rule_notifyだけを呼びenabledもedit focusも変えず、行本体はedit focusをそのルールへ移すだけでパレットも切替も呼ばない。DEL/CLEARは2度押し確認で、1クリック目はSURE?表示になるだけで実行せず、2秒で自動復帰し、SURE?表示中のクリックだけが実行する。全ルールの表示選択を解除しても一覧は全亀裂を表示し、notify=trueのルールはWATCH表示と通知参加を維持する(renderer統合)
 test("RND-003 toggle vs edit focus", async ({ page }) => {
   await bootConsole(page);
   const editingBefore = await page.locator("#editing-meta").textContent();
-  // enabled切替はset_rule_enabledだけを呼び、edit focus表示もパレットも動かさない
-  await page.locator(".rule-toggle").click();
+  // VIEW選択(enabled)切替はset_rule_enabledだけを呼び、notify・edit focus・パレットを動かさない
+  await page.locator(".rule-row .rule-toggle").first().click();
   const toggles = (await calls(page)).filter((entry) => entry.cmd === "set_rule_enabled");
   expect(toggles.length).toBe(1);
   expect(toggles[0].args).toEqual({ index: 0, enabled: false });
+  await expect(page.locator(".rule-row .rule-notify").first()).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("#editing-meta")).toHaveText(editingBefore ?? "");
   await expect(page.locator("#palette-overlay")).toBeHidden();
-  // 行本体はパレットを開くだけで切替を呼ばない
-  await page.locator(".rule-edit").click();
-  await expect(page.locator("#palette-overlay")).toBeVisible();
+  // notify切替はset_rule_notifyだけを呼び、VIEW選択(enabled)もedit focusも変えない
+  await page.locator(".rule-row .rule-notify").first().click();
+  const notifies = (await calls(page)).filter((entry) => entry.cmd === "set_rule_notify");
+  expect(notifies.length).toBe(1);
+  expect(notifies[0].args).toEqual({ index: 0, notify: false });
+  await expect(page.locator(".rule-row .rule-notify").first()).toHaveAttribute("aria-pressed", "false");
   expect((await calls(page)).filter((entry) => entry.cmd === "set_rule_enabled").length).toBe(1);
+  await expect(page.locator("#editing-meta")).toHaveText(editingBefore ?? "");
+  // 行本体はedit focusをそのルールへ移すだけで、パレットも切替も呼ばない
+  await page.locator(".rule-row .rule-edit").nth(1).click();
+  await expect(page.locator("#editing-meta")).toHaveText("R2/2");
+  await expect(page.locator(".rule-row").nth(1)).toHaveClass(/rule-focus/);
+  await expect(page.locator("#palette-overlay")).toBeHidden();
+  expect((await calls(page)).filter((entry) => entry.cmd === "set_rule_enabled").length).toBe(1);
+  // DEL/CLEARは2度押し確認: 1クリック目はSURE?表示になるだけで実行しない
+  await page.locator("#rule-del").click();
+  await expect(page.locator("#rule-del")).toHaveText("SURE?");
+  const delCalls = async () =>
+    (await calls(page)).filter(
+      (entry) => entry.cmd === "apply_candidate" && entry.args.id === "action:delete-rule",
+    ).length;
+  expect(await delCalls()).toBe(0);
+  // 2秒で自動復帰する
+  await expect(page.locator("#rule-del")).not.toHaveText("SURE?", { timeout: 4000 });
+  expect(await delCalls()).toBe(0);
+  // SURE?表示中のクリックだけが実行する
+  await page.locator("#rule-del").click();
+  await page.locator("#rule-del").click();
+  await expect.poll(delCalls).toBe(1);
+  await expect(page.locator("#rules-list .rule-row")).toHaveCount(1);
+  // CLEARも同じ2度押し(1クリック目は実行しない)
+  await page.locator("#clear-btn").click();
+  await expect(page.locator("#clear-btn")).toHaveText("SURE?");
+  expect((await calls(page)).some((entry) => entry.cmd === "clear_filter")).toBe(false);
 });
 
-// RND-003: ルール行のenabled切替はset_rule_enabledだけを呼びedit focus表示を変えず、行本体はパレットを開くだけで切替を呼ばない。全ルール無効では一覧とステータスバーにNO ENABLED表示が出る(renderer統合) (全ルール無効の明示)
-test("RND-003 all rules disabled", async ({ page }) => {
+// RND-003: ルール行のenabled切替は一覧表示だけを変えるset_rule_enabledを呼びedit focus・notifyを変えず、行のnotify切替はset_rule_notifyだけを呼びenabledもedit focusも変えず、行本体はedit focusをそのルールへ移すだけでパレットも切替も呼ばない。DEL/CLEARは2度押し確認で、1クリック目はSURE?表示になるだけで実行せず、2秒で自動復帰し、SURE?表示中のクリックだけが実行する。全ルールの表示選択を解除しても一覧は全亀裂を表示し、notify=trueのルールはWATCH表示と通知参加を維持する(renderer統合) (全ルールのVIEW選択解除)
+test("RND-003 all rules view off", async ({ page }) => {
   await bootConsole(page, { allRulesDisabled: true });
-  await expect(page.locator("#fissure-rows td.empty")).toHaveText("NO ENABLED NOTIFICATION RULES");
-  await expect(page.locator("#sb-watch")).toHaveText("WATCH: NO ENABLED NOTIFICATION RULES");
+  // VIEW無指定でも一覧は全亀裂を表示し、notify=trueルールのWATCHは継続する
+  await expect(page.locator("#fissure-rows tr")).toHaveCount(3);
+  await expect(page.locator("#fissure-rows td.empty")).toHaveCount(0);
+  await expect(page.locator("#rules-meta")).toHaveText("0/2 VIEW");
+  await expect(page.locator("#sb-watch")).toHaveText("WATCH: 2 RULES");
+  await expect(page.locator(".rule-row .rule-notify").first()).toHaveAttribute("aria-pressed", "true");
 });
 
-// RND-004: 最小720x480でも右サイドバーは縦スクロールなしでルールnavigator・NEW/DEL/CLEAR・5軸launcher・配送設定・TEST/PAUSE・時間設定へ到達でき、launcherはパレットをその軸に絞って開く(renderer統合)
+// RND-004: 最小720x480でも右サイドバーは縦スクロールなしでルール一覧・NEW/DEL/CLEAR・5軸launcher・配送設定・TEST/PAUSE・時間設定へ到達でき、ルール一覧はrail高さの固定比率領域に全ルール行を保持して内側だけ縦スクロールし、launcherはパレットをその軸に絞って開く(renderer統合)
 test("RND-004 sidebar fits minimum window", async ({ page }) => {
   await page.setViewportSize({ width: 720, height: 480 });
   await bootConsole(page);
   const railFits = () =>
     page.locator(".rail").evaluate((el) => el.scrollHeight <= el.clientHeight);
   expect(await railFits()).toBe(true);
-  // FILTERSタブ: ルールnavigator・NEW/DEL/CLEAR・5軸launcherへ到達できる
+  // FILTERSタブ: ルール一覧・NEW/DEL/CLEAR・5軸launcherへ到達できる
   await expect(page.locator(".rule-focus")).toBeVisible();
   for (const id of ["rule-new", "rule-del", "clear-btn"]) {
     await expect(page.locator("#" + id)).toBeVisible();
@@ -114,7 +204,82 @@ test("RND-004 sidebar fits minimum window", async ({ page }) => {
   expect(await railFits()).toBe(true);
 });
 
-// RND-005: 亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合)
+// RND-004: 最小720x480でも右サイドバーは縦スクロールなしでルール一覧・NEW/DEL/CLEAR・5軸launcher・配送設定・TEST/PAUSE・時間設定へ到達でき、ルール一覧はrail高さの固定比率領域に全ルール行を保持して内側だけ縦スクロールし、launcherはパレットをその軸に絞って開く(renderer統合) (ルール一覧の固定比率領域と内側縦スクロール)
+test("RND-004 rules list scrolls inside fixed-ratio area", async ({ page }) => {
+  await page.setViewportSize({ width: 720, height: 480 });
+  await bootConsole(page);
+  const listHeight = () => page.locator("#rules-list").evaluate((el) => el.clientHeight);
+  const fewHeight = await listHeight();
+  // ルールが増えても一覧領域の高さ(固定比率)は変わらず、railもスクロールしない
+  for (let i = 0; i < 10; i++) {
+    await page.locator("#rule-new").click();
+  }
+  await expect(page.locator("#rules-list .rule-row")).toHaveCount(12);
+  expect(Math.abs((await listHeight()) - fewHeight)).toBeLessThanOrEqual(1);
+  expect(await page.locator(".rail").evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
+  // 全ルール行を保持したまま一覧の内側だけ縦スクロールする
+  expect(await page.locator("#rules-list").evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+  // focus行(最後に追加したR12)は可視領域へ追従する
+  await expect(page.locator(".rule-focus .rno")).toHaveText("R12");
+  await expect(page.locator(".rule-focus")).toBeInViewport();
+});
+
+// RND-006: FILTERSのNAME入力は編集中ルールの名前をdebounce保存し、ルール行は名前を要約より優先表示し、パレットは名前でRULE候補を検索でき、適用はenabledのトグルだけでedit focus表示を変えない。RENAME RULE候補の適用はパレット入力を改名モードへ切り替え、Enterで編集中ルールの名前を保存して通常モードへ戻り、Escは保存せず通常モードへ戻る(renderer統合)
+test("RND-006 rule naming and palette toggle", async ({ page }) => {
+  await bootConsole(page);
+  // NAME入力は編集中ルール(R1)の名前をdebounce保存する
+  await page.locator("#rulename-input").fill("MY FARM");
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (entry) => entry.cmd === "set_config" && entry.args.config.rules[0].name === "MY FARM",
+      ),
+    )
+    .toBe(true);
+  // ルール行は名前を要約より優先表示する
+  await expect(page.locator(".rule-focus .rule-summary")).toHaveText("MY FARM");
+  const editingBefore = await page.locator("#editing-meta").textContent();
+  // パレットは名前でRULE候補を検索できる(どこでも打鍵で開く)
+  await page.locator("#rulename-input").blur();
+  await page.keyboard.press("m");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await page.locator("#palette-input").fill("my farm");
+  const cand = page.locator("#palette-cands .cand", { hasText: "MY FARM" });
+  await expect(cand.locator(".facet")).toHaveText("RULE");
+  await expect(cand.locator(".box")).toHaveText("[x]");
+  // 適用は対象ルールのenabledトグルだけで、edit focus表示を変えない
+  await page.keyboard.press("Enter");
+  const applied = (await calls(page)).filter((entry) => entry.cmd === "apply_candidate");
+  expect(applied[applied.length - 1].args.id).toBe("rule:0");
+  await expect(page.locator(".rule-row").first()).toHaveClass(/disabled/);
+  await expect(page.locator(".rule-row .rule-toggle").first()).toHaveText("[ ]");
+  await expect(page.locator("#editing-meta")).toHaveText(editingBefore ?? "");
+  // RENAME RULE候補の適用はパレット入力を改名モードへ切り替える(現在名をprefill)
+  await page.locator("#palette-input").fill("rename");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#palette-input")).toHaveValue("MY FARM");
+  // Escは保存せず通常モードへ戻る(パレットは開いたまま)
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await expect(page.locator("#palette-input")).toHaveValue("");
+  // 改名モードのEnterは編集中ルールの名前を保存して通常モードへ戻る
+  await page.locator("#palette-input").fill("rename");
+  await page.keyboard.press("Enter");
+  await page.locator("#palette-input").fill("VOID RUSH");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (entry) => entry.cmd === "set_config" && entry.args.config.rules[0].name === "VOID RUSH",
+      ),
+    )
+    .toBe(true);
+  await expect(page.locator(".rule-focus .rule-summary")).toHaveText("VOID RUSH");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await expect(page.locator("#palette-input")).toHaveValue("");
+});
+
+// RND-005: 亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持する一方でFACTIONのTHE MURMURは950pxでも省略せず全文表示し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合)
 test("RND-005 compact table breakpoints", async ({ page }) => {
   await page.setViewportSize({ width: 950, height: 620 });
   await bootConsole(page);
@@ -142,16 +307,150 @@ test("RND-005 compact table breakpoints", async ({ page }) => {
     "Taveuni (Kuva Fortress)",
   );
   expect(await longRow.getAttribute("title")).toContain("Taveuni (Kuva Fortress)");
+  // 実APIのFACTION名THE MURMURは標準幅でも省略しない
+  const murmur = longRow.locator(".col-faction .icon-label > span:last-child");
+  await expect(murmur).toHaveText("THE MURMUR");
+  expect(await murmur.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 });
 
-// RND-005: 亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合) (empty rowの全幅表示)
+// RND-005: 亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持する一方でFACTIONのTHE MURMURは950pxでも省略せず全文表示し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合) (empty rowの全幅表示)
 test("RND-005 empty row spans full width", async ({ page }) => {
   await page.setViewportSize({ width: 720, height: 480 });
-  await bootConsole(page, { allRulesDisabled: true });
+  await bootConsole(page, { noFissures: true });
   const spansFullWidth = await page.locator("#fissure-rows td.empty").evaluate((el) => {
     const row = el.closest("tr");
     if (!row) return false;
     return Math.abs(el.getBoundingClientRect().width - row.getBoundingClientRect().width) <= 1;
   });
   expect(spansFullWidth).toBe(true);
+});
+
+// RND-008: 一覧表示中の亀裂は次回pollを待たずexpiry到達後1秒以内にDOMとfrontend snapshotから除去され、他の生存中亀裂・設定・通知状態を変えない(renderer統合)
+test("RND-008 expiry cleanup", async ({ page }) => {
+  await bootConsole(page, { firstExpirySecs: 1 });
+  const expiring = page.locator("#fissure-rows tr", { hasText: "Taveuni" });
+  await expect(expiring).toHaveCount(1);
+  await expect(expiring).toHaveCount(0, { timeout: 3500 });
+  await expect(page.locator("#fissure-rows tr", { hasText: "Nsu Grid" })).toHaveCount(1);
+  const statusIds = await page.evaluate(() => {
+    const state = (window as unknown as { __MOCK_STATE__: { status: { fissures: Array<{ id: string }> } } }).__MOCK_STATE__;
+    return state.status.fissures.map((fissure) => fissure.id);
+  });
+  expect(statusIds).not.toContain("fx-requiem");
+  expect(
+    (await calls(page)).filter((entry) =>
+      ["set_config", "set_rule_enabled", "set_rule_notify", "apply_candidate"].includes(entry.cmd),
+    ).length,
+  ).toBe(0);
+});
+
+// RND-007: 亀裂表のヘッダクリックで項目別ソートでき、同じ列の再クリックで昇順/降順をトグルし、ソート中の列にaria-sortが付く。既定はT-REMAIN昇順で、ソートは表示のみ(設定・通知の変更を呼ばない)(renderer統合)
+test("RND-007 table sort by column", async ({ page }) => {
+  await bootConsole(page);
+  const firstRow = () => page.locator("#fissure-rows tr").first();
+  // 既定はT-REMAIN昇順(消滅が近い順)
+  await expect(page.locator("th.col-timer")).toHaveAttribute("aria-sort", "ascending");
+  await expect(firstRow().locator(".col-tier")).toContainText("REQUIEM");
+  // ヘッダクリックでその列の昇順ソート
+  await page.locator("th.col-tier").click();
+  await expect(page.locator("th.col-tier")).toHaveAttribute("aria-sort", "ascending");
+  await expect(page.locator("th.col-timer")).not.toHaveAttribute("aria-sort");
+  await expect(firstRow().locator(".col-tier")).toContainText("LITH");
+  // 同じ列の再クリックで降順へトグル
+  await page.locator("th.col-tier").click();
+  await expect(page.locator("th.col-tier")).toHaveAttribute("aria-sort", "descending");
+  await expect(firstRow().locator(".col-tier")).toContainText("REQUIEM");
+  // 別の列をクリックするとその列の昇順から始まる
+  await page.locator("th.col-mission").click();
+  await expect(page.locator("th.col-mission")).toHaveAttribute("aria-sort", "ascending");
+  await expect(firstRow().locator(".col-mission")).toContainText("CAPTURE");
+  // ソートは表示のみ: 設定・通知の変更を呼ばない
+  expect(
+    (await calls(page)).filter((entry) =>
+      ["set_config", "set_rule_enabled", "set_rule_notify", "apply_candidate"].includes(entry.cmd),
+    ).length,
+  ).toBe(0);
+});
+
+// RND-009: VIEW選択0本からピッカーでfilter候補を適用すると既存ルールを変更せずVIEW ON・NOTIFY OFFの新ルールを作り、edit focusを新ルールへ移す。NEW RULE適用中に別のfilter候補を素早く確定しても操作を直列化し、旧edit対象を変更せず同じ新ルールへ適用する(renderer統合)
+test("RND-009 unselected picker creates a view rule", async ({ page }) => {
+  await bootConsole(page, { allRulesDisabled: true });
+  // 全VIEW解除後も残っているR2のedit focusを、暗黙作成時に誤編集しない
+  await page.locator(".rule-row .rule-edit").nth(1).click();
+  await expect(page.locator("#editing-meta")).toHaveText("R2/2");
+  const before = await page.evaluate(() =>
+    structuredClone(
+      (window as unknown as { __MOCK_STATE__: { config: { rules: unknown[] } } })
+        .__MOCK_STATE__.config.rules,
+    ),
+  );
+
+  await page.locator("#tier-checks").click();
+  await page.locator("#palette-cands .cand", { hasText: "Requiem" }).click();
+
+  await expect(page.locator("#rules-list .rule-row")).toHaveCount(3);
+  await expect(page.locator("#rules-meta")).toHaveText("1/3 VIEW");
+  await expect(page.locator("#editing-meta")).toHaveText("R3/3");
+  const after = await page.evaluate(() =>
+    structuredClone(
+      (window as unknown as {
+        __MOCK_STATE__: {
+          config: {
+            rules: Array<{
+              enabled: boolean;
+              notify: boolean;
+              tiers: string[];
+            }>;
+          };
+        };
+      }).__MOCK_STATE__.config.rules,
+    ),
+  );
+  expect(after.slice(0, 2)).toEqual(before);
+  expect(after[2]).toMatchObject({ enabled: true, notify: false, tiers: ["Requiem"] });
+  const applied = (await calls(page)).filter((entry) => entry.cmd === "apply_candidate");
+  expect(applied[applied.length - 1].args).toEqual({ id: "tier:Requiem", active: 1 });
+});
+
+// RND-009: VIEW選択0本からピッカーでfilter候補を適用すると既存ルールを変更せずVIEW ON・NOTIFY OFFの新ルールを作り、edit focusを新ルールへ移す。NEW RULE適用中に別のfilter候補を素早く確定しても操作を直列化し、旧edit対象を変更せず同じ新ルールへ適用する(renderer統合) (NEW RULE応答中の後続候補を旧ルールへ適用しない)
+test("RND-009 serializes rapid new rule and filter apply", async ({ page }) => {
+  await bootConsole(page, { allRulesDisabled: true, applyCandidateDelayMs: 80 });
+  const before = await page.evaluate(() =>
+    structuredClone(
+      (window as unknown as { __MOCK_STATE__: { config: { rules: unknown[] } } })
+        .__MOCK_STATE__.config.rules,
+    ),
+  );
+
+  await page.keyboard.press("n");
+  await page.locator("#palette-input").fill("new rule");
+  await page.keyboard.press("Enter");
+  // 最初のIPC応答を待たず、異なるfilter候補を確定する
+  await page.locator("#palette-input").fill("axi");
+  await expect(page.locator("#palette-cands .cand", { hasText: "Axi" })).toHaveCount(1);
+  await page.keyboard.press("Enter");
+
+  await expect(page.locator("#rules-list .rule-row")).toHaveCount(3);
+  await expect(page.locator("#rules-meta")).toHaveText("1/3 VIEW");
+  await expect(page.locator("#editing-meta")).toHaveText("R3/3");
+  await expect
+    .poll(async () =>
+      page.evaluate(() =>
+        (window as unknown as {
+          __MOCK_STATE__: { config: { rules: Array<{ tiers: string[] }> } };
+        }).__MOCK_STATE__.config.rules[2]?.tiers,
+      ),
+    )
+    .toEqual(["Axi"]);
+  const after = await page.evaluate(() =>
+    structuredClone(
+      (window as unknown as {
+        __MOCK_STATE__: {
+          config: { rules: Array<{ enabled: boolean; notify: boolean; tiers: string[] }> };
+        };
+      }).__MOCK_STATE__.config.rules,
+    ),
+  );
+  expect(after.slice(0, 2)).toEqual(before);
+  expect(after[2]).toMatchObject({ enabled: true, notify: false, tiers: ["Axi"] });
 });

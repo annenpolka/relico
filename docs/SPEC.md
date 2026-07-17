@@ -5,10 +5,10 @@
 > 保証の勾配: このプロジェクトの機械保証の最上位は property-based test である。
 > proven(証明) / model-checked(モデル検査) の条項は存在しない。勾配を平らに見せない。
 >
-> フィルタの意味論は有効ルールOR: 設定は監視ルール(WatchRule)のリストで、亀裂が
-> enabled=trueのどれか1つのルールに合致すれば通知・表示対象になる。
-> enabled=falseのルールは保存・編集できるがruntime判定には参加しない。ルール内はAND。
-> UIのedit focusはruntime activationとは独立する。
+> ルール内はAND、複数ルールは用途ごとにORする。一覧表示はenabled=trueのVIEWルール、
+> 通知はnotify=trueのNOTIFYルールを使い、両者は独立する。
+> enabled=false, notify=trueの非表示ルールも通知対象になる。
+> VIEW選択、NOTIFY参加、UIのedit focusは互いに独立する。
 
 ## 条項一覧
 
@@ -24,43 +24,54 @@
 | FLT-005 | `rule_pass_when_empty` | property-tested | ルールのmission_typesが空のとき、ミッション種別を理由に棄却しない(空=全種別対象) |
 | FLT-006 | `rule_pass_when_empty` | property-tested | ルールのplanetsが空のとき、惑星を理由に棄却しない(空=全惑星対象) |
 | FLT-007 | `settings_reject_when` | property-tested | 残り時間がmin_remaining_secs未満の亀裂は、ルール構成に依らず合致しない(期限切れ含む) |
-| FLT-008 | `single_rule_embedding` | property-tested | ルール1つの設定では、全体合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致) |
-| FLT-009 | `rule_additivity` | property-tested | 有効ルールを追加しても、それまで合致していた亀裂は合致し続ける(有効ルールORの単調性) |
-| FLT-013 | `enabled_rules_or` | property-tested | 全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。disabledルールだけ、またはルールなしでは合致しない |
-| FLT-014 | `enabled_projection` | property-tested | enabled projectionは有効ルールを元の順序で保持してdisabledルールだけを除き、共通のmin_remaining_secsを保持する。disabled draftの追加・削除・条件編集では変わらず、enabled切替・有効ルール条件・min_remaining_secsの変更は通知範囲へ反映される |
+| FLT-015 | `settings_reject_when` | property-tested | expiryが現在時刻以下の亀裂は、min_remaining_secs=0でもルール構成に依らず合致しない(生存条件はexpiry > now) |
+| FLT-008 | `single_rule_embedding` | property-tested | ルール1つの一覧表示判定では、全体合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致) |
+| FLT-009 | `rule_additivity` | property-tested | 表示選択(enabled=true)ルールを追加しても、それまで一覧表示に合致していた亀裂は合致し続ける(表示ルールORの単調性) |
+| FLT-013 | `enabled_rules_or` | property-tested | 一覧表示の全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。表示選択なし、またはルールなしではフィルタ合致しない |
+| FLT-014 | `notification_projection` | property-tested | notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) |
 | DED-001 | `at_most_once` | property-tested | 同一亀裂idは任意のポーリング列で高々1回しか通知されない |
 | DED-002 | `prune_preserves_live` | property-tested | pruneは生存中idの通知済み状態を保持し、期限切れidを除去する |
-| DED-003 | `overlapping_rules_at_most_once` | property-tested | 同じ亀裂へ複数の有効ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない |
+| DED-003 | `overlapping_rules_at_most_once` | property-tested | 同じ亀裂へ複数の表示ルールまたは通知ルールが合致しても、一覧・通知候補では亀裂id単位の1件として扱い、同一亀裂は高々1回しか通知されない |
 | PRS-001 | `parse_total` | property-tested | 惑星抽出は任意文字列でパニックせず、"Node (Planet)" 形式でPlanetを返す |
 | POL-001 | `bounded` | property-tested | APIバックオフの遅延は失敗・成功がどう並んでも常に[60s, 600s]に収まる |
 | POL-002 | `seed_silent` | property-tested | 起動直後の初回ポーリングはシードのみ: 既存の合致亀裂を通知済みとして記録するが、通知は1件も発火しない(起動時の通知洪水を防ぐ) |
-| POL-003 | `notification_scope_change` | property-tested | 初回評価とenabled projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。disabled draftだけの追加・削除・条件編集や配送設定だけの変更では再seedしない |
-| VIS-001 | `filtered_view` | property-tested | 一覧に表示されるのはいずれかの有効ルールに合致する亀裂のみ(対象外は非表示)。かつ合致する亀裂は1件も取りこぼさない |
+| POL-003 | `notification_scope_change` | property-tested | 初回評価とnotification projectionが変わった設定変更だけを通知範囲変更とし、変更時点で現存する合致亀裂はsilent seedして一括通知しない。その後に現れた新規idは1回だけ通知候補となる。表示選択(enabled)だけの変更、notify=false draftだけの追加・削除・条件編集、配送設定だけの変更では再seedしない |
+| NTY-001 | `notify_candidates` | property-tested | 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない |
+| VIS-001 | `filtered_view` | property-tested | 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる |
 | FZY-001 | `fuzzy_subsequence` | property-tested | パレットのファジーマッチが成立するのは、クエリ文字が候補文字列(またはalias)に順序どおり現れる場合に限る(健全性) |
 | FZY-002 | `fuzzy_empty_query` | property-tested | 空クエリはパレット候補の全件を返す(完全性) |
 | FZY-003 | `fuzzy_exact_first` | property-tested | クエリと完全一致する候補(label/alias)が存在すれば、先頭候補は完全一致である |
 | FZY-004 | `fuzzy_deterministic` | property-tested | 同一クエリ・同一候補集合に対するパレットの結果順序は決定的 |
 | SAT-001 | `satisfiable_after_ops` | property-tested | パレット操作列をどう並べても、適用後のすべてのルールはドメイン互換表(Requiem↔クバ要塞、Omnia↔ザリマン、VOID嵐↔Proxima星系等)に関して充足可能。ルール内で両立しない選択は新しい方を残して上書き解決される |
-| EDT-001 | `editor_activation_independent` | property-tested | edit focusとruntime activationは独立する。ルールのenabled切替は条件とedit indexを変えず、edit index変更はrulesを変えず、disabledルールへ任意のfilter候補を適用してもdisabledのまま編集できる |
-| EDT-002 | `new_rule_disabled` | property-tested | NEW RULEは既存ルールを一切変更せず、enabled=falseのdraftを末尾へ追加し、そのdraftをedit対象にする |
+| EDT-001 | `editor_activation_independent` | property-tested | edit focus・一覧表示選択(enabled)・通知参加(notify)は独立する。enabled切替は条件・notify・edit indexを変えず、notify切替も条件・enabled・edit indexを変えず、edit index変更はrulesを変えない。別にVIEW選択ルールがある状態で非表示ルールへfilter候補を適用してもenabled/notifyを暗黙に変えない |
+| EDT-002 | `new_rule_disabled` | property-tested | NEW RULEは既存ルールを一切変更せず、enabled=falseかつnotify=falseの安全な空draftを末尾へ追加し、そのdraftをedit対象にする。VIEW選択0本でその空draftへ最初のfilter候補を適用すると、名前が付いていても別ルールを増やさずdraftをenabled=true・notify=falseのVIEWルールとして確定する |
+| EDT-004 | `unselected_apply_creates_rule` | property-tested | 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する |
+| EDT-003 | `rule_toggle_candidates` | property-tested | パレットの実行時カタログは各ルールをrule:{index}候補(label=ルール名、未設定ならR{n}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる |
 | CLR-001 | `clear_resets` | property-tested | クリア操作は1回でルール構成を既定(enabled=trueの全対象ルール1本、ストーム除外、両方モード)に戻す |
 | CFG-001 | `legacy_storm_config` | property-tested | 旧設定のincludeStorms=false/trueは、読込時にstorms=除外/含むへそれぞれ無損失移行される |
-| CFG-002 | `legacy_rule_enabled` | example-tested | enabledを持たない既存WatchRule JSONはenabled=trueとして読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する |
+| CFG-002 | `legacy_rule_enabled` | example-tested | enabledを持たない既存WatchRule JSONはenabled=true(一覧表示へ参加)として読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する |
+| CFG-003 | `rule_name_config` | example-tested | WatchRuleのnameは省略可能な表示用メタデータで、nameを持たない旧JSONは名前なしとして読み込み、設定したnameはserialize/deserializeを往復しても他のフィールドと共に保持される |
+| CFG-004 | `rule_notify_config` | example-tested | WatchRuleのnotifyはenabledから独立した通知参加フラグで、notifyを持たない旧JSONは旧enabled値(それも欠落ならtrue)を引き継ぐ。明示したnotify=true/falseはenabledの値に関係なくserialize/deserializeを往復しても保持される |
 | NTF-001 | `notification_example` | example-tested | 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する |
 | NTF-002 | `notification_example` | example-tested | desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める |
 | NTF-003 | `notification_example` | example-tested | 未バンドルのraw devでdesktop通知を利用できない場合は、失敗詳細を保持し、デバッグbundle .appを使う just notification-test を案内する |
 | NTF-004 | `notification_example` | example-tested | Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する |
 | STA-001 | `static_check` | example-tested | 配布版(relico / com.annenpolka.relico)・通知テスト版(RELICO Notification Test / com.annenpolka.relico.notification-test)・E2E版(RELICO E2E / com.annenpolka.relico.e2e)は設定ファイル上でproductName・identifierがそれぞれ規定値を持ち、互いに一致しない |
 | STA-002 | `static_check` | example-tested | トレイは専用tray-icon.pngをテンプレート画像として登録する配線を持ち、PNGはモノクロ(+アルファ)形式である |
+| STA-003 | `static_check` | example-tested | macOS AUTOSTARTは内部のUnix実行ファイルをLaunchAgent登録せず、アプリアイコンを保持するAppleScript Login Itemとして.app bundleを登録し、旧relico.plistを一度だけ移行する配線を持つ |
 | AST-001 | `approved_asset` | example-tested | メニューバー用tray-icon.pngは目視承認済みの内容から変わっていない(変えたらMAN-005の手順で再承認しsha256を更新する) |
 | AST-002 | `approved_asset` | example-tested | 配布用アプリアイコンicon.icnsは目視承認済みの内容から変わっていない(変えたらMAN-006の手順で再承認しsha256を更新する) |
 | ICN-001 | `renderer_glyphs` | example-tested | 既知のTier・惑星・ミッション・ファクション・難易度・VOID嵐・アクション値には汎用と区別できる専用SVGグリフが割り当てられ、未知値はカテゴリ別の汎用グリフへフォールバックし、グリフは装飾(aria-hidden)である |
 | ICN-002 | `renderer_glyphs` | example-tested | 表示用惑星名はVOID嵐のときだけEarth/Venus/Saturn/Neptune/Pluto/VeilをProxima表記へ寄せ、通常亀裂・その他の惑星・欠損値はそのまま返す |
-| RND-001 | `renderer_scenario` | example-tested | パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは条件クリアを呼び、IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力できる(renderer統合) |
+| RND-001 | `renderer_scenario` | example-tested | パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)。一覧画面のSpaceはパレットを開かずに編集中ルールの表示選択(enabled)をトグルし(action:toggle-rule)、一覧画面の↑/↓はedit focusを前後のルールへ巡回移動し、Cmd/Ctrl+1..9は対応indexのルールへedit focusを移す(パレット表示中も有効。フォーカス移動は設定を変更しない)。IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力でき、DESELECT ALL RULES候補は全表示選択を解除して通知参加を変えない(renderer統合) |
 | RND-002 | `renderer_scenario` | example-tested | Webhook URL入力直後のTEST DELIVERYは、遅延保存を先にflushしてから通知テストを実行する(renderer統合) |
-| RND-003 | `renderer_scenario` | example-tested | ルール行のenabled切替はset_rule_enabledだけを呼びedit focus表示を変えず、行本体はパレットを開くだけで切替を呼ばない。全ルール無効では一覧とステータスバーにNO ENABLED表示が出る(renderer統合) |
-| RND-004 | `renderer_scenario` | example-tested | 最小720x480でも右サイドバーは縦スクロールなしでルールnavigator・NEW/DEL/CLEAR・5軸launcher・配送設定・TEST/PAUSE・時間設定へ到達でき、launcherはパレットをその軸に絞って開く(renderer統合) |
-| RND-005 | `renderer_scenario` | example-tested | 亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合) |
+| RND-003 | `renderer_scenario` | example-tested | ルール行のenabled切替は一覧表示だけを変えるset_rule_enabledを呼びedit focus・notifyを変えず、行のnotify切替はset_rule_notifyだけを呼びenabledもedit focusも変えず、行本体はedit focusをそのルールへ移すだけでパレットも切替も呼ばない。DEL/CLEARは2度押し確認で、1クリック目はSURE?表示になるだけで実行せず、2秒で自動復帰し、SURE?表示中のクリックだけが実行する。全ルールの表示選択を解除しても一覧は全亀裂を表示し、notify=trueのルールはWATCH表示と通知参加を維持する(renderer統合) |
+| RND-004 | `renderer_scenario` | example-tested | 最小720x480でも右サイドバーは縦スクロールなしでルール一覧・NEW/DEL/CLEAR・5軸launcher・配送設定・TEST/PAUSE・時間設定へ到達でき、ルール一覧はrail高さの固定比率領域に全ルール行を保持して内側だけ縦スクロールし、launcherはパレットをその軸に絞って開く(renderer統合) |
+| RND-006 | `renderer_scenario` | example-tested | FILTERSのNAME入力は編集中ルールの名前をdebounce保存し、ルール行は名前を要約より優先表示し、パレットは名前でRULE候補を検索でき、適用はenabledのトグルだけでedit focus表示を変えない。RENAME RULE候補の適用はパレット入力を改名モードへ切り替え、Enterで編集中ルールの名前を保存して通常モードへ戻り、Escは保存せず通常モードへ戻る(renderer統合) |
+| RND-005 | `renderer_scenario` | example-tested | 亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持する一方でFACTIONのTHE MURMURは950pxでも省略せず全文表示し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合) |
+| RND-008 | `renderer_scenario` | example-tested | 一覧表示中の亀裂は次回pollを待たずexpiry到達後1秒以内にDOMとfrontend snapshotから除去され、他の生存中亀裂・設定・通知状態を変えない(renderer統合) |
+| RND-007 | `renderer_scenario` | example-tested | 亀裂表のヘッダクリックで項目別ソートでき、同じ列の再クリックで昇順/降順をトグルし、ソート中の列にaria-sortが付く。既定はT-REMAIN昇順で、ソートは表示のみ(設定・通知の変更を呼ばない)(renderer統合) |
+| RND-009 | `renderer_scenario` | example-tested | VIEW選択0本からピッカーでfilter候補を適用すると既存ルールを変更せずVIEW ON・NOTIFY OFFの新ルールを作り、edit focusを新ルールへ移す。NEW RULE適用中に別のfilter候補を素早く確定しても操作を直列化し、旧edit対象を変更せず同じ新ルールへ適用する(renderer統合) |
 | E2E-001 | `e2e_scenario` | example-tested | 実アプリでパレット打鍵→候補適用が本物のquery_candidates/apply_candidateを往復し、ルールsummaryとwatch行へ反映される(WDIO Tauri E2E、専用identity) |
 | E2E-002 | `e2e_scenario` | example-tested | 実アプリで通知先を全て無効にしたTEST DELIVERYが、本物のset_config・test_notificationを通り、NTF-001の失敗理由(通知先なし)をrailへ表示する(WDIO Tauri E2E) |
 | MAN-001 | `manual` | manual | 通知テスト専用bundleと配布bundleの各名義で、macOSの初回権限許可とバナー表示を人が知覚できる |
@@ -70,8 +81,8 @@
 | MAN-005 | `manual` | manual | メニューバーのRELICOテンプレートアイコンがライト/ダーク外観で判別できる |
 | MAN-006 | `manual` | manual | 配布バンドルのRELICOアプリアイコンが通常・小サイズ表示で判別できる |
 | MAN-007 | `manual` | manual | macOSではコンソール表示中だけ通常アプリとしてDockとウィンドウ切替ツールに現れ、閉じるとメニューバー常駐へ戻る |
-| MAN-008 | `manual` | manual | ルール一覧のtoggleとedit focusが視覚的に区別でき、実アプリで複数有効ルールのOR監視が機能する |
-| MAN-009 | `manual` | manual | 配布版・通知テスト版・DMG一時mountがLaunchServicesで競合せず、配布版のcanonical appだけがcom.annenpolka.relicoとして残る |
+| MAN-008 | `manual` | manual | ルール一覧の表示toggle・通知toggle・edit focusが視覚的に区別でき、実アプリで表示と通知が独立して機能する |
+| MAN-009 | `manual` | manual | 配布版・通知テスト版・DMG一時mount・旧AUTOSTART実行ファイルがmacOSのアプリ登録で競合せず、配布版のcanonical appだけがcom.annenpolka.relicoとして残る |
 | MAN-010 | `manual` | manual | 右サイドバーの要約が読みやすく、情報の優先順位が視覚的に自然である |
 | MAN-011 | `manual` | manual | compact表示が実データで読みやすく、VoiceOverでtable semanticsが自然に読み上げられる |
 
@@ -95,13 +106,13 @@ com.annenpolka.relico.e2e で実行する)。
 
 just devと配布.appの両方で確認する。1) コンソール表示中はDockにRELICOアイコンが現れ、PaneruとRaycastのSwitch Windowsからウィンドウを選択・フォーカスできる。2) 閉じるとプロセスとメニューバー監視は継続したままコンソールとDockアイコンが消える。3) トレイのOPEN CONSOLE、またはアプリの再オープンでコンソールが再表示・フォーカスされ、Dockと各ウィンドウ切替ツールに再び現れる。
 
-#### MAN-008: ルール一覧のtoggleとedit focusが視覚的に区別でき、実アプリで複数有効ルールのOR監視が機能する
+#### MAN-008: ルール一覧の表示toggle・通知toggle・edit focusが視覚的に区別でき、実アプリで表示と通知が独立して機能する
 
-リリース前に実アプリで短く確認する。1) toggleとedit本体が視覚的に区別できる(誤操作しない)。2) 実ワールドステートで複数ルールをenabledにするとそのORが一覧・通知対象になる。OR・dedup・edit独立の意味論はFLT-013/014・DED-003・EDT-001/002で、UI結線(toggle/edit分離・NO ENABLED表示)はRND-003で、実IPCの設定変更とTEST DELIVERYの実backend経路はE2E-001/002で機械検証済み(TEST DELIVERYがルールに依存しないことはtest_notificationの実装がルールを参照しないことによる)。
+リリース前に実アプリで短く確認する。1) 表示toggle・通知toggle・edit本体が視覚的に区別できる(誤操作しない)。2) 実ワールドステートで複数のnotify=trueルールがORで通知対象になり、そのうちenabled=falseのルールだけに合致する亀裂も一覧からは隠れたまま通知される。3) DESELECT ALL RULESで全表示選択を解除してもnotifyは維持される。OR・dedup・edit独立の意味論はFLT-013/014・NTY-001・DED-003・EDT-001〜004で、UI結線はRND-001/003、実IPCの設定変更とTEST DELIVERYの実backend経路はE2E-001/002で機械検証済み(TEST DELIVERYがルールに依存しないことはtest_notificationの実装がルールを参照しないことによる)。
 
-#### MAN-009: 配布版・通知テスト版・DMG一時mountがLaunchServicesで競合せず、配布版のcanonical appだけがcom.annenpolka.relicoとして残る
+#### MAN-009: 配布版・通知テスト版・DMG一時mount・旧AUTOSTART実行ファイルがmacOSのアプリ登録で競合せず、配布版のcanonical appだけがcom.annenpolka.relicoとして残る
 
-機械検査部分は just macos-smoke で実行する(ビルド済みInfo.plistのproductName/identifier、通知テスト版プロセスが複数起動していないこと、/Volumes/dmg.*の残留登録がないこと、canonical登録が実在する1件だけであること。設定ファイル上のidentity分離はSTA-001で常時検証)。人間に残るのは、~/Applications/relico.appのコンソール表示中ウィンドウをDock・Paneru・Raycast Switch Windowsから選択できることの確認だけ。
+機械検査部分は just macos-smoke で実行する(ビルド済みInfo.plistのproductName/identifier、通知テスト版プロセスが複数起動していないこと、/Volumes/dmg.*の残留登録がないこと、canonical登録が実在する1件だけであること、旧~/Library/LaunchAgents/relico.plistが残っていないこと。設定ファイル上のidentity分離はSTA-001、bundle型AUTOSTART配線はSTA-003で常時検証)。人間に残るのは、~/Applications/relico.appのコンソール表示中ウィンドウをDock・Paneru・Raycast Switch Windowsから選択できることと、AUTOSTART有効時にシステム設定のログイン項目がUnix実行ファイルではなくRELICOのアプリアイコンで表示されることの確認。Accessibility等へ手動追加する場合も内部実行ファイルではなくrelico.app bundleを選ぶ。
 
 #### MAN-010: 右サイドバーの要約が読みやすく、情報の優先順位が視覚的に自然である
 

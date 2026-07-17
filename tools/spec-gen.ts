@@ -25,6 +25,7 @@ type Clause = {
     | "discord_receipt"
     | "bundle_identity"
     | "tray_template_icon"
+    | "autostart_bundle_icon"
     | "glyph_known_values"
     | "planet_proxima_view"
     | "palette_keyboard"
@@ -32,6 +33,10 @@ type Clause = {
     | "rule_row_controls"
     | "sidebar_fit"
     | "compact_table"
+    | "expiry_cleanup"
+    | "rule_naming"
+    | "table_sort"
+    | "unselected_picker_create"
     | "palette_apply_ipc"
     | "delivery_error_surface";
   path?: string;
@@ -50,10 +55,19 @@ const PLANET_POOL = [
   "Mars", "Ceres", "Sedna", "Void", "Saturn", "Phobos",
   "Zariman", "Veil Proxima", "Kuva Fortress", "Lua",
 ];
-const FACTION_POOL = ["Grineer", "Corpus", "Infested", "Orokin", "Corrupted", "Murmur"];
+const FACTION_POOL = ["Grineer", "Corpus", "Infested", "Orokin", "Corrupted", "Murmur", "The Murmur"];
 const DIFFICULTY_POOL = ["Normal", "SteelPath", "Both"];
 const STORM_POOL = ["Exclude", "Include", "Only"];
-const ACTION_POOL = ["new-rule", "delete-rule", "clear", "pause"];
+const ACTION_POOL = [
+  "new-rule",
+  "delete-rule",
+  "rename-rule",
+  "toggle-rule",
+  "notify-rule",
+  "deselect-all-rules",
+  "clear",
+  "pause",
+];
 const PROXIMA_PLANETS = ["Earth", "Venus", "Saturn", "Neptune", "Pluto", "Veil"];
 
 const rustStrArray = (pool: string[]) => pool.map((s) => `"${s}"`).join(", ");
@@ -86,7 +100,7 @@ const indent = (code: string, n: number) =>
 
 function genClause(c: Clause): string {
   const name = fnName(c.id);
-  const msg = `SPEC ${c.id} 違反: ${c.desc.replace(/"/g, '\\"')}`;
+  const msg = `SPEC ${c.id} 違反: ${c.desc.replace(/"/g, '\\"').replace(/{/g, "{{").replace(/}/g, "}}")}`;
   switch (c.pattern) {
     case "rule_reject_when":
       return `
@@ -175,7 +189,7 @@ ${indent(c.fissureOverride ?? "", 8)}
       return `
     /// ${c.id}: ${c.desc}
     #[test]
-    fn ${name}(s in arb_settings(), mut f in arb_fissure()) {
+    fn ${name}(${/\bs\.[A-Za-z_]+\s*=/.test(c.fissureOverride ?? "") ? "mut " : ""}s in arb_settings(), mut f in arb_fissure()) {
         let now = base_now();
 ${indent(c.fissureOverride ?? "", 8)}
         prop_assert!(!filter::matches(&s, &f, now), "${msg}");
@@ -187,7 +201,8 @@ ${indent(c.fissureOverride ?? "", 8)}
     fn ${name}(rule in arb_rule(), f in arb_fissure(), min in 0u64..1800) {
         let now = base_now();
         let s = FilterSettings { rules: vec![rule.clone()], min_remaining_secs: min };
-        let remaining_ok = f.expiry.signed_duration_since(now).num_seconds() >= min as i64;
+        let remaining_ok = f.expiry > now
+            && f.expiry.signed_duration_since(now).num_seconds() >= min as i64;
         prop_assert_eq!(
             filter::matches(&s, &f, now),
             remaining_ok && rule.enabled && filter::rule_matches(&rule, &f),
@@ -213,15 +228,16 @@ ${indent(c.fissureOverride ?? "", 8)}
     #[test]
     fn ${name}(s in arb_settings(), f in arb_fissure()) {
         let now = base_now();
-        let remaining_ok = f.expiry.signed_duration_since(now).num_seconds()
-            >= s.min_remaining_secs as i64;
+        let remaining_ok = f.expiry > now
+            && f.expiry.signed_duration_since(now).num_seconds()
+                >= s.min_remaining_secs as i64;
         let enabled_or = s.rules.iter().any(|rule|
             rule.enabled && filter::rule_matches(rule, &f)
         );
         prop_assert_eq!(
             filter::matches(&s, &f, now),
             remaining_ok && enabled_or,
-            "${msg} (有効ルールORの完全な等式)"
+            "${msg} (VIEWルールORの完全な等式)"
         );
 
         let mut all_disabled = s.clone();
@@ -232,7 +248,7 @@ ${indent(c.fissureOverride ?? "", 8)}
         valid_fissure.expiry = now + Duration::seconds(s.min_remaining_secs as i64 + 1);
         prop_assert!(
             !filter::matches(&all_disabled, &valid_fissure, now),
-            "${msg} (全ルールdisabledなのに合致した)"
+            "${msg} (全ルールVIEW OFFなのに表示合致した)"
         );
 
         let empty = FilterSettings {
@@ -244,64 +260,99 @@ ${indent(c.fissureOverride ?? "", 8)}
             "${msg} (ルールなしなのに合致した)"
         );
     }`;
-    case "enabled_projection":
+    case "notification_projection":
       return `
     /// ${c.id}: ${c.desc}
     #[test]
     fn ${name}(
         s in arb_settings(),
-        mut disabled in arb_rule(),
-        mut edited_disabled in arb_rule(),
-        mut enabled in arb_rule(),
+        mut muted in arb_rule(),
+        mut edited_muted in arb_rule(),
+        mut notifying in arb_rule(),
     ) {
-        let base = filter::enabled_projection(&s);
+        let normalize = |rule: &WatchRule| WatchRule {
+            enabled: true,
+            name: None,
+            ..rule.clone()
+        };
+        let base = filter::notification_projection(&s);
         let expected: Vec<WatchRule> = s.rules.iter()
-            .filter(|rule| rule.enabled)
-            .cloned()
+            .filter(|rule| rule.notify)
+            .map(normalize)
             .collect();
-        prop_assert_eq!(base.rules.as_slice(), expected.as_slice(), "${msg} (有効ルールと一致しない)");
+        prop_assert_eq!(base.rules.as_slice(), expected.as_slice(), "${msg} (notify=trueルールと一致しない)");
+        prop_assert!(base.rules.iter().all(|rule| rule.enabled && rule.notify), "${msg} (照合用にenabled=trueへ正規化しない)");
         prop_assert_eq!(base.min_remaining_secs, s.min_remaining_secs, "${msg} (min_remaining_secsを保持しない)");
 
-        disabled.enabled = false;
-        let mut with_disabled = s.clone();
-        with_disabled.rules.push(disabled);
-        let added = filter::enabled_projection(&with_disabled);
-        prop_assert_eq!(added.rules.as_slice(), base.rules.as_slice(), "${msg} (disabled追加で射影が変化した)");
-        prop_assert_eq!(added.min_remaining_secs, base.min_remaining_secs, "${msg} (disabled追加で時間条件が変化した)");
+        // notify=false draftは表示選択や条件にかかわらず通知射影へ現れない
+        muted.notify = false;
+        let mut with_muted = s.clone();
+        with_muted.rules.push(muted);
+        let added = filter::notification_projection(&with_muted);
+        prop_assert_eq!(added.rules.as_slice(), base.rules.as_slice(), "${msg} (notify=false追加で射影が変化した)");
 
-        edited_disabled.enabled = false;
-        *with_disabled.rules.last_mut().expect("disabled ruleを追加済み") = edited_disabled;
-        let edited = filter::enabled_projection(&with_disabled);
-        prop_assert_eq!(edited.rules.as_slice(), base.rules.as_slice(), "${msg} (disabled条件編集で射影が変化した)");
-        with_disabled.rules.pop();
-        let removed = filter::enabled_projection(&with_disabled);
-        prop_assert_eq!(removed.rules.as_slice(), base.rules.as_slice(), "${msg} (disabled削除で射影が変化した)");
+        edited_muted.notify = false;
+        *with_muted.rules.last_mut().expect("notify=false ruleを追加済み") = edited_muted;
+        let edited = filter::notification_projection(&with_muted);
+        prop_assert_eq!(edited.rules.as_slice(), base.rules.as_slice(), "${msg} (notify=false条件編集で射影が変化した)");
+        with_muted.rules.pop();
+        let removed = filter::notification_projection(&with_muted);
+        prop_assert_eq!(removed.rules.as_slice(), base.rules.as_slice(), "${msg} (notify=false削除で射影が変化した)");
 
-        enabled.enabled = true;
-        let mut with_enabled = s.clone();
-        with_enabled.rules.push(enabled.clone());
-        let enabled_added = filter::enabled_projection(&with_enabled);
-        prop_assert_eq!(enabled_added.rules.len(), base.rules.len() + 1, "${msg} (enabled追加が射影へ反映されない)");
-        prop_assert_eq!(enabled_added.rules.last(), Some(&enabled), "${msg} (enabled追加の条件を保持しない)");
+        // enabledは一覧表示だけ: 全ルールの表示選択を反転しても通知射影・scopeは不変
+        let mut display_toggled = s.clone();
+        for rule in &mut display_toggled.rules {
+            rule.enabled = !rule.enabled;
+        }
+        prop_assert_eq!(
+            filter::notification_projection(&display_toggled),
+            base.clone(),
+            "${msg} (enabled変更で通知射影が変化した)"
+        );
+        prop_assert!(
+            !poller::notification_scope_changed(Some(&s), &display_toggled),
+            "${msg} (enabled変更を通知範囲変更と誤判定した)"
+        );
 
-        let toggled_rule = WatchRule {
-            enabled: false,
-            ..WatchRule::default()
-        };
+        // 非表示(enabled=false)でもnotify=trueなら射影へ入り、enabled=trueへ正規化される
+        notifying.enabled = false;
+        notifying.notify = true;
+        let mut with_notifying = s.clone();
+        with_notifying.rules.push(notifying.clone());
+        let notifying_added = filter::notification_projection(&with_notifying);
+        prop_assert_eq!(notifying_added.rules.len(), base.rules.len() + 1, "${msg} (非表示通知ルール追加が射影へ反映されない)");
+        let normalized = normalize(&notifying);
+        prop_assert_eq!(notifying_added.rules.last(), Some(&normalized), "${msg} (非表示通知ルールの条件を保持しない)");
+
+        // 名前は表示用メタデータ: 変更しても射影も通知範囲判定も変わらない
+        let mut renamed = s.clone();
+        for rule in &mut renamed.rules {
+            rule.name = Some("renamed".to_string());
+        }
+        prop_assert_eq!(filter::notification_projection(&renamed), base, "${msg} (名前変更で射影が変化した)");
+        prop_assert!(
+            !poller::notification_scope_changed(Some(&s), &renamed),
+            "${msg} (名前変更を通知範囲変更と誤判定した)"
+        );
+
         let mut toggled = FilterSettings {
-            rules: vec![toggled_rule],
+            rules: vec![WatchRule { enabled: false, notify: true, ..WatchRule::default() }],
             min_remaining_secs: s.min_remaining_secs,
         };
-        prop_assert!(filter::enabled_projection(&toggled).rules.is_empty(), "${msg} (disabledを射影へ含めた)");
+        let hidden_projection = filter::notification_projection(&toggled);
+        prop_assert_eq!(hidden_projection.rules.len(), 1, "${msg} (非表示通知ルールを射影から落とした)");
         toggled.rules[0].enabled = true;
-        prop_assert_eq!(filter::enabled_projection(&toggled).rules.len(), 1, "${msg} (enabled切替が射影へ反映されない)");
+        prop_assert_eq!(filter::notification_projection(&toggled), hidden_projection, "${msg} (enabled切替が射影へ影響した)");
+        toggled.rules[0].notify = false;
+        prop_assert!(filter::notification_projection(&toggled).rules.is_empty(), "${msg} (notify=falseを射影へ含めた)");
+        toggled.rules[0].notify = true;
 
         let mut changed_condition = toggled.clone();
         changed_condition.rules[0].tiers = vec!["__projection_changed__".to_string()];
         prop_assert_ne!(
-            filter::enabled_projection(&toggled).rules,
-            filter::enabled_projection(&changed_condition).rules,
-            "${msg} (有効ルール条件の変更が射影へ反映されない)"
+            filter::notification_projection(&toggled).rules,
+            filter::notification_projection(&changed_condition).rules,
+            "${msg} (通知参加ルール条件の変更が射影へ反映されない)"
         );
 
         let changed_min = FilterSettings {
@@ -309,8 +360,8 @@ ${indent(c.fissureOverride ?? "", 8)}
             min_remaining_secs: s.min_remaining_secs + 1,
         };
         prop_assert_ne!(
-            filter::enabled_projection(&s).min_remaining_secs,
-            filter::enabled_projection(&changed_min).min_remaining_secs,
+            filter::notification_projection(&s).min_remaining_secs,
+            filter::notification_projection(&changed_min).min_remaining_secs,
             "${msg} (min_remaining_secs変更が射影へ反映されない)"
         );
     }`;
@@ -359,7 +410,7 @@ ${indent(c.fissureOverride ?? "", 8)}
             rules: vec![rule.clone(), rule],
             min_remaining_secs: 0,
         };
-        let visible = poller::visible_fissures(&settings, &[f.clone()], now);
+        let visible = poller::notify_candidates(&settings, &[f.clone()], now);
         prop_assert_eq!(visible.len(), 1, "${msg} (複数ルール合致で一覧が重複した)");
 
         let mut notified = NotifiedSet::new();
@@ -415,28 +466,39 @@ ${indent(c.fissureOverride ?? "", 8)}
     fn ${fnName(c.id, "projection")}(
         previous in arb_settings(),
         current in arb_settings(),
-        mut disabled in arb_rule(),
+        mut muted in arb_rule(),
     ) {
-        let previous_projection = filter::enabled_projection(&previous);
-        let current_projection = filter::enabled_projection(&current);
+        let previous_projection = filter::notification_projection(&previous);
+        let current_projection = filter::notification_projection(&current);
         let expected = previous_projection.min_remaining_secs != current_projection.min_remaining_secs
             || previous_projection.rules != current_projection.rules;
         prop_assert_eq!(
             poller::notification_scope_changed(Some(&previous), &current),
             expected,
-            "${msg} (enabled projectionとの差分と一致しない)"
+            "${msg} (notification projectionとの差分と一致しない)"
         );
         prop_assert!(
             poller::notification_scope_changed(None, &current),
             "${msg} (初回評価をscope changeと判定しない)"
         );
 
-        disabled.enabled = false;
-        let mut disabled_only_change = previous.clone();
-        disabled_only_change.rules.push(disabled);
+        // notify=false draftの追加・編集はscope changeではない
+        muted.notify = false;
+        let mut muted_only_change = previous.clone();
+        muted_only_change.rules.push(muted);
         prop_assert!(
-            !poller::notification_scope_changed(Some(&previous), &disabled_only_change),
-            "${msg} (disabled draft追加をscope changeと誤判定した)"
+            !poller::notification_scope_changed(Some(&previous), &muted_only_change),
+            "${msg} (notify=false draft追加をscope changeと誤判定した)"
+        );
+
+        // enabledは表示選択だけなので任意に変えてもscope changeではない
+        let mut display_only_change = previous.clone();
+        for rule in &mut display_only_change.rules {
+            rule.enabled = !rule.enabled;
+        }
+        prop_assert!(
+            !poller::notification_scope_changed(Some(&previous), &display_only_change),
+            "${msg} (enabled変更をscope changeと誤判定した)"
         );
     }
 
@@ -447,23 +509,25 @@ ${indent(c.fissureOverride ?? "", 8)}
         f.expiry = now + Duration::hours(1);
         f.is_storm = false;
 
-        let enabled_rule = WatchRule::default();
-        let mut disabled_rule = enabled_rule.clone();
-        disabled_rule.enabled = false;
+        let mut hidden_notify_rule = WatchRule::default();
+        hidden_notify_rule.enabled = false;
+        hidden_notify_rule.notify = true;
+        let mut muted_rule = hidden_notify_rule.clone();
+        muted_rule.notify = false;
         let previous = FilterSettings {
-            rules: vec![disabled_rule],
+            rules: vec![muted_rule],
             min_remaining_secs: 0,
         };
         let current = FilterSettings {
-            rules: vec![enabled_rule],
+            rules: vec![hidden_notify_rule],
             min_remaining_secs: 0,
         };
         prop_assert!(
             poller::notification_scope_changed(Some(&previous), &current),
-            "${msg} (ルール有効化をscope changeと判定しない)"
+            "${msg} (notify有効化をscope changeと判定しない)"
         );
 
-        let existing = poller::visible_fissures(&current, &[f.clone()], now);
+        let existing = poller::notify_candidates(&current, &[f.clone()], now);
         prop_assert_eq!(existing.len(), 1, "${msg} (現存合致亀裂を取得できない)");
         let mut notified = NotifiedSet::new();
         let seeded = poller::select_notifications(&mut notified, existing.clone(), true);
@@ -474,7 +538,7 @@ ${indent(c.fissureOverride ?? "", 8)}
 
         let mut new_fissure = f.clone();
         new_fissure.id = format!("{}-new", f.id);
-        let newly_visible = poller::visible_fissures(&current, &[new_fissure.clone()], now);
+        let newly_visible = poller::notify_candidates(&current, &[new_fissure.clone()], now);
         let fresh = poller::select_notifications(&mut notified, newly_visible.clone(), false);
         prop_assert_eq!(fresh.len(), 1, "${msg} (scope change後の新規idを通知候補にしない)");
         prop_assert_eq!(fresh[0].id.as_str(), new_fissure.id.as_str(), "${msg} (新規idを保持しない)");
@@ -488,11 +552,33 @@ ${indent(c.fissureOverride ?? "", 8)}
     fn ${name}(s in arb_settings(), fs in proptest::collection::vec(arb_fissure(), 0..30)) {
         let now = base_now();
         let visible = poller::visible_fissures(&s, &fs, now);
-        for f in &visible {
-            prop_assert!(filter::matches(&s, f, now), "${msg} (対象外が表示された)");
+        // notifyは表示判定へ影響しない
+        let mut notify_toggled = s.clone();
+        for rule in &mut notify_toggled.rules {
+            rule.notify = !rule.notify;
         }
-        for f in fs.iter().filter(|f| filter::matches(&s, f, now)) {
-            prop_assert!(visible.iter().any(|v| v.id == f.id), "${msg} (合致亀裂が欠落した)");
+        prop_assert_eq!(
+            poller::visible_fissures(&notify_toggled, &fs, now),
+            visible.clone(),
+            "${msg} (notify変更で一覧表示が変化した)"
+        );
+        if s.rules.iter().any(|rule| rule.enabled) {
+            for f in &visible {
+                prop_assert!(filter::matches(&s, f, now), "${msg} (対象外が表示された)");
+            }
+            for f in fs.iter().filter(|f| filter::matches(&s, f, now)) {
+                prop_assert!(visible.iter().any(|v| v.id == f.id), "${msg} (合致亀裂が欠落した)");
+            }
+        } else {
+            // 無指定(表示選択なし): 通知参加・min_remainingとは独立に生存中だけ全件表示する
+            let live: Vec<&Fissure> = fs.iter().filter(|f| f.expiry > now).collect();
+            prop_assert_eq!(visible.len(), live.len(), "${msg} (無指定の生存中全件と一致しない)");
+            for f in live {
+                prop_assert!(visible.iter().any(|v| v.id == f.id), "${msg} (無指定で生存中亀裂が欠落した)");
+            }
+            for f in fs.iter().filter(|f| f.expiry <= now) {
+                prop_assert!(!visible.iter().any(|v| v.id == f.id), "${msg} (無指定で期限切れを表示した)");
+            }
         }
     }`;
     case "fuzzy_subsequence":
@@ -596,6 +682,36 @@ ${indent(c.fissureOverride ?? "", 8)}
         prop_assert_eq!(state, before_invalid, "${msg} (範囲外indexでstateを変更した)");
     }
 
+    /// ${c.id}: ${c.desc} (notify切替)
+    #[test]
+    fn ${fnName(c.id, "set_notify")}(
+        rules in proptest::collection::vec(arb_rule(), 1..5),
+        edit_pick in any::<prop::sample::Index>(),
+        target_pick in any::<prop::sample::Index>(),
+        notify in any::<bool>(),
+    ) {
+        let active = edit_pick.index(rules.len());
+        let target = target_pick.index(rules.len());
+        let mut expected_rules = rules.clone();
+        expected_rules[target].notify = notify;
+        let mut state = palette::EditorState { rules, active };
+        let before_active = state.active;
+        prop_assert!(
+            palette::set_rule_notify(&mut state, target, notify),
+            "${msg} (有効なindexのnotify切替に失敗した)"
+        );
+        prop_assert_eq!(state.active, before_active, "${msg} (notify切替でedit indexが変化した)");
+        prop_assert_eq!(state.rules.as_slice(), expected_rules.as_slice(), "${msg} (notify以外が変化した)");
+
+        let before_invalid = state.clone();
+        let invalid_index = state.rules.len();
+        prop_assert!(
+            !palette::set_rule_notify(&mut state, invalid_index, notify),
+            "${msg} (範囲外indexのnotify切替を成功扱いした)"
+        );
+        prop_assert_eq!(state, before_invalid, "${msg} (範囲外indexでstateを変更した)");
+    }
+
     /// ${c.id}: ${c.desc} (edit focus変更)
     #[test]
     fn ${fnName(c.id, "edit_focus")}(
@@ -608,14 +724,19 @@ ${indent(c.fissureOverride ?? "", 8)}
         prop_assert_eq!(state.rules.as_slice(), before.as_slice(), "${msg} (edit index変更でrulesが変化した)");
     }
 
-    /// ${c.id}: ${c.desc} (disabled draftの条件編集)
+    /// ${c.id}: ${c.desc} (非表示・通知OFF draftの条件編集)
     #[test]
     fn ${fnName(c.id, "disabled_edit")}(
         mut rule in arb_rule(),
+        mut guard in arb_rule(),
         ops in proptest::collection::vec(any::<prop::sample::Index>(), 0..40),
     ) {
         rule.enabled = false;
-        let mut state = palette::EditorState { rules: vec![rule], active: 0 };
+        rule.notify = false;
+        guard.enabled = true;
+        guard.notify = true;
+        let expected_projection = vec![WatchRule { name: None, ..guard.clone() }];
+        let mut state = palette::EditorState { rules: vec![rule, guard], active: 0 };
         let candidates: Vec<Candidate> = palette::catalog()
             .into_iter()
             .filter(|candidate| candidate.facet != Facet::Action)
@@ -623,16 +744,74 @@ ${indent(c.fissureOverride ?? "", 8)}
         for op in ops {
             let candidate = &candidates[op.index(candidates.len())];
             palette::apply(&mut state, candidate);
-            prop_assert!(!state.rules[0].enabled, "${msg} ({} 適用でdisabled ruleを再有効化した)", candidate.id);
+            prop_assert_eq!(state.rules.len(), 2, "${msg} ({} 適用でルール数が変わった)", candidate.id);
+            prop_assert!(!state.rules[0].enabled, "${msg} ({} 適用で非表示ruleを表示選択した)", candidate.id);
+            prop_assert!(!state.rules[0].notify, "${msg} ({} 適用でdraftを通知参加させた)", candidate.id);
             let settings = FilterSettings {
                 rules: state.rules.clone(),
                 min_remaining_secs: 0,
             };
-            prop_assert!(
-                filter::enabled_projection(&settings).rules.is_empty(),
-                "${msg} (disabled編集中にruntime projectionへ現れた)"
+            let projection = filter::notification_projection(&settings);
+            prop_assert_eq!(
+                projection.rules.as_slice(),
+                expected_projection.as_slice(),
+                "${msg} (notify=false draft編集がnotification projectionへ現れた)"
             );
         }
+    }`;
+    case "unselected_apply_creates_rule":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(
+        mut rules in proptest::collection::vec(arb_rule(), 1..5),
+        pick in any::<prop::sample::Index>(),
+        first_pick in any::<prop::sample::Index>(),
+        second_pick in any::<prop::sample::Index>(),
+    ) {
+        for rule in rules.iter_mut() {
+            rule.enabled = false;
+            // 既存ルールを安全な空draftと区別し、必ず新規作成経路を検査する
+            rule.notify = true;
+        }
+        let active = pick.index(rules.len());
+        let candidates: Vec<Candidate> = palette::catalog()
+            .into_iter()
+            .filter(|candidate| !matches!(candidate.facet, Facet::Action | Facet::Rule))
+            .collect();
+        let first = &candidates[first_pick.index(candidates.len())];
+        let second = &candidates[second_pick.index(candidates.len())];
+
+        // VIEW選択0本では既存ルールを保持し、VIEW ON・NOTIFY OFFの新ルールへ適用する
+        let mut state = palette::EditorState { rules: rules.clone(), active };
+        palette::apply(&mut state, first);
+        prop_assert_eq!(state.rules.len(), rules.len() + 1, "${msg} (新しいVIEWルールを1本追加しない)");
+        prop_assert_eq!(&state.rules[..rules.len()], rules.as_slice(), "${msg} (既存ルールを変更した)");
+        prop_assert_eq!(state.active, rules.len(), "${msg} (新しいルールをedit対象にしない)");
+
+        let mut expected = palette::EditorState {
+            rules: vec![WatchRule { enabled: true, notify: false, ..WatchRule::default() }],
+            active: 0,
+        };
+        palette::apply(&mut expected, first);
+        prop_assert_eq!(state.rules.last(), expected.rules.first(), "${msg} (最初の候補を新ルールへ正しく適用しない)");
+        let expected_after_first = expected.rules[0].clone();
+        prop_assert!(state.rules.last().expect("新ルール追加済み").enabled, "${msg} (新ルールがVIEW OFF)");
+        prop_assert!(!state.rules.last().expect("新ルール追加済み").notify, "${msg} (新ルールを暗黙に通知参加させた)");
+
+        // 2候補目は同じ新ルールへ連続適用し、さらにルールを増やさない
+        palette::apply(&mut state, second);
+        palette::apply(&mut expected, second);
+        prop_assert_eq!(state.rules.len(), rules.len() + 1, "${msg} (後続候補でルールが増殖した)");
+        prop_assert_eq!(&state.rules[..rules.len()], rules.as_slice(), "${msg} (後続候補で既存ルールを変更した)");
+        prop_assert_eq!(state.active, rules.len(), "${msg} (後続候補でedit対象が移動した)");
+        prop_assert_eq!(state.rules.last(), expected.rules.first(), "${msg} (後続候補を同じ新ルールへ適用しない)");
+
+        // ルール自体が0本でも同じVIEW ON・NOTIFY OFFルールを1本だけ作る
+        let mut empty = palette::EditorState { rules: vec![], active: 0 };
+        palette::apply(&mut empty, first);
+        prop_assert_eq!(empty.rules, vec![expected_after_first], "${msg} (ルール0本から正しい新VIEWルールを作らない)");
+        prop_assert_eq!(empty.active, 0, "${msg} (ルール0本から作成したルールをedit対象にしない)");
     }`;
     case "new_rule_disabled":
       return `
@@ -641,6 +820,7 @@ ${indent(c.fissureOverride ?? "", 8)}
     fn ${name}(
         rules in proptest::collection::vec(arb_rule(), 0..5),
         pick in any::<prop::sample::Index>(),
+        cand_pick in any::<prop::sample::Index>(),
     ) {
         let active = if rules.is_empty() { 0 } else { pick.index(rules.len()) };
         let mut state = palette::EditorState { rules, active };
@@ -653,7 +833,166 @@ ${indent(c.fissureOverride ?? "", 8)}
         prop_assert_eq!(state.rules.len(), before.len() + 1, "${msg} (draftが1本追加されない)");
         prop_assert_eq!(&state.rules[..before.len()], before.as_slice(), "${msg} (既存ルールを変更した)");
         prop_assert!(!state.rules.last().expect("draft追加済み").enabled, "${msg} (NEW RULEがenabledで作成された)");
+        prop_assert!(!state.rules.last().expect("draft追加済み").notify, "${msg} (NEW RULEがnotify=trueで作成された)");
         prop_assert_eq!(state.active, state.rules.len() - 1, "${msg} (新しいdraftがedit対象でない)");
+
+        // VIEW選択0本の明示draftへ最初のfilter候補を適用すると、draftを再利用してVIEWルールへ確定する
+        let mut no_view = before.clone();
+        for rule in &mut no_view {
+            rule.enabled = false;
+            rule.notify = true;
+        }
+        let prefix = no_view.clone();
+        let active = if no_view.is_empty() { 0 } else { pick.index(no_view.len()) };
+        let mut draft_state = palette::EditorState { rules: no_view, active };
+        palette::apply(&mut draft_state, new_rule);
+        let draft_index = draft_state.active;
+        // nameは判定条件ではないため、名前付きの空draftも同じルールとして再利用する
+        draft_state.rules[draft_index].name = Some("NAMED DRAFT".to_string());
+        let filter_candidates: Vec<Candidate> = palette::catalog()
+            .into_iter()
+            .filter(|candidate| !matches!(candidate.facet, Facet::Action | Facet::Rule))
+            .collect();
+        let filter_candidate = &filter_candidates[cand_pick.index(filter_candidates.len())];
+        palette::apply(&mut draft_state, filter_candidate);
+        prop_assert_eq!(draft_state.rules.len(), prefix.len() + 1, "${msg} (空draft適用時に別ルールを追加した)");
+        prop_assert_eq!(&draft_state.rules[..prefix.len()], prefix.as_slice(), "${msg} (空draft確定時に既存ルールを変更した)");
+        prop_assert_eq!(draft_state.active, draft_index, "${msg} (空draft確定時にedit対象を移動した)");
+        prop_assert!(draft_state.rules[draft_index].enabled, "${msg} (空draftをVIEWルールへ確定しない)");
+        prop_assert!(!draft_state.rules[draft_index].notify, "${msg} (空draftを暗黙に通知参加させた)");
+        prop_assert_eq!(draft_state.rules[draft_index].name.as_deref(), Some("NAMED DRAFT"), "${msg} (空draft確定時に名前を失った)");
+    }`;
+    case "rule_toggle_candidates":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(
+        rules in proptest::collection::vec(arb_rule(), 1..5),
+        edit_pick in any::<prop::sample::Index>(),
+        target_pick in any::<prop::sample::Index>(),
+    ) {
+        let active = edit_pick.index(rules.len());
+        let target = target_pick.index(rules.len());
+        let catalog = palette::catalog_with_rules(&rules);
+        // 静的カタログの語彙は据え置きで、各ルールのrule:{index}候補が追加される
+        for (i, rule) in rules.iter().enumerate() {
+            let cand = catalog.iter()
+                .find(|c| c.id == format!("rule:{i}"))
+                .expect("rule候補が存在すること");
+            let expected_label = rule.name.clone().unwrap_or_else(|| format!("R{}", i + 1));
+            prop_assert_eq!(&cand.label, &expected_label, "${msg} (labelが名前/R{{n}}でない)");
+            prop_assert_eq!(cand.facet, Facet::Rule, "${msg} (facetがRULEでない)");
+        }
+        // 適用は対象ルールのenabledだけを反転し、条件・順序・edit indexを変えない
+        let cand = catalog.iter()
+            .find(|c| c.id == format!("rule:{target}"))
+            .expect("rule候補が存在すること");
+        let mut state = palette::EditorState { rules: rules.clone(), active };
+        palette::apply(&mut state, cand);
+        prop_assert_eq!(state.active, active, "${msg} (edit indexが変化した)");
+        let mut expected = rules.clone();
+        expected[target].enabled = !rules[target].enabled;
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "${msg} (enabled反転以外が変化した)");
+        // 再適用で元に戻る(トグル)
+        palette::apply(&mut state, cand);
+        prop_assert_eq!(state.rules.as_slice(), rules.as_slice(), "${msg} (再適用で往復しない)");
+
+        // action:toggle-rule は編集中(active)ルールのenabledだけを同様に反転する
+        let toggle_cand = catalog.iter()
+            .find(|c| c.id == "action:toggle-rule")
+            .expect("TOGGLE RULE候補が存在すること");
+        let mut state = palette::EditorState { rules: rules.clone(), active };
+        palette::apply(&mut state, toggle_cand);
+        prop_assert_eq!(state.active, active, "${msg} (toggle-ruleでedit indexが変化した)");
+        let mut expected = rules.clone();
+        expected[active].enabled = !rules[active].enabled;
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "${msg} (toggle-ruleがactive以外を変更した)");
+        palette::apply(&mut state, toggle_cand);
+        prop_assert_eq!(state.rules.as_slice(), rules.as_slice(), "${msg} (toggle-rule再適用で往復しない)");
+
+        // action:notify-rule は編集中(active)ルールのnotifyだけを同様に反転する
+        let notify_cand = catalog.iter()
+            .find(|c| c.id == "action:notify-rule")
+            .expect("TOGGLE NOTIFY候補が存在すること");
+        let mut state = palette::EditorState { rules: rules.clone(), active };
+        palette::apply(&mut state, notify_cand);
+        prop_assert_eq!(state.active, active, "${msg} (notify-ruleでedit indexが変化した)");
+        let mut expected = rules.clone();
+        expected[active].notify = !rules[active].notify;
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "${msg} (notify-ruleがnotify以外を変更した)");
+        palette::apply(&mut state, notify_cand);
+        prop_assert_eq!(state.rules.as_slice(), rules.as_slice(), "${msg} (notify-rule再適用で往復しない)");
+
+        // action:deselect-all-rules は全enabledだけをfalseにし、通知射影・条件・順序・edit indexを保持する
+        let deselect_cand = catalog.iter()
+            .find(|c| c.id == "action:deselect-all-rules")
+            .expect("DESELECT ALL RULES候補が存在すること");
+        let before_projection = filter::notification_projection(&FilterSettings {
+            rules: rules.clone(),
+            min_remaining_secs: 123,
+        });
+        let mut state = palette::EditorState { rules: rules.clone(), active };
+        palette::apply(&mut state, deselect_cand);
+        prop_assert_eq!(state.active, active, "${msg} (全ルール解除でedit indexが変化した)");
+        let mut expected = rules.clone();
+        for rule in &mut expected {
+            rule.enabled = false;
+        }
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "${msg} (全ルール解除がenabled以外を変更した)");
+        let after_projection = filter::notification_projection(&FilterSettings {
+            rules: state.rules.clone(),
+            min_remaining_secs: 123,
+        });
+        prop_assert_eq!(after_projection, before_projection, "${msg} (全ルール解除で通知射影が変化した)");
+        palette::apply(&mut state, deselect_cand);
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "${msg} (全ルール解除が冪等でない)");
+    }`;
+    case "notify_candidates":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(
+        s in arb_settings(),
+        fs in proptest::collection::vec(arb_fissure(), 0..30),
+        mut hidden_fissure in arb_fissure(),
+    ) {
+        let now = base_now();
+        let candidates = poller::notify_candidates(&s, &fs, now);
+        let scope = filter::notification_projection(&s);
+        // 健全性: 候補はnotify=trueルールのORに合致する
+        for f in &candidates {
+            prop_assert!(filter::matches(&scope, f, now), "${msg} (通知対象外が候補になった)");
+        }
+        // 完全性: 通知参加ルールに合致する亀裂は1件も取りこぼさない
+        for f in fs.iter().filter(|f| filter::matches(&scope, f, now)) {
+            prop_assert!(candidates.iter().any(|c| c.id == f.id), "${msg} (通知候補の取りこぼし)");
+        }
+        // 明示反例: 非表示(enabled=false)通知ルールだけに合致する亀裂も通知し、一覧には出さない
+        hidden_fissure.expiry = now + Duration::hours(1);
+        let hidden_notify = WatchRule {
+            enabled: false,
+            notify: true,
+            mode: Mode::Both,
+            storms: StormMode::Include,
+            ..WatchRule::default()
+        };
+        let displayed_nonmatch = WatchRule {
+            enabled: true,
+            notify: false,
+            tiers: vec!["__never_matches__".to_string()],
+            mode: Mode::Both,
+            storms: StormMode::Include,
+            ..WatchRule::default()
+        };
+        let separated = FilterSettings {
+            rules: vec![displayed_nonmatch, hidden_notify],
+            min_remaining_secs: 0,
+        };
+        let hidden_candidates = poller::notify_candidates(&separated, &[hidden_fissure.clone()], now);
+        let visible = poller::visible_fissures(&separated, &[hidden_fissure.clone()], now);
+        prop_assert_eq!(hidden_candidates.len(), 1, "${msg} (非表示通知ルールの合致を候補にしない)");
+        prop_assert_eq!(hidden_candidates[0].id.as_str(), hidden_fissure.id.as_str(), "${msg} (非表示通知ルールで別idを選んだ)");
+        prop_assert!(visible.is_empty(), "${msg} (通知ルールを一覧表示へ混入した)");
     }`;
     case "clear_resets":
       return `
@@ -695,7 +1034,7 @@ ${indent(c.fissureOverride ?? "", 8)}
 
 function genExampleClause(c: Clause): string {
   const name = fnName(c.id);
-  const msg = `SPEC ${c.id} 違反: ${c.desc.replace(/"/g, '\\"')}`;
+  const msg = `SPEC ${c.id} 違反: ${c.desc.replace(/"/g, '\\"').replace(/{/g, "{{").replace(/}/g, "}}")}`;
   if (c.pattern === "legacy_rule_enabled") {
     return `
 /// ${c.id}: ${c.desc}
@@ -715,6 +1054,71 @@ fn ${name}() {
     let round_trip: WatchRule = serde_json::from_str(&encoded)
         .expect("serialize済みWatchRuleを再読込できること");
     assert!(!round_trip.enabled, "${msg} (round-tripで明示falseを失った)");
+}`;
+  }
+  if (c.pattern === "rule_name_config") {
+    return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let legacy: WatchRule = serde_json::from_str(
+        r#"{"tiers":["Axi"],"includeStorms":false}"#,
+    )
+    .expect("name欠落の旧WatchRule JSONを読み込めること");
+    assert!(legacy.name.is_none(), "${msg} (name欠落を名前ありへ移行した)");
+
+    let named = WatchRule {
+        name: Some("MY FARM".to_string()),
+        tiers: vec!["Axi".to_string()],
+        enabled: false,
+        ..WatchRule::default()
+    };
+    let encoded = serde_json::to_string(&named).expect("name付きWatchRuleをserializeできること");
+    let round_trip: WatchRule = serde_json::from_str(&encoded)
+        .expect("serialize済みWatchRuleを再読込できること");
+    assert_eq!(round_trip, named, "${msg} (nameまたは他フィールドがround-tripで変わった)");
+}`;
+  }
+  if (c.pattern === "rule_notify_config") {
+    return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let legacy_enabled: WatchRule = serde_json::from_str(
+        r#"{"tiers":["Axi"],"includeStorms":false}"#,
+    )
+    .expect("notify欠落の旧WatchRule JSONを読み込めること");
+    assert!(legacy_enabled.enabled && legacy_enabled.notify, "${msg} (enabled欠落時の既定trueをnotifyへ引き継がない)");
+
+    let legacy_disabled: WatchRule = serde_json::from_str(
+        r#"{"enabled":false,"tiers":["Axi"]}"#,
+    )
+    .expect("notify欠落・enabled=falseの旧WatchRule JSONを読み込めること");
+    assert!(!legacy_disabled.notify, "${msg} (旧disabled draftを通知ONへ移行した)");
+
+    let hidden_notify: WatchRule = serde_json::from_str(
+        r#"{"enabled":false,"notify":true,"tiers":["Axi"]}"#,
+    )
+    .expect("明示notify=trueの非表示WatchRule JSONを読み込めること");
+    assert!(!hidden_notify.enabled && hidden_notify.notify, "${msg} (明示notify=trueをenabledへ結合した)");
+
+    let display_only = WatchRule {
+        notify: false,
+        enabled: true,
+        tiers: vec!["Axi".to_string()],
+        ..WatchRule::default()
+    };
+    let encoded =
+        serde_json::to_string(&display_only).expect("notify=falseのWatchRuleをserializeできること");
+    let round_trip: WatchRule = serde_json::from_str(&encoded)
+        .expect("serialize済みWatchRuleを再読込できること");
+    assert_eq!(round_trip, display_only, "${msg} (notifyまたは他フィールドがround-tripで変わった)");
+
+    let encoded = serde_json::to_string(&hidden_notify)
+        .expect("enabled=false, notify=trueのWatchRuleをserializeできること");
+    let round_trip: WatchRule = serde_json::from_str(&encoded)
+        .expect("非表示通知WatchRuleを再読込できること");
+    assert_eq!(round_trip, hidden_notify, "${msg} (enabledとnotifyの独立状態をround-tripで失った)");
 }`;
   }
   if (c.pattern === "static_check") {
@@ -794,6 +1198,38 @@ fn ${name}() {
     assert!(
         lib_rs.contains(".icon_as_template("),
         "${msg} (テンプレート登録の配線が失われた)"
+    );
+}`;
+      case "autostart_bundle_icon":
+        return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let lib_rs = std::fs::read_to_string(manifest.join("src/lib.rs"))
+        .expect("src/lib.rsを読めること");
+    assert!(
+        lib_rs.contains("MacosLauncher::AppleScript"),
+        "${msg} (.app bundleをLogin Item登録するlauncherでない)"
+    );
+    assert!(
+        !lib_rs.contains("MacosLauncher::LaunchAgent"),
+        "${msg} (内部Unix実行ファイルをLaunchAgent登録している)"
+    );
+    assert!(
+        lib_rs.contains("migrate_legacy_launch_agent"),
+        "${msg} (旧relico.plistの移行配線がない)"
+    );
+    let legacy = r#"<key>Label</key><string>relico</string><key>ProgramArguments</key><array><string>/Users/test/Applications/relico.app/Contents/MacOS/relico</string></array>"#;
+    assert!(
+        relico_lib::autostart::is_legacy_relico_launch_agent(legacy),
+        "${msg} (正規の旧plistを移行対象と認識しない)"
+    );
+    assert!(
+        !relico_lib::autostart::is_legacy_relico_launch_agent(
+            r#"<key>Label</key><string>other</string><key>ProgramArguments</key><array><string>/tmp/other</string></array>"#,
+        ),
+        "${msg} (無関係な同名plistを移行対象にした)"
     );
 }`;
       default:
@@ -1044,10 +1480,61 @@ test("${c.id} palette keyboard", async ({ page }) => {
   // Escで閉じる
   await page.keyboard.press("Escape");
   await expect(page.locator("#palette-overlay")).toBeHidden();
-  // パレットが閉じた一覧画面のEscは条件クリア(CLR-001の結線)
+  // 一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)
   await page.keyboard.press("Escape");
-  await expect(page.locator("#rail-msg")).toHaveText("ルールを既定に戻した");
-  expect((await calls(page)).some((entry) => entry.cmd === "clear_filter")).toBe(true);
+  await expect(page.locator("#rules-meta")).toHaveText("1/2 VIEW");
+  expect((await calls(page)).some((entry) => entry.cmd === "clear_filter")).toBe(false);
+  // 一覧画面のSpaceはパレットを開かず、編集中ルールのVIEW選択(enabled)をトグルする
+  await page.keyboard.press(" ");
+  await expect(page.locator("#palette-overlay")).toBeHidden();
+  await expect(page.locator("#rules-meta")).toHaveText("0/2 VIEW");
+  await expect(page.locator(".rule-row .rule-toggle").first()).toHaveText("[ ]");
+  expect(
+    (await calls(page)).filter(
+      (entry) => entry.cmd === "apply_candidate" && entry.args.id === "action:toggle-rule",
+    ).length,
+  ).toBe(1);
+  // 再度Spaceで元に戻る(トグル)
+  await page.keyboard.press(" ");
+  await expect(page.locator("#rules-meta")).toHaveText("1/2 VIEW");
+  await expect(page.locator(".rule-row .rule-toggle").first()).toHaveText("[x]");
+  // DESELECT ALL RULESは全VIEW選択だけを解除し、notify・ルール数・edit focusを保持する
+  await page.keyboard.press("d");
+  await page.locator("#palette-input").fill("deselect all rules");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#rules-meta")).toHaveText("0/2 VIEW");
+  await expect(page.locator("#rules-list .rule-row")).toHaveCount(2);
+  await expect(page.locator(".rule-row .rule-toggle").first()).toHaveText("[ ]");
+  await expect(page.locator(".rule-row .rule-toggle").nth(1)).toHaveText("[ ]");
+  await expect(page.locator(".rule-row .rule-notify").first()).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".rule-row .rule-notify").nth(1)).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#editing-meta")).toHaveText("R1/2");
+  await expect(page.locator("#sb-watch")).toHaveText("WATCH: 2 RULES");
+  const deselectCalls = (await calls(page)).filter(
+    (entry) => entry.cmd === "apply_candidate" && entry.args.id === "action:deselect-all-rules",
+  );
+  expect(deselectCalls).toHaveLength(1);
+  expect((await calls(page)).some((entry) => entry.cmd === "set_rule_notify")).toBe(false);
+  expect((await calls(page)).some((entry) => entry.cmd === "clear_filter")).toBe(false);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#palette-overlay")).toBeHidden();
+  // 一覧画面の↑/↓はedit focusを前後のルールへ巡回移動する(設定は変更しない)
+  const mutations = async () =>
+    (await calls(page)).filter(
+      (entry) => entry.cmd === "set_config" || entry.cmd === "set_rule_enabled",
+    ).length;
+  const mutationsBefore = await mutations();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator("#editing-meta")).toHaveText("R2/2");
+  await expect(page.locator(".rule-row").nth(1)).toHaveClass(/rule-focus/);
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator("#editing-meta")).toHaveText("R1/2");
+  await page.keyboard.press("ArrowUp");
+  await expect(page.locator("#editing-meta")).toHaveText("R2/2");
+  // Cmd/Ctrl+1..9は対応indexのルールへ直接ジャンプする
+  await page.keyboard.press("ControlOrMeta+1");
+  await expect(page.locator("#editing-meta")).toHaveText("R1/2");
+  expect(await mutations()).toBe(mutationsBefore);
   // IME変換中(composition中)のEnterは候補を適用しない
   await page.keyboard.press("a");
   await expect(page.locator("#palette-overlay")).toBeVisible();
@@ -1064,6 +1551,10 @@ test("${c.id} palette keyboard", async ({ page }) => {
   expect(applied[applied.length - 1].args.id).toBe("tier:Axi");
   await expect(page.locator("#palette-overlay")).toBeVisible();
   await expect(page.locator("#palette-input")).toHaveValue("");
+  // パレット表示中もCmd/Ctrl+数字で編集対象を切り替えられる(開いたまま)
+  await page.keyboard.press("ControlOrMeta+2");
+  await expect(page.locator("#palette-rule")).toContainText("EDIT R2");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
 });`;
     case "delivery_flush":
       return `
@@ -1090,24 +1581,59 @@ test("${c.id} delivery flush", async ({ page }) => {
 test("${c.id} toggle vs edit focus", async ({ page }) => {
   await bootConsole(page);
   const editingBefore = await page.locator("#editing-meta").textContent();
-  // enabled切替はset_rule_enabledだけを呼び、edit focus表示もパレットも動かさない
-  await page.locator(".rule-toggle").click();
+  // VIEW選択(enabled)切替はset_rule_enabledだけを呼び、notify・edit focus・パレットを動かさない
+  await page.locator(".rule-row .rule-toggle").first().click();
   const toggles = (await calls(page)).filter((entry) => entry.cmd === "set_rule_enabled");
   expect(toggles.length).toBe(1);
   expect(toggles[0].args).toEqual({ index: 0, enabled: false });
+  await expect(page.locator(".rule-row .rule-notify").first()).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("#editing-meta")).toHaveText(editingBefore ?? "");
   await expect(page.locator("#palette-overlay")).toBeHidden();
-  // 行本体はパレットを開くだけで切替を呼ばない
-  await page.locator(".rule-edit").click();
-  await expect(page.locator("#palette-overlay")).toBeVisible();
+  // notify切替はset_rule_notifyだけを呼び、VIEW選択(enabled)もedit focusも変えない
+  await page.locator(".rule-row .rule-notify").first().click();
+  const notifies = (await calls(page)).filter((entry) => entry.cmd === "set_rule_notify");
+  expect(notifies.length).toBe(1);
+  expect(notifies[0].args).toEqual({ index: 0, notify: false });
+  await expect(page.locator(".rule-row .rule-notify").first()).toHaveAttribute("aria-pressed", "false");
   expect((await calls(page)).filter((entry) => entry.cmd === "set_rule_enabled").length).toBe(1);
+  await expect(page.locator("#editing-meta")).toHaveText(editingBefore ?? "");
+  // 行本体はedit focusをそのルールへ移すだけで、パレットも切替も呼ばない
+  await page.locator(".rule-row .rule-edit").nth(1).click();
+  await expect(page.locator("#editing-meta")).toHaveText("R2/2");
+  await expect(page.locator(".rule-row").nth(1)).toHaveClass(/rule-focus/);
+  await expect(page.locator("#palette-overlay")).toBeHidden();
+  expect((await calls(page)).filter((entry) => entry.cmd === "set_rule_enabled").length).toBe(1);
+  // DEL/CLEARは2度押し確認: 1クリック目はSURE?表示になるだけで実行しない
+  await page.locator("#rule-del").click();
+  await expect(page.locator("#rule-del")).toHaveText("SURE?");
+  const delCalls = async () =>
+    (await calls(page)).filter(
+      (entry) => entry.cmd === "apply_candidate" && entry.args.id === "action:delete-rule",
+    ).length;
+  expect(await delCalls()).toBe(0);
+  // 2秒で自動復帰する
+  await expect(page.locator("#rule-del")).not.toHaveText("SURE?", { timeout: 4000 });
+  expect(await delCalls()).toBe(0);
+  // SURE?表示中のクリックだけが実行する
+  await page.locator("#rule-del").click();
+  await page.locator("#rule-del").click();
+  await expect.poll(delCalls).toBe(1);
+  await expect(page.locator("#rules-list .rule-row")).toHaveCount(1);
+  // CLEARも同じ2度押し(1クリック目は実行しない)
+  await page.locator("#clear-btn").click();
+  await expect(page.locator("#clear-btn")).toHaveText("SURE?");
+  expect((await calls(page)).some((entry) => entry.cmd === "clear_filter")).toBe(false);
 });
 
-// ${c.id}: ${c.desc} (全ルール無効の明示)
-test("${c.id} all rules disabled", async ({ page }) => {
+// ${c.id}: ${c.desc} (全ルールのVIEW選択解除)
+test("${c.id} all rules view off", async ({ page }) => {
   await bootConsole(page, { allRulesDisabled: true });
-  await expect(page.locator("#fissure-rows td.empty")).toHaveText("NO ENABLED NOTIFICATION RULES");
-  await expect(page.locator("#sb-watch")).toHaveText("WATCH: NO ENABLED NOTIFICATION RULES");
+  // VIEW無指定でも一覧は全亀裂を表示し、notify=trueルールのWATCHは継続する
+  await expect(page.locator("#fissure-rows tr")).toHaveCount(3);
+  await expect(page.locator("#fissure-rows td.empty")).toHaveCount(0);
+  await expect(page.locator("#rules-meta")).toHaveText("0/2 VIEW");
+  await expect(page.locator("#sb-watch")).toHaveText("WATCH: 2 RULES");
+  await expect(page.locator(".rule-row .rule-notify").first()).toHaveAttribute("aria-pressed", "true");
 });`;
     case "sidebar_fit":
       return `
@@ -1118,7 +1644,7 @@ test("${c.id} sidebar fits minimum window", async ({ page }) => {
   const railFits = () =>
     page.locator(".rail").evaluate((el) => el.scrollHeight <= el.clientHeight);
   expect(await railFits()).toBe(true);
-  // FILTERSタブ: ルールnavigator・NEW/DEL/CLEAR・5軸launcherへ到達できる
+  // FILTERSタブ: ルール一覧・NEW/DEL/CLEAR・5軸launcherへ到達できる
   await expect(page.locator(".rule-focus")).toBeVisible();
   for (const id of ["rule-new", "rule-del", "clear-btn"]) {
     await expect(page.locator("#" + id)).toBeVisible();
@@ -1143,6 +1669,111 @@ test("${c.id} sidebar fits minimum window", async ({ page }) => {
   // 既定サイズでも縦スクロールを必要としない
   await page.setViewportSize({ width: 960, height: 620 });
   expect(await railFits()).toBe(true);
+});
+
+// ${c.id}: ${c.desc} (ルール一覧の固定比率領域と内側縦スクロール)
+test("${c.id} rules list scrolls inside fixed-ratio area", async ({ page }) => {
+  await page.setViewportSize({ width: 720, height: 480 });
+  await bootConsole(page);
+  const listHeight = () => page.locator("#rules-list").evaluate((el) => el.clientHeight);
+  const fewHeight = await listHeight();
+  // ルールが増えても一覧領域の高さ(固定比率)は変わらず、railもスクロールしない
+  for (let i = 0; i < 10; i++) {
+    await page.locator("#rule-new").click();
+  }
+  await expect(page.locator("#rules-list .rule-row")).toHaveCount(12);
+  expect(Math.abs((await listHeight()) - fewHeight)).toBeLessThanOrEqual(1);
+  expect(await page.locator(".rail").evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
+  // 全ルール行を保持したまま一覧の内側だけ縦スクロールする
+  expect(await page.locator("#rules-list").evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+  // focus行(最後に追加したR12)は可視領域へ追従する
+  await expect(page.locator(".rule-focus .rno")).toHaveText("R12");
+  await expect(page.locator(".rule-focus")).toBeInViewport();
+});`;
+    case "rule_naming":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} rule naming and palette toggle", async ({ page }) => {
+  await bootConsole(page);
+  // NAME入力は編集中ルール(R1)の名前をdebounce保存する
+  await page.locator("#rulename-input").fill("MY FARM");
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (entry) => entry.cmd === "set_config" && entry.args.config.rules[0].name === "MY FARM",
+      ),
+    )
+    .toBe(true);
+  // ルール行は名前を要約より優先表示する
+  await expect(page.locator(".rule-focus .rule-summary")).toHaveText("MY FARM");
+  const editingBefore = await page.locator("#editing-meta").textContent();
+  // パレットは名前でRULE候補を検索できる(どこでも打鍵で開く)
+  await page.locator("#rulename-input").blur();
+  await page.keyboard.press("m");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await page.locator("#palette-input").fill("my farm");
+  const cand = page.locator("#palette-cands .cand", { hasText: "MY FARM" });
+  await expect(cand.locator(".facet")).toHaveText("RULE");
+  await expect(cand.locator(".box")).toHaveText("[x]");
+  // 適用は対象ルールのenabledトグルだけで、edit focus表示を変えない
+  await page.keyboard.press("Enter");
+  const applied = (await calls(page)).filter((entry) => entry.cmd === "apply_candidate");
+  expect(applied[applied.length - 1].args.id).toBe("rule:0");
+  await expect(page.locator(".rule-row").first()).toHaveClass(/disabled/);
+  await expect(page.locator(".rule-row .rule-toggle").first()).toHaveText("[ ]");
+  await expect(page.locator("#editing-meta")).toHaveText(editingBefore ?? "");
+  // RENAME RULE候補の適用はパレット入力を改名モードへ切り替える(現在名をprefill)
+  await page.locator("#palette-input").fill("rename");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#palette-input")).toHaveValue("MY FARM");
+  // Escは保存せず通常モードへ戻る(パレットは開いたまま)
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await expect(page.locator("#palette-input")).toHaveValue("");
+  // 改名モードのEnterは編集中ルールの名前を保存して通常モードへ戻る
+  await page.locator("#palette-input").fill("rename");
+  await page.keyboard.press("Enter");
+  await page.locator("#palette-input").fill("VOID RUSH");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (entry) => entry.cmd === "set_config" && entry.args.config.rules[0].name === "VOID RUSH",
+      ),
+    )
+    .toBe(true);
+  await expect(page.locator(".rule-focus .rule-summary")).toHaveText("VOID RUSH");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await expect(page.locator("#palette-input")).toHaveValue("");
+});`;
+    case "table_sort":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} table sort by column", async ({ page }) => {
+  await bootConsole(page);
+  const firstRow = () => page.locator("#fissure-rows tr").first();
+  // 既定はT-REMAIN昇順(消滅が近い順)
+  await expect(page.locator("th.col-timer")).toHaveAttribute("aria-sort", "ascending");
+  await expect(firstRow().locator(".col-tier")).toContainText("REQUIEM");
+  // ヘッダクリックでその列の昇順ソート
+  await page.locator("th.col-tier").click();
+  await expect(page.locator("th.col-tier")).toHaveAttribute("aria-sort", "ascending");
+  await expect(page.locator("th.col-timer")).not.toHaveAttribute("aria-sort");
+  await expect(firstRow().locator(".col-tier")).toContainText("LITH");
+  // 同じ列の再クリックで降順へトグル
+  await page.locator("th.col-tier").click();
+  await expect(page.locator("th.col-tier")).toHaveAttribute("aria-sort", "descending");
+  await expect(firstRow().locator(".col-tier")).toContainText("REQUIEM");
+  // 別の列をクリックするとその列の昇順から始まる
+  await page.locator("th.col-mission").click();
+  await expect(page.locator("th.col-mission")).toHaveAttribute("aria-sort", "ascending");
+  await expect(firstRow().locator(".col-mission")).toContainText("CAPTURE");
+  // ソートは表示のみ: 設定・通知の変更を呼ばない
+  expect(
+    (await calls(page)).filter((entry) =>
+      ["set_config", "set_rule_enabled", "set_rule_notify", "apply_candidate"].includes(entry.cmd),
+    ).length,
+  ).toBe(0);
 });`;
     case "compact_table":
       return `
@@ -1174,18 +1805,126 @@ test("${c.id} compact table breakpoints", async ({ page }) => {
     "Taveuni (Kuva Fortress)",
   );
   expect(await longRow.getAttribute("title")).toContain("Taveuni (Kuva Fortress)");
+  // 実APIのFACTION名THE MURMURは標準幅でも省略しない
+  const murmur = longRow.locator(".col-faction .icon-label > span:last-child");
+  await expect(murmur).toHaveText("THE MURMUR");
+  expect(await murmur.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 });
 
 // ${c.id}: ${c.desc} (empty rowの全幅表示)
 test("${c.id} empty row spans full width", async ({ page }) => {
   await page.setViewportSize({ width: 720, height: 480 });
-  await bootConsole(page, { allRulesDisabled: true });
+  await bootConsole(page, { noFissures: true });
   const spansFullWidth = await page.locator("#fissure-rows td.empty").evaluate((el) => {
     const row = el.closest("tr");
     if (!row) return false;
     return Math.abs(el.getBoundingClientRect().width - row.getBoundingClientRect().width) <= 1;
   });
   expect(spansFullWidth).toBe(true);
+});`;
+    case "expiry_cleanup":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} expiry cleanup", async ({ page }) => {
+  await bootConsole(page, { firstExpirySecs: 1 });
+  const expiring = page.locator("#fissure-rows tr", { hasText: "Taveuni" });
+  await expect(expiring).toHaveCount(1);
+  await expect(expiring).toHaveCount(0, { timeout: 3500 });
+  await expect(page.locator("#fissure-rows tr", { hasText: "Nsu Grid" })).toHaveCount(1);
+  const statusIds = await page.evaluate(() => {
+    const state = (window as unknown as { __MOCK_STATE__: { status: { fissures: Array<{ id: string }> } } }).__MOCK_STATE__;
+    return state.status.fissures.map((fissure) => fissure.id);
+  });
+  expect(statusIds).not.toContain("fx-requiem");
+  expect(
+    (await calls(page)).filter((entry) =>
+      ["set_config", "set_rule_enabled", "set_rule_notify", "apply_candidate"].includes(entry.cmd),
+    ).length,
+  ).toBe(0);
+});`;
+    case "unselected_picker_create":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} unselected picker creates a view rule", async ({ page }) => {
+  await bootConsole(page, { allRulesDisabled: true });
+  // 全VIEW解除後も残っているR2のedit focusを、暗黙作成時に誤編集しない
+  await page.locator(".rule-row .rule-edit").nth(1).click();
+  await expect(page.locator("#editing-meta")).toHaveText("R2/2");
+  const before = await page.evaluate(() =>
+    structuredClone(
+      (window as unknown as { __MOCK_STATE__: { config: { rules: unknown[] } } })
+        .__MOCK_STATE__.config.rules,
+    ),
+  );
+
+  await page.locator("#tier-checks").click();
+  await page.locator("#palette-cands .cand", { hasText: "Requiem" }).click();
+
+  await expect(page.locator("#rules-list .rule-row")).toHaveCount(3);
+  await expect(page.locator("#rules-meta")).toHaveText("1/3 VIEW");
+  await expect(page.locator("#editing-meta")).toHaveText("R3/3");
+  const after = await page.evaluate(() =>
+    structuredClone(
+      (window as unknown as {
+        __MOCK_STATE__: {
+          config: {
+            rules: Array<{
+              enabled: boolean;
+              notify: boolean;
+              tiers: string[];
+            }>;
+          };
+        };
+      }).__MOCK_STATE__.config.rules,
+    ),
+  );
+  expect(after.slice(0, 2)).toEqual(before);
+  expect(after[2]).toMatchObject({ enabled: true, notify: false, tiers: ["Requiem"] });
+  const applied = (await calls(page)).filter((entry) => entry.cmd === "apply_candidate");
+  expect(applied[applied.length - 1].args).toEqual({ id: "tier:Requiem", active: 1 });
+});
+
+// ${c.id}: ${c.desc} (NEW RULE応答中の後続候補を旧ルールへ適用しない)
+test("${c.id} serializes rapid new rule and filter apply", async ({ page }) => {
+  await bootConsole(page, { allRulesDisabled: true, applyCandidateDelayMs: 80 });
+  const before = await page.evaluate(() =>
+    structuredClone(
+      (window as unknown as { __MOCK_STATE__: { config: { rules: unknown[] } } })
+        .__MOCK_STATE__.config.rules,
+    ),
+  );
+
+  await page.keyboard.press("n");
+  await page.locator("#palette-input").fill("new rule");
+  await page.keyboard.press("Enter");
+  // 最初のIPC応答を待たず、異なるfilter候補を確定する
+  await page.locator("#palette-input").fill("axi");
+  await expect(page.locator("#palette-cands .cand", { hasText: "Axi" })).toHaveCount(1);
+  await page.keyboard.press("Enter");
+
+  await expect(page.locator("#rules-list .rule-row")).toHaveCount(3);
+  await expect(page.locator("#rules-meta")).toHaveText("1/3 VIEW");
+  await expect(page.locator("#editing-meta")).toHaveText("R3/3");
+  await expect
+    .poll(async () =>
+      page.evaluate(() =>
+        (window as unknown as {
+          __MOCK_STATE__: { config: { rules: Array<{ tiers: string[] }> } };
+        }).__MOCK_STATE__.config.rules[2]?.tiers,
+      ),
+    )
+    .toEqual(["Axi"]);
+  const after = await page.evaluate(() =>
+    structuredClone(
+      (window as unknown as {
+        __MOCK_STATE__: {
+          config: { rules: Array<{ enabled: boolean; notify: boolean; tiers: string[] }> };
+        };
+      }).__MOCK_STATE__.config.rules,
+    ),
+  );
+  expect(after.slice(0, 2)).toEqual(before);
+  expect(after[2]).toMatchObject({ enabled: true, notify: false, tiers: ["Axi"] });
 });`;
     default:
       throw new Error(`未知のrendererシナリオ: ${c.scenario} (${c.id})`);
@@ -1248,6 +1987,8 @@ describe("${c.id}", () => {
 
 const RUST_EXAMPLE_PATTERNS = new Set([
   "legacy_rule_enabled",
+  "rule_name_config",
+  "rule_notify_config",
   "notification_example",
   "static_check",
   "approved_asset",
@@ -1327,17 +2068,25 @@ fn arb_subset(pool: &'static [&'static str]) -> impl Strategy<Value = Vec<String
         .prop_map(|v| v.into_iter().map(String::from).collect())
 }
 
+fn arb_rule_name() -> impl Strategy<Value = Option<String>> {
+    proptest::option::of("[A-Za-z0-9 ]{1,12}")
+}
+
 fn arb_rule() -> impl Strategy<Value = WatchRule> {
     (
         any::<bool>(),
+        any::<bool>(),
+        arb_rule_name(),
         arb_subset(TIERS),
         arb_subset(MISSIONS),
         arb_subset(PLANETS),
         arb_mode(),
         arb_storm_mode(),
     )
-        .prop_map(|(enabled, tiers, mission_types, planets, mode, storms)| WatchRule {
+        .prop_map(|(enabled, notify, name, tiers, mission_types, planets, mode, storms)| WatchRule {
             enabled,
+            notify,
+            name,
             tiers,
             mission_types,
             planets,
@@ -1466,10 +2215,10 @@ const specMd = `# ${spec.title}
 > 保証の勾配: このプロジェクトの機械保証の最上位は property-based test である。
 > proven(証明) / model-checked(モデル検査) の条項は存在しない。勾配を平らに見せない。
 >
-> フィルタの意味論は有効ルールOR: 設定は監視ルール(WatchRule)のリストで、亀裂が
-> enabled=trueのどれか1つのルールに合致すれば通知・表示対象になる。
-> enabled=falseのルールは保存・編集できるがruntime判定には参加しない。ルール内はAND。
-> UIのedit focusはruntime activationとは独立する。
+> ルール内はAND、複数ルールは用途ごとにORする。一覧表示はenabled=trueのVIEWルール、
+> 通知はnotify=trueのNOTIFYルールを使い、両者は独立する。
+> enabled=false, notify=trueの非表示ルールも通知対象になる。
+> VIEW選択、NOTIFY参加、UIのedit focusは互いに独立する。
 
 ## 条項一覧
 
