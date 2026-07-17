@@ -1,4 +1,4 @@
-# Warframe Fissure Notifier 仕様
+# relico — Warframe亀裂通知 仕様
 
 > **生成物 — 手編集禁止。** 正本は `specs/notifier.pkl`。変更は正本を編集して `just spec-gen`。
 >

@@ -66,7 +66,7 @@ pub fn update_tray(app: &AppHandle, cfg: &AppConfig, snap: &StatusSnapshot) {
             } else {
                 "API ERR"
             };
-            let _ = tray.set_tooltip(Some(format!("FISSURE OPS — {state} — {watch}")));
+            let _ = tray.set_tooltip(Some(format!("RELICO — {state} — {watch}")));
         }
     });
 }
@@ -144,7 +144,7 @@ pub fn run() {
 
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("FISSURE OPS")
+                .tooltip("RELICO")
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| match event.id.as_ref() {

@@ -1,4 +1,4 @@
-# warframe-fissure-notifier
+# relico
 
 Warframeのボイドの亀裂(Void Fissure)を監視し、指定条件に合致した亀裂だけを通知するmacOSメニューバー常駐アプリ。鋼の道のり(Steel Path)と通常を区別でき、デスクトップ通知に加えてDiscord Webhook経由でスマホにも届く。
 

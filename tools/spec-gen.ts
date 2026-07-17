@@ -297,12 +297,12 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use proptest::prelude::*;
-use warframe_fissure_notifier_lib::backoff::Backoff;
-use warframe_fissure_notifier_lib::dedup::NotifiedSet;
-use warframe_fissure_notifier_lib::filter::{self, FilterSettings, Mode, WatchRule};
-use warframe_fissure_notifier_lib::model::Fissure;
-use warframe_fissure_notifier_lib::palette::{self, Candidate, Facet};
-use warframe_fissure_notifier_lib::poller;
+use relico_lib::backoff::Backoff;
+use relico_lib::dedup::NotifiedSet;
+use relico_lib::filter::{self, FilterSettings, Mode, WatchRule};
+use relico_lib::model::Fissure;
+use relico_lib::palette::{self, Candidate, Facet};
+use relico_lib::poller;
 
 const TIERS: &[&str] = &["Lith", "Meso", "Neo", "Axi", "Requiem", "Omnia"];
 const MISSIONS: &[&str] = &[

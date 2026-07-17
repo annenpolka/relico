@@ -47,9 +47,9 @@ impl PollerState {
 pub fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(concat!(
-            "warframe-fissure-notifier/",
+            "relico/",
             env!("CARGO_PKG_VERSION"),
-            " (+https://github.com/annenpolka/warframe-fissure-notifier)"
+            " (+https://github.com/annenpolka/relico)"
         ))
         .timeout(Duration::from_secs(20))
         .build()

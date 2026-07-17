@@ -2,9 +2,9 @@
 // パースと判定の具体例を固定する。性質はoracles_generated.rs(生成物)が担う。
 
 use chrono::{TimeZone, Utc};
-use warframe_fissure_notifier_lib::filter::{self, FilterSettings, Mode, WatchRule};
-use warframe_fissure_notifier_lib::model::Fissure;
-use warframe_fissure_notifier_lib::palette;
+use relico_lib::filter::{self, FilterSettings, Mode, WatchRule};
+use relico_lib::model::Fissure;
+use relico_lib::palette;
 
 fn fixture() -> Vec<Fissure> {
     serde_json::from_str(include_str!("fixtures/fissures.json")).expect("fixture parse")

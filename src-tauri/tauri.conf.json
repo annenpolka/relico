@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "warframe-fissure-notifier",
+  "productName": "relico",
   "version": "0.1.0",
-  "identifier": "com.annenpolka.warframe-fissure-notifier",
+  "identifier": "com.annenpolka.relico",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "FISSURE OPS — PC WORLDSTATE",
+        "title": "RELICO — FISSURE OPS",
         "width": 960,
         "height": 620,
         "minWidth": 720,

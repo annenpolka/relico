@@ -8,7 +8,7 @@ module notifier
 
 import "patterns.pkl"
 
-title = "Warframe Fissure Notifier 仕様"
+title = "relico — Warframe亀裂通知 仕様"
 
 clauses: Listing<patterns.Clause> = new {
   new patterns.RuleRejectWhen {

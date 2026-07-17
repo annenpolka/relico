@@ -81,7 +81,7 @@ struct AppConfig {
 - **一発クリア(SPEC: CLR-001)**: CLEARボタン/候補で既定ルール1本に戻す
 - レール(サイドバー)のチェック操作も同じ`apply_candidate`経路を通るため、どこから編集しても上書き解決が働く
 
-保存先: `~/Library/Application Support/com.annenpolka.warframe-fissure-notifier/config.json`。通知済みidも同ディレクトリに永続化し、再起動時の再通知を防ぐ(DED-001の実運用面)。設定変更は `watch` チャネルで即ポーリングタスクへ反映する。
+保存先: `~/Library/Application Support/com.annenpolka.relico/config.json`。通知済みidも同ディレクトリに永続化し、再起動時の再通知を防ぐ(DED-001の実運用面)。設定変更は `watch` チャネルで即ポーリングタスクへ反映する。
 
 ## 通知フォーマット
 
