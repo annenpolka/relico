@@ -468,7 +468,7 @@ test("RND-009 serializes rapid new rule and filter apply", async ({ page }) => {
   expect(after[2]).toMatchObject({ enabled: true, notify: false, tiers: ["Axi"] });
 });
 
-// RND-010: コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。仲裁cardはcommunity schedule・browse.wf出典、将来Descendiaはupcoming、AreaはWFCDとOracleのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)
+// RND-010: コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。仲裁cardはcommunity schedule・browse.wf出典、将来Descendiaはupcoming、Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)
 test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 620 });
   await bootConsole(page, { locale: "en" });
@@ -571,12 +571,20 @@ test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   ).toBeVisible();
 
   await page.keyboard.press("Meta+6");
-  await expect(
-    page.locator('#panel-area-missions .timed-card-group[data-group="worldstate"]'),
-  ).toBeVisible();
-  await expect(
-    page.locator('#panel-area-missions .timed-card-group[data-group="bounties"]'),
-  ).toBeVisible();
+  const areaGroups = page.locator("#panel-area-missions .timed-card-group");
+  await expect(areaGroups).toHaveCount(5);
+  expect(
+    await areaGroups.evaluateAll((groups) => groups.map((group) => group.getAttribute("data-group"))),
+  ).toEqual(["environments", "worldstate", "location-objectives", "bounties", "events"]);
+  await expect(page.locator('#panel-area-missions .timed-card-group[data-group="environments"] .timed-card')).toHaveCount(5);
+  await expect(page.locator('#panel-area-missions .timed-card-group[data-group="location-objectives"] .timed-card')).toHaveCount(3);
+  await expect(page.locator('#panel-area-missions .timed-card-group[data-group="events"] .timed-card')).toHaveCount(1);
+  const areaFactionVariants = await page
+    .locator('#panel-area-missions .timed-card-group[data-group="worldstate"] .timed-card, #panel-area-missions .timed-card-group[data-group="bounties"] .timed-card')
+    .evaluateAll((cards) => cards.map((card) => card.getAttribute("data-variant")));
+  for (const variant of ["ostrons", "solaris-united", "entrati", "holdfasts", "cavia", "hex"]) {
+    expect(areaFactionVariants).toContain(variant);
+  }
   await expect(
     page.locator(
       '#panel-area-missions .timed-source-error[data-source="wfcd"][data-freshness="stale"]',
@@ -587,6 +595,11 @@ test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
       '#panel-area-missions .timed-source-error[data-source="browseWfBounties"][data-freshness="unavailable"]',
     ),
   ).toContainText("oracle down");
+  await expect(
+    page.locator(
+      '#panel-area-missions .timed-source-error[data-source="browseWfLocationBounties"][data-freshness="unavailable"]',
+    ),
+  ).toContainText("location oracle down");
 
   await page.keyboard.press("Meta+7");
   const circuit = page.locator('#panel-circuit .timed-card[data-provenance="official-live"]');
@@ -648,7 +661,7 @@ test("RND-011 notification mute window", async ({ page }) => {
     .toBe(true);
 });
 
-// RND-012: locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、本文・aria-label・placeholderに加えて仲裁のcommunity schedule表示、Circuitの通常/鋼候補見出し・個人進捗非公開注記の言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合)
+// RND-012: locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、document.title、本文・aria-label・placeholderに加えて仲裁のcommunity schedule表示、Areaの5 group見出しと環境state、Circuitの通常/鋼候補見出し・個人進捗非公開注記の言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合)
 const localeGoldens = {
   ja: {
     text: [
@@ -667,10 +680,13 @@ const localeGoldens = {
       ["#pause-btn", "common.pause", "一時停止"],
       ['#mute-check [data-i18n-key="delivery.muteSchedule"]', "delivery.muteSchedule", "通知ミュート"],
     ],
+    appTitle: "RELICO — 時限コンテンツ",
     tabsLabel: "時限コンテンツ",
     languageLabel: "表示言語",
     rulePlaceholder: "ルール名 (R1)",
     arbitrationProvenance: "コミュニティ予測",
+    areaGroups: ["環境サイクル", "通常依頼", "ローカル依頼候補", "追加依頼", "エリアイベント"],
+    environmentState: "状態 昼",
     circuitStages: ["通常サーキット", "鋼の道のりサーキット"],
     circuitProgress: "公開ワールドステートから今週の候補は取得できますが、個人のサーキット進行度は取得できません。ゲーム内で確認してください。",
   },
@@ -691,10 +707,13 @@ const localeGoldens = {
       ["#pause-btn", "common.pause", "Pause"],
       ['#mute-check [data-i18n-key="delivery.muteSchedule"]', "delivery.muteSchedule", "Notification mute"],
     ],
+    appTitle: "RELICO — TIMED CONTENT",
     tabsLabel: "Timed content",
     languageLabel: "Display language",
     rulePlaceholder: "Rule name (R1)",
     arbitrationProvenance: "Community prediction",
+    areaGroups: ["Environments", "Open-world bounties", "Objective rotations", "Additional bounties", "Area events"],
+    environmentState: "State Day",
     circuitStages: ["Normal Circuit", "Steel Path Circuit"],
     circuitProgress: "The public world-state provides this week's choices, but not your personal Circuit progress. Check it in game.",
   },
@@ -715,10 +734,13 @@ const localeGoldens = {
       ["#pause-btn", "common.pause", "暂停"],
       ['#mute-check [data-i18n-key="delivery.muteSchedule"]', "delivery.muteSchedule", "通知静音"],
     ],
+    appTitle: "RELICO — 限时内容",
     tabsLabel: "限时内容",
     languageLabel: "显示语言",
     rulePlaceholder: "规则名称 (R1)",
     arbitrationProvenance: "社区预测",
+    areaGroups: ["环境周期", "开放世界赏金", "目标轮换", "额外赏金", "地区活动"],
+    environmentState: "状态 白昼",
     circuitStages: ["普通无尽回廊", "钢铁之路无尽回廊"],
     circuitProgress: "公共世界状态可提供本周候选，但无法提供你的个人无尽回廊进度，请在游戏内确认。",
   },
@@ -730,6 +752,7 @@ for (const [locale, golden] of Object.entries(localeGoldens)) {
     await bootConsole(page, { locale: locale as "ja" | "en" | "zh-Hans" });
     await expect(page.locator("html")).toHaveAttribute("lang", locale);
     await expect(page.locator("#locale-select")).toHaveValue(locale);
+    await expect(page).toHaveTitle(golden.appTitle);
 
     for (const [selector, key, expectedText] of golden.text) {
       const node = page.locator(selector);
@@ -751,6 +774,15 @@ for (const [locale, golden] of Object.entries(localeGoldens)) {
     await expect(
       page.locator('#panel-arbitration .timed-card[data-provenance="community-schedule"] .timed-provenance-badge'),
     ).toHaveText(golden.arbitrationProvenance);
+    await page.locator("#tab-area-missions").click();
+    const areaHeadings = page.locator("#panel-area-missions .timed-group-heading");
+    await expect(areaHeadings).toHaveCount(5);
+    for (const [index, expected] of golden.areaGroups.entries()) {
+      await expect(areaHeadings.nth(index)).toHaveText(expected);
+    }
+    await expect(
+      page.locator('#panel-area-missions .timed-card-group[data-group="environments"] .timed-card').first().locator(".timed-meta"),
+    ).toContainText(golden.environmentState);
     const circuitStages = page.locator("#panel-circuit .timed-stage-title");
     await expect(circuitStages).toHaveCount(2);
     await expect(circuitStages.nth(0)).toHaveText(golden.circuitStages[0]);

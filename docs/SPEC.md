@@ -40,7 +40,7 @@
 | MUT-002 | `muted_delivery` | property-tested | 起動直後のseed中または通知ミュート中に観測した合致亀裂は通知済みidとしてmarkするが配送対象を1件も返さない。通常配送へ戻しても同じidを滞留通知せず、その後に現れた新規idだけを1回返す。配送判定はHTTP取得開始時ではなく取得後の最新設定を使い、ミュート・一時停止・表示言語の変更を次の配送前へ反映する。ミュートは一覧・通知候補・next表示を変えず、明示操作のTEST DELIVERYには適用しない |
 | ARB-001 | `arbitration_schedule` | property-tested | browse.wf仲裁scheduleは2件以上の非空nodeを持ち、先頭timestampがUTC時間境界に揃い、隣接行ごとに厳密な3600秒間隔で増加するときだけ受理する。空node、重複、逆順、1秒でも異なるgap、数値でないtimestampは全体を不正として扱う |
 | ARB-002 | `arbitration_schedule` | property-tested | 仲裁schedule lookupはnowをUTC時間slotへ切り下げ、先頭timestamp以上かつ末尾timestamp+3600秒未満だけ対応する行を返す。先頭より前と末尾slot終了以後はOutOfRangeであり、剰余による循環・端値補間を行わない |
-| SRC-001 | `timed_source_isolation` | property-tested | WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する |
+| SRC-001 | `timed_source_isolation` | property-tested | WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する |
 | BNT-001 | `bounty_freshness` | property-tested | browse.wf Oracle bounty-cycleはexpiryが変換可能なミリ秒時刻で、同一の取得後nowより厳密に未来の場合だけfreshとする。expiry欠落・変換不能・now以下の期限切れpayloadは成功扱いせず、last-known-good Bountyを上書きしない |
 | NTY-001 | `notify_candidates` | property-tested | 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない |
 | VIS-001 | `filtered_view` | property-tested | 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる |
@@ -59,11 +59,12 @@
 | CFG-003 | `rule_name_config` | example-tested | WatchRuleのnameは省略可能な表示用メタデータで、nameを持たない旧JSONは名前なしとして読み込み、設定したnameはserialize/deserializeを往復しても他のフィールドと共に保持される |
 | CFG-004 | `rule_notify_config` | example-tested | WatchRuleのnotifyはenabledから独立した通知参加フラグで、notifyを持たない旧JSONは旧enabled値(それも欠落ならtrue)を引き継ぐ。明示したnotify=true/falseはenabledの値に関係なくserialize/deserializeを往復しても保持される |
 | CFG-005 | `app_config_compat` | example-tested | AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない |
-| TMD-001 | `timed_content_fixture` | example-tested | 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない |
+| TMD-001 | `timed_content_fixture` | example-tested | 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない |
 | TMD-002 | `timed_content_fixture` | example-tested | 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する |
 | TMD-003 | `timed_content_fixture` | example-tested | 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない |
 | TMD-004 | `timed_content_fixture` | example-tested | DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない |
 | TMD-005 | `timed_content_fixture` | example-tested | 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する |
+| TMD-006 | `timed_content_fixture` | example-tested | AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない |
 | NTF-001 | `notification_example` | example-tested | 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する |
 | NTF-002 | `notification_example` | example-tested | desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める |
 | NTF-003 | `notification_example` | example-tested | 未バンドルのraw devでdesktop通知を利用できない場合は、失敗詳細を保持し、デバッグbundle .appを使う just notification-test を案内する |
@@ -73,6 +74,7 @@
 | STA-002 | `static_check` | example-tested | トレイは専用tray-icon.pngをテンプレート画像として登録する配線を持ち、PNGはモノクロ(+アルファ)形式である |
 | STA-003 | `static_check` | example-tested | macOS AUTOSTARTは内部のUnix実行ファイルをLaunchAgent登録せず、アプリアイコンを保持するAppleScript Login Itemとして.app bundleを登録し、旧relico.plistを一度だけ移行する配線を持つ |
 | STA-004 | `static_check` | example-tested | i18n専用の外部ライブラリを追加せず、TS/Rustの自前lookup・placeholder実装が同じsrc/locales.jsonを直接読む。TSのi18n moduleは相対importだけ、Rustは標準ライブラリ・crate内module・既存の汎用serde_json以外の外部crateを使わない |
+| TLG-001 | `tooling_scenario` | example-tested | just e2eは単一のTAURI_WEBDRIVER_PORTとE2E専用lease fileを実行前とEXIT時に検査し、lease inodeを開いたtarget.noindex/debug/relicoのcanonical executable完全一致だけをTERM、期限後も同じPID・実行ファイル・lease identityならKILLして回収する。portのLISTEN前またはlistener終了後でもlease holderを回収し、leaseなしの同port listenerは拒否する。holder/listenerなしは成功し、別port・別leaseの同一実行ファイルと同portの別実行ファイルは終了しない。basenameによるpkill/killallは使わない |
 | AST-001 | `approved_asset` | example-tested | メニューバー用tray-icon.pngは目視承認済みの内容から変わっていない(変えたらMAN-005の手順で再承認しsha256を更新する) |
 | AST-002 | `approved_asset` | example-tested | 配布用アプリアイコンicon.icnsは目視承認済みの内容から変わっていない(変えたらMAN-006の手順で再承認しsha256を更新する) |
 | ICN-001 | `renderer_glyphs` | example-tested | 既知のTier・惑星・ミッション・ファクション・難易度・VOID嵐・アクション値には汎用と区別できる専用SVGグリフが割り当てられ、未知値はカテゴリ別の汎用グリフへフォールバックし、グリフは装飾(aria-hidden)である |
@@ -86,12 +88,12 @@
 | RND-008 | `renderer_scenario` | example-tested | 一覧表示中の亀裂は次回pollを待たずexpiry到達後1秒以内にDOMとfrontend snapshotから除去され、他の生存中亀裂・設定・通知状態を変えない(renderer統合) |
 | RND-007 | `renderer_scenario` | example-tested | 亀裂表のヘッダクリックで項目別ソートでき、同じ列の再クリックで昇順/降順をトグルし、ソート中の列にaria-sortが付く。既定はT-REMAIN昇順で、ソートは表示のみ(設定・通知の変更を呼ばない)(renderer統合) |
 | RND-009 | `renderer_scenario` | example-tested | VIEW選択0本からピッカーでfilter候補を適用すると既存ルールを変更せずVIEW ON・NOTIFY OFFの新ルールを作り、edit focusを新ルールへ移す。NEW RULE適用中に別のfilter候補を素早く確定しても操作を直列化し、旧edit対象を変更せず同じ新ルールへ適用する(renderer統合) |
-| RND-010 | `renderer_scenario` | example-tested | コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。仲裁cardはcommunity schedule・browse.wf出典、将来Descendiaはupcoming、AreaはWFCDとOracleのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合) |
+| RND-010 | `renderer_scenario` | example-tested | コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。仲裁cardはcommunity schedule・browse.wf出典、将来Descendiaはupcoming、Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合) |
 | RND-011 | `renderer_scenario` | example-tested | DELIVERYの通知ミュートUIはON/OFFと開始・終了時刻をAppConfig.notificationMute(enabled/startMinute/endMinute)へ保存し、backend snapshotのnotificationsMuted=trueを独自判定せず状態表示する。設定操作はルール・VIEW・NOTIFYを変えず、TEST DELIVERYはミュート表示中でも実行経路へ進む(renderer統合) |
-| RND-012 | `renderer_scenario` | example-tested | locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、本文・aria-label・placeholderに加えて仲裁のcommunity schedule表示、Circuitの通常/鋼候補見出し・個人進捗非公開注記の言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合) |
+| RND-012 | `renderer_scenario` | example-tested | locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、document.title、本文・aria-label・placeholderに加えて仲裁のcommunity schedule表示、Areaの5 group見出しと環境state、Circuitの通常/鋼候補見出し・個人進捗非公開注記の言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合) |
 | E2E-001 | `e2e_scenario` | example-tested | 実アプリでパレット打鍵→候補適用が本物のquery_candidates/apply_candidateを往復し、ルールsummaryとwatch行へ反映される(WDIO Tauri E2E、専用identity) |
 | E2E-002 | `e2e_scenario` | example-tested | 実アプリで通知先を全て無効にしたTEST DELIVERYが、本物のset_config・test_notificationを通り、NTF-001の失敗理由(通知先なし)をrailへ表示する(WDIO Tauri E2E) |
-| E2E-003 | `e2e_scenario` | example-tested | 実アプリで表示言語をzh-Hansへ変更すると、本物のset_config完了後にhtml langとcritical UIが切り替わり、再読込後も実get_configからzh-Hansが復元される(WDIO Tauri E2E) |
+| E2E-003 | `e2e_scenario` | example-tested | 実アプリの起動時ja、en変更後、zh-Hans変更後、再読込後でdocument.titleとmain native window titleが各localeのapp.titleへ同期し、表示言語は本物のset_config完了後にhtml langとcritical UIへ反映され、再読込後も実get_configからzh-Hansが復元される(WDIO Tauri E2E) |
 | MAN-001 | `manual` | manual | 通知テスト専用bundleと配布bundleの各名義で、macOSの初回権限許可とバナー表示を人が知覚できる |
 | MAN-002 | `manual` | manual | Discord Webhook通知がスマホのDiscordアプリでpush表示される |
 | MAN-003 | `manual` | manual | ファジーパレットで、macOSの実IMEを使った日本語alias入力ができる |
@@ -104,11 +106,12 @@
 | MAN-010 | `manual` | manual | 右サイドバーの要約が読みやすく、情報の優先順位が視覚的に自然である |
 | MAN-011 | `manual` | manual | compact表示が実データで読みやすく、VoiceOverでtable semanticsが自然に読み上げられる |
 | MAN-012 | `manual` | manual | 9つの時限コンテンツ表示はsourceの由来と時間状態を分離し、取得経路の部分障害や個人進捗の非公開性をもっともらしい推測値で埋めない |
+| MAN-013 | `manual` | manual | just e2eを中断してもE2E専用アプリだけが終了し、配布版・通知テスト版・通常開発版は終了しない |
 
 保証ラベルの意味: **property-tested** = proptestオラクルで機械検証 / **example-tested** = 具体例テストで機械検証 / **manual** = 手動確認(残余)
 
 オラクルの実行先: `rule_*` 等のRustパターンは `cargo test`(src-tauri/tests/oracles_generated.rs)、
-`renderer_glyphs` は `bun test tests/unit`、`renderer_scenario` は `just renderer-test`
+`renderer_glyphs` / `tooling_scenario` は `bun test tests/unit`、`renderer_scenario` は `just renderer-test`
 (Playwright/WebKit、Tauri IPCはmock — Rust commandやOS通知を通った証明にはしない。docs/E2E.md参照)、
 `e2e_scenario` は `just e2e`(WDIO Tauri E2E。実IPC・実WKWebViewを通し、専用identity
 com.annenpolka.relico.e2e で実行する)。
@@ -166,3 +169,7 @@ tray-icon.pngを変更したときだけ、メニューバーでライト/ダー
 #### MAN-006: 配布バンドルのRELICOアプリアイコンが通常・小サイズ表示で判別できる
 
 icon.icnsを変更したときだけ、just buildで生成した.appをFinderの通常表示と小サイズ表示で目視確認し、承認としてAST-002のsha256を更新する。内容の凍結はAST-002で機械検証済み。
+
+#### MAN-013: just e2eを中断してもE2E専用アプリだけが終了し、配布版・通知テスト版・通常開発版は終了しない
+
+E2E cleanup配線を変更したときだけ確認する。別名義の配布版または通知テスト版を起動したままjust e2eをworker開始後にCtrl-Cで中断し、target.noindex/debug/relico・E2E lease holder・TCP 4445のlistenerが消え、一時capabilityが削除される一方、別名義のアプリとメニューバー監視は継続することを確認する。対象限定janitorのno-op・foreign listener拒否・port未bindのholder回収・identity変化時のKILL拒否・TERM/KILL・別port非干渉はTLG-001で機械検証する。

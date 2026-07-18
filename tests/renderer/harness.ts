@@ -235,12 +235,45 @@ function installMock({
         ],
         archon: [],
         syndicates: [],
+        areaEnvironments: [
+          ...(
+            [
+              ["cetus", "Cetus", "day"],
+              ["vallis", "Orb Vallis", "cold"],
+              ["cambion", "Cambion Drift", "fass"],
+              ["zariman", "Zariman", "grineer"],
+              ["duviri", "Duviri", "joy"],
+            ] as const
+          ).map(([variant, title, state]) => ({
+            id: "environment-" + variant,
+            kind: "area-environment",
+            variant,
+            title,
+            subtitle: null,
+            activation: iso(-1800),
+            expiry: iso(5400),
+            temporalStatus: "active",
+            provenance: { kind: "community-live", contributors: ["wfcd-worldstate"] },
+            sourceId: "wfcd-worldstate",
+            sourceName: "WFCD",
+            sourceUrl: "https://api.warframestat.us/pc",
+            metadata: [{ key: "state", value: state }],
+            personalModifiers: [],
+            stages: [],
+          })),
+        ],
         areaMissions: [
-          {
-            id: "area-ostrons",
+          ...(
+            [
+              ["ostrons", "Ostrons", "Plains of Eidolon", "Capture the Grineer Commander"],
+              ["solaris-united", "Solaris United", "Orb Vallis", "Recover the Data"],
+              ["entrati", "Entrati", "Cambion Drift", "Isolation Vault"],
+            ] as const
+          ).map(([variant, title, node, objective]) => ({
+            id: "area-" + variant,
             kind: "area-mission",
-            variant: null,
-            title: "Ostrons",
+            variant,
+            title,
             subtitle: null,
             activation: iso(-1800),
             expiry: iso(5400),
@@ -254,8 +287,8 @@ function installMock({
             stages: [
               {
                 order: 1,
-                title: "Capture the Grineer Commander",
-                node: "Plains of Eidolon",
+                title: objective,
+                node,
                 detail: null,
                 enemyLevels: [5, 15],
                 standingStages: [400, 600, 1000],
@@ -265,7 +298,47 @@ function installMock({
                 ],
               },
             ],
-          },
+          })),
+        ],
+        areaObjectives: [
+          ...(
+            [
+              ["ostrons", "Ostrons", "Plains of Eidolon", ["Capture", "Liberation"]],
+              ["solaris-united", "Solaris United", "Orb Vallis", ["Spy", "Excavation"]],
+              ["entrati", "Entrati", "Cambion Drift", ["Brute Force", "Artifact Hunter"]],
+            ] as const
+          ).map(([variant, title, location, objectives]) => ({
+            id: "area-objective-" + variant,
+            kind: "area-objective",
+            variant,
+            title,
+            subtitle: null,
+            activation: null,
+            expiry: iso(4500),
+            temporalStatus: "active",
+            provenance: {
+              kind: "community-live",
+              contributors: [
+                "browse-wf-location-bounties",
+                "browse-wf-export-bounties",
+                "browse-wf-dictionary-en",
+              ],
+            },
+            sourceId: "browse-wf-location-bounties",
+            sourceName: "browse.wf",
+            sourceUrl: "https://oracle.browse.wf/location-bounties",
+            metadata: [],
+            personalModifiers: [],
+            stages: [
+              {
+                order: 1,
+                title: location,
+                node: null,
+                detail: null,
+                choices: [...objectives],
+              },
+            ],
+          })),
         ],
         bounties: [
           ...[
@@ -300,6 +373,25 @@ function installMock({
               },
             ],
           })),
+        ],
+        areaEvents: [
+          {
+            id: "event-heat-fissure",
+            kind: "area-event",
+            variant: "heat-fissure",
+            title: "Thermia Fractures",
+            subtitle: "Seal fractures across the Orb Vallis",
+            activation: iso(-1800),
+            expiry: iso(5400),
+            temporalStatus: "active",
+            provenance: { kind: "community-live", contributors: ["wfcd-worldstate"] },
+            sourceId: "wfcd-worldstate",
+            sourceName: "WFCD",
+            sourceUrl: "https://api.warframestat.us/pc",
+            metadata: [],
+            personalModifiers: [],
+            stages: [],
+          },
         ],
         circuit: [
           {
@@ -428,6 +520,11 @@ function installMock({
             ...sourceStatus("browse-wf-bounty-cycle", iso(4500)),
             freshness: "unavailable",
             error: "oracle down",
+          },
+          browseWfLocationBounties: {
+            ...sourceStatus("browse-wf-location-bounties", iso(4500)),
+            freshness: "unavailable",
+            error: "location oracle down",
           },
           browseWfArbitration: sourceStatus(
             "browse-wf-arbitration-schedule",

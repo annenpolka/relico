@@ -36,8 +36,10 @@ type Clause = {
     | "oracle_bounties"
     | "circuit"
     | "rich_details"
+    | "area_sources"
     | "glyph_known_values"
     | "planet_proxima_view"
+    | "e2e_targeted_cleanup"
     | "palette_keyboard"
     | "delivery_flush"
     | "rule_row_controls"
@@ -781,6 +783,7 @@ ${indent(c.fissureOverride ?? "", 8)}
             Some("descendia"),
             Some("circuit"),
             Some("bounties"),
+            Some("location"),
             Some("arbitration"),
         ] {
             let lkg_expiry = now + Duration::hours(1);
@@ -790,16 +793,21 @@ ${indent(c.fissureOverride ?? "", 8)}
             snapshot.archon = vec![mk_timed_card("wfcd-archon-lkg", Some(lkg_expiry))];
             snapshot.syndicates = vec![mk_timed_card("wfcd-syndicates-lkg", Some(lkg_expiry))];
             snapshot.area_missions = vec![mk_timed_card("wfcd-area-lkg", Some(lkg_expiry))];
+            snapshot.area_environments = vec![mk_timed_card("wfcd-environment-lkg", Some(lkg_expiry))];
+            snapshot.area_events = vec![mk_timed_card("wfcd-event-lkg", Some(lkg_expiry))];
             snapshot.archimedea = vec![mk_timed_card("wfcd-archimedea-lkg", Some(lkg_expiry))];
             snapshot.descendia = vec![mk_timed_card("descendia-lkg", Some(lkg_expiry))];
             snapshot.circuit = vec![mk_timed_card("circuit-lkg", Some(lkg_expiry))];
             snapshot.bounties = vec![mk_timed_card("bounties-lkg", Some(lkg_expiry))];
+            snapshot.area_objectives = vec![mk_timed_card("location-lkg", Some(lkg_expiry))];
             snapshot.arbitration = vec![mk_timed_card("arbitration-lkg", Some(lkg_expiry))];
             snapshot.sources.wfcd = mk_timed_status(timed::TimedSourceId::WfcdWorldstate);
             snapshot.sources.de_descendia = mk_timed_status(timed::TimedSourceId::DeWorldstate);
             snapshot.sources.de_circuit = mk_timed_status(timed::TimedSourceId::DeWorldstate);
             snapshot.sources.browse_wf_bounties =
                 mk_timed_status(timed::TimedSourceId::BrowseWfBountyCycle);
+            snapshot.sources.browse_wf_location_bounties =
+                mk_timed_status(timed::TimedSourceId::BrowseWfLocationBounties);
             snapshot.sources.browse_wf_arbitration =
                 mk_timed_status(timed::TimedSourceId::BrowseWfArbitrationSchedule);
 
@@ -814,6 +822,8 @@ ${indent(c.fissureOverride ?? "", 8)}
                             archon: vec![mk_timed_card("wfcd-archon-replacement", Some(replacement_expiry))],
                             syndicates: vec![mk_timed_card("wfcd-syndicates-replacement", Some(replacement_expiry))],
                             area_missions: vec![mk_timed_card("wfcd-area-replacement", Some(replacement_expiry))],
+                            area_environments: vec![mk_timed_card("wfcd-environment-replacement", Some(replacement_expiry))],
+                            area_events: vec![mk_timed_card("wfcd-event-replacement", Some(replacement_expiry))],
                             archimedea: vec![mk_timed_card("wfcd-archimedea-replacement", Some(replacement_expiry))],
                         })
                     },
@@ -832,6 +842,11 @@ ${indent(c.fissureOverride ?? "", 8)}
                     } else {
                         Ok(vec![mk_timed_card("bounties-replacement", Some(replacement_expiry))])
                     },
+                    area_objectives: if failed_source == Some("location") {
+                        Err(timed::TimedSourceError::failed("location down"))
+                    } else {
+                        Ok(vec![mk_timed_card("location-replacement", Some(replacement_expiry))])
+                    },
                     arbitration: if failed_source == Some("arbitration") {
                         Err(timed::TimedSourceError::failed("arbitration down"))
                     } else {
@@ -845,10 +860,13 @@ ${indent(c.fissureOverride ?? "", 8)}
                 ("wfcd", &snapshot.archon, "wfcd-archon-lkg", "wfcd-archon-replacement"),
                 ("wfcd", &snapshot.syndicates, "wfcd-syndicates-lkg", "wfcd-syndicates-replacement"),
                 ("wfcd", &snapshot.area_missions, "wfcd-area-lkg", "wfcd-area-replacement"),
+                ("wfcd", &snapshot.area_environments, "wfcd-environment-lkg", "wfcd-environment-replacement"),
+                ("wfcd", &snapshot.area_events, "wfcd-event-lkg", "wfcd-event-replacement"),
                 ("wfcd", &snapshot.archimedea, "wfcd-archimedea-lkg", "wfcd-archimedea-replacement"),
                 ("descendia", &snapshot.descendia, "descendia-lkg", "descendia-replacement"),
                 ("circuit", &snapshot.circuit, "circuit-lkg", "circuit-replacement"),
                 ("bounties", &snapshot.bounties, "bounties-lkg", "bounties-replacement"),
+                ("location", &snapshot.area_objectives, "location-lkg", "location-replacement"),
                 ("arbitration", &snapshot.arbitration, "arbitration-lkg", "arbitration-replacement"),
             ] {
                 prop_assert_eq!(cards.len(), 1, "${msg} ({} slice件数; failed={:?})", source, failed_source);
@@ -861,6 +879,7 @@ ${indent(c.fissureOverride ?? "", 8)}
                 ("descendia", &snapshot.sources.de_descendia, timed::TimedSourceId::DeWorldstate),
                 ("circuit", &snapshot.sources.de_circuit, timed::TimedSourceId::DeWorldstate),
                 ("bounties", &snapshot.sources.browse_wf_bounties, timed::TimedSourceId::BrowseWfBountyCycle),
+                ("location", &snapshot.sources.browse_wf_location_bounties, timed::TimedSourceId::BrowseWfLocationBounties),
                 ("arbitration", &snapshot.sources.browse_wf_arbitration, timed::TimedSourceId::BrowseWfArbitrationSchedule),
             ] {
                 let failed_here = failed_source == Some(source);
@@ -896,34 +915,57 @@ ${indent(c.fissureOverride ?? "", 8)}
         // validなdynamic payloadのstatic join失敗と、dynamic payload自体の失敗を分離する。
         let bounty_static_join_error: Result<Vec<timed::TimedContent>, timed::TimedSourceError> =
             Err(timed::TimedSourceError::failed("bounty join failed"));
+        let location_static_join_error: Result<Vec<timed::TimedContent>, timed::TimedSourceError> =
+            Err(timed::TimedSourceError::failed("location join failed"));
+        let location_ok: Result<Vec<timed::TimedContent>, timed::TimedSourceError> = Ok(vec![]);
         let arbitration_ok: Result<Vec<timed::TimedContent>, timed::TimedSourceError> = Ok(vec![]);
         let hints = timed::static_asset_refresh_hints(
             true,
+            false,
             &bounty_static_join_error,
+            &location_ok,
             &arbitration_ok,
         );
         prop_assert!(hints.bounties, "${msg} (valid Bounty payloadのstatic join失敗でBounty asset refreshを要求しない)");
+        prop_assert!(!hints.location_bounties, "${msg} (Bounty join失敗がlocation asset refreshへ伝播した)");
         prop_assert!(!hints.arbitration, "${msg} (Bounty join失敗がArbitration asset refreshへ伝播した)");
+
+        let bounty_ok: Result<Vec<timed::TimedContent>, timed::TimedSourceError> = Ok(vec![]);
+        let hints = timed::static_asset_refresh_hints(
+            false,
+            true,
+            &bounty_ok,
+            &location_static_join_error,
+            &arbitration_ok,
+        );
+        prop_assert!(!hints.bounties, "${msg} (location join失敗がBounty asset refreshへ伝播した)");
+        prop_assert!(hints.location_bounties, "${msg} (valid location payloadのjoin失敗でlocation asset refreshを要求しない)");
+        prop_assert!(!hints.arbitration, "${msg} (location join失敗がArbitration asset refreshへ伝播した)");
 
         let bounty_dynamic_payload_error: Result<Vec<timed::TimedContent>, timed::TimedSourceError> =
             Err(timed::TimedSourceError::failed("malformed bounty payload"));
         let hints = timed::static_asset_refresh_hints(
             false,
+            false,
             &bounty_dynamic_payload_error,
+            &location_ok,
             &arbitration_ok,
         );
         prop_assert!(!hints.bounties, "${msg} (Bounty dynamic payload失敗でstatic cacheをinvalidateした)");
+        prop_assert!(!hints.location_bounties, "${msg} (Bounty dynamic payload失敗がlocation cacheへ伝播した)");
         prop_assert!(!hints.arbitration, "${msg} (Bounty dynamic payload失敗がArbitration asset refreshへ伝播した)");
 
-        let bounty_ok: Result<Vec<timed::TimedContent>, timed::TimedSourceError> = Ok(vec![]);
         let arbitration_out_of_range: Result<Vec<timed::TimedContent>, timed::TimedSourceError> =
             Err(timed::TimedSourceError::out_of_range("schedule ended"));
         let hints = timed::static_asset_refresh_hints(
             false,
+            false,
             &bounty_ok,
+            &location_ok,
             &arbitration_out_of_range,
         );
         prop_assert!(!hints.bounties, "${msg} (Arbitration範囲外がBounty asset refreshへ伝播した)");
+        prop_assert!(!hints.location_bounties, "${msg} (Arbitration範囲外がlocation asset refreshへ伝播した)");
         prop_assert!(hints.arbitration, "${msg} (Arbitration範囲外でArbitration asset refreshを要求しない)");
 
         let join_retry_delays = (1..=5)
@@ -1650,13 +1692,27 @@ fn ${name}() {
     };
     bounty.source_id = timed::TimedSourceId::BrowseWfBountyCycle;
 
+    let mut area_objective = mk_timed_card("area-objective", Some(base_now() + Duration::hours(2)));
+    area_objective.kind = "area-objective".to_string();
+    area_objective.provenance = timed::TimedProvenance {
+        kind: timed::TimedSourceKind::CommunityLive,
+        contributors: vec![
+            timed::TimedSourceId::BrowseWfLocationBounties,
+            timed::TimedSourceId::BrowseWfExportBounties,
+            timed::TimedSourceId::BrowseWfDictionaryEn,
+        ],
+    };
+    area_objective.source_id = timed::TimedSourceId::BrowseWfLocationBounties;
+
     snapshot.arbitration = vec![arbitration];
     snapshot.circuit = vec![circuit];
     snapshot.bounties = vec![bounty];
+    snapshot.area_objectives = vec![area_objective];
     snapshot.sources.wfcd.freshness = timed::TimedFreshness::Fresh;
     snapshot.sources.de_descendia.freshness = timed::TimedFreshness::Stale;
     snapshot.sources.de_circuit.freshness = timed::TimedFreshness::OutOfRange;
     snapshot.sources.browse_wf_bounties.freshness = timed::TimedFreshness::Unavailable;
+    snapshot.sources.browse_wf_location_bounties.freshness = timed::TimedFreshness::Stale;
     snapshot.last_poll = Some(base_now());
 
     let value = serde_json::to_value(&snapshot).expect("TimedContentSnapshotをserializeできること");
@@ -1674,7 +1730,12 @@ fn ${name}() {
     assert_eq!(value["sources"]["deDescendia"]["freshness"], "stale", "${msg} (stale wire)");
     assert_eq!(value["sources"]["deCircuit"]["freshness"], "out-of-range", "${msg} (out-of-range wire)");
     assert_eq!(value["sources"]["browseWfBounties"]["freshness"], "unavailable", "${msg} (unavailable wire)");
+    assert_eq!(value["sources"]["browseWfLocationBounties"]["freshness"], "stale", "${msg} (location freshness wire)");
+    assert_eq!(value["areaObjectives"][0]["sourceId"], "browse-wf-location-bounties", "${msg} (location source wire)");
     assert!(value.get("areaMissions").is_some(), "${msg} (camelCase areaMissions)");
+    assert!(value.get("areaEnvironments").is_some(), "${msg} (camelCase areaEnvironments)");
+    assert!(value.get("areaObjectives").is_some(), "${msg} (camelCase areaObjectives)");
+    assert!(value.get("areaEvents").is_some(), "${msg} (camelCase areaEvents)");
     assert!(value.get("lastPoll").is_some(), "${msg} (camelCase lastPoll)");
     let encoded = serde_json::to_string(&value).unwrap();
     assert!(!encoded.contains("availability"), "${msg} (旧synthetic availabilityを残した)");
@@ -1987,6 +2048,301 @@ fn ${name}() {
         );
     }
 }`;
+      case "area_sources":
+        return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let now = base_now();
+    let activation = now - Duration::hours(1);
+    let expiry = now + Duration::hours(2);
+    let mission_expiry = now + Duration::hours(6);
+    let area_job = |id: &str, title: &str| serde_json::json!({
+        "id": id,
+        "expiry": expiry.to_rfc3339(),
+        "type": title,
+        "enemyLevels": [5, 15],
+        "standingStages": [400, 600, 1000],
+        "minMR": 0,
+        "locationTag": null,
+        "timeBound": null,
+        "rewardPool": ["Endo"],
+        "rewardPoolDrops": [{
+            "item": "Endo",
+            "rarity": "Common",
+            "chance": 25.0,
+            "count": 100
+        }],
+        "uniqueName": format!("/Lotus/Jobs/{id}"),
+        "isVault": false
+    });
+    let event_job = |title: &str| serde_json::json!({
+        "type": title,
+        "expiry": expiry.to_rfc3339(),
+        "enemyLevels": [15, 25],
+        "standingStages": [310, 310, 460],
+        "minMR": 0,
+        "rewardPool": ["Event Reward"]
+    });
+    let fixture = serde_json::json!({
+        "sortie": null,
+        "archonHunt": null,
+        "syndicateMissions": [
+            {
+                "id": "ostrons",
+                "activation": activation.to_rfc3339(),
+                "expiry": mission_expiry.to_rfc3339(),
+                "syndicate": "Ostrons",
+                "syndicateKey": "CetusSyndicate",
+                "nodes": [],
+                "jobs": [area_job("ostrons-job", "Ostron Bounty")]
+            },
+            {
+                "id": "solaris",
+                "activation": activation.to_rfc3339(),
+                "expiry": mission_expiry.to_rfc3339(),
+                "syndicate": "Solaris United",
+                "syndicateKey": "SolarisSyndicate",
+                "nodes": [],
+                "jobs": [area_job("solaris-job", "Solaris Bounty")]
+            },
+            {
+                "id": "entrati",
+                "activation": activation.to_rfc3339(),
+                "expiry": mission_expiry.to_rfc3339(),
+                "syndicate": "Entrati",
+                "syndicateKey": "EntratiSyndicate",
+                "nodes": [],
+                "jobs": [area_job("entrati-job", "Entrati Bounty")]
+            }
+        ],
+        "archimedeas": [],
+        "cetusCycle": {
+            "id": "cetus-cycle",
+            "activation": activation.to_rfc3339(),
+            "expiry": expiry.to_rfc3339(),
+            "state": "day",
+            "isDay": true,
+        },
+        "vallisCycle": {
+            "id": "vallis-cycle",
+            "activation": activation.to_rfc3339(),
+            "expiry": expiry.to_rfc3339(),
+            "state": "cold",
+            "isWarm": false,
+        },
+        "cambionCycle": {
+            "id": "cambion-cycle",
+            "activation": activation.to_rfc3339(),
+            "expiry": expiry.to_rfc3339(),
+            "state": "fass"
+        },
+        "zarimanCycle": {
+            "id": "zariman-cycle",
+            "activation": activation.to_rfc3339(),
+            "expiry": expiry.to_rfc3339(),
+            "state": "grineer",
+            "isCorpus": false,
+        },
+        "duviriCycle": {
+            "id": "duviri-cycle",
+            "activation": activation.to_rfc3339(),
+            "expiry": expiry.to_rfc3339(),
+            "state": "fear",
+            "choices": [{"category":"normal","choices":["Ash","Mag","Volt"]}],
+        },
+        "earthCycle": {
+            "id": "earth-cycle",
+            "activation": activation.to_rfc3339(),
+            "expiry": expiry.to_rfc3339(),
+            "state": "night"
+        },
+        "events": [
+            {
+                "id": "thermia",
+                "activation": activation.to_rfc3339(),
+                "expiry": expiry.to_rfc3339(),
+                "description": "Thermia Fractures",
+                "tooltip": "Seal fractures across the Orb Vallis",
+                "node": "Orb Vallis (Venus)",
+                "tag": "HeatFissure",
+                "currentScore": 19,
+                "maximumScore": 100,
+                "health": 19,
+                "jobs": []
+            },
+            {
+                "id": "ghouls",
+                "activation": activation.to_rfc3339(),
+                "expiry": expiry.to_rfc3339(),
+                "description": "Ghoul Purge",
+                "tooltip": "Defeat the Ghouls",
+                "node": null,
+                "tag": "GhoulEmergence",
+                "affiliatedWith": "Ostrons",
+                "jobs": [event_job("Eliminate A Ghoul Alpha")]
+            },
+            {
+                "id": "plague-star",
+                "activation": activation.to_rfc3339(),
+                "expiry": expiry.to_rfc3339(),
+                "description": "Operation: Plague Star",
+                "tooltip": "Defend the Plains",
+                "node": null,
+                "tag": "InfestedPlains",
+                "affiliatedWith": "Operations Syndicate",
+                "jobs": [event_job("Plague Star")]
+            },
+            {
+                "id": "unrelated",
+                "activation": "not-a-date",
+                "expiry": "also-not-a-date",
+                "description": "Unrelated Relay",
+                "tag": "TennoConRelay",
+                "jobs": []
+            },
+            {
+                "id": "expired-thermia",
+                "activation": (now - Duration::days(2)).to_rfc3339(),
+                "expiry": (now - Duration::days(1)).to_rfc3339(),
+                "description": "Old Thermia",
+                "tag": "HeatFissure",
+                "jobs": []
+            }
+        ]
+    });
+
+    let parsed = timed::parse_wfcd_json(&fixture.to_string(), now)
+        .expect("Areaを含むWFCD fixtureをparseできること");
+    let environment_variants = parsed
+        .area_environments
+        .iter()
+        .filter_map(|card| card.variant.as_deref())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        environment_variants,
+        std::collections::BTreeSet::from(["cetus", "vallis", "cambion", "zariman", "duviri"]),
+        "${msg} (5 environment variant)",
+    );
+    assert!(parsed.area_environments.iter().all(|card| {
+        card.kind == "area-environment"
+            && card.activation == Some(activation)
+            && card.expiry == Some(expiry)
+            && card.metadata.iter().any(|item| item.key == "state")
+            && card.stages.is_empty()
+    }), "${msg} (cycle正規化)");
+    assert!(parsed.area_environments.iter().all(|card| card.variant.as_deref() != Some("earth")), "${msg} (earthCycleをAreaへ複製した)");
+    assert!(parsed.area_environments.iter().all(|card| card.stages.iter().all(|stage| stage.choices.is_empty())), "${msg} (Duviri choicesをAreaへ複製した)");
+
+    let core_variants = parsed
+        .area_missions
+        .iter()
+        .filter_map(|card| card.variant.as_deref())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        core_variants,
+        std::collections::BTreeSet::from(["ostrons", "solaris-united", "entrati"]),
+        "${msg} (WFCD 3勢力variant)",
+    );
+
+    let event_variants = parsed
+        .area_events
+        .iter()
+        .filter_map(|card| card.variant.as_deref())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        event_variants,
+        std::collections::BTreeSet::from(["heat-fissure", "ghoul-emergence", "infested-plains"]),
+        "${msg} (allowlisted active event)",
+    );
+    assert!(parsed.area_events.iter().all(|card| {
+        card.kind == "area-event"
+            && card.expiry == Some(expiry)
+            && !card.metadata.iter().any(|item| ["currentScore", "maximumScore", "health"].contains(&item.key.as_str()))
+    }), "${msg} (event正規化または個人進捗表示)");
+
+    for (field, state) in [
+        ("cetusCycle", "eclipse"),
+        ("vallisCycle", "storm"),
+        ("cambionCycle", "night"),
+        ("zarimanCycle", "murmur"),
+        ("duviriCycle", "calm"),
+    ] {
+        let mut invalid = fixture.clone();
+        invalid[field]["state"] = serde_json::json!(state);
+        assert!(timed::parse_wfcd_json(&invalid.to_string(), now).is_err(), "${msg} ({field} unknown state)");
+    }
+    let mut inconsistent_day = fixture.clone();
+    inconsistent_day["cetusCycle"]["isDay"] = serde_json::json!(false);
+    assert!(timed::parse_wfcd_json(&inconsistent_day.to_string(), now).is_err(), "${msg} (Cetus state/isDay不一致)");
+    let mut missing_cycle = fixture.clone();
+    missing_cycle.as_object_mut().unwrap().remove("duviriCycle");
+    assert!(timed::parse_wfcd_json(&missing_cycle.to_string(), now).is_err(), "${msg} (cycle root欠落)");
+
+    let known_path = "/Lotus/Types/Gameplay/Eidolon/Jobs/AttritionBountyCap";
+    let other_path = "/Lotus/Types/Gameplay/Venus/Jobs/VenusArtifactJobAmbush";
+    let unknown_path = "/Lotus/Types/Gameplay/InfestedMicroplanet/Jobs/UnknownObjective";
+    let export = serde_json::json!({
+        (known_path): {
+            "name": "/Lotus/Language/OstronJobs/AttritionBountyCapTitle",
+            "description": "/Lotus/Language/OstronJobs/AttritionBountyCapDesc",
+            "icon": "/Lotus/Interface/Icons/Test.png",
+            "stages": []
+        },
+        (other_path): {
+            "name": "/Lotus/Language/SolarisJobs/ArtifactTitle",
+            "description": "/Lotus/Language/SolarisJobs/ArtifactDesc",
+            "icon": "/Lotus/Interface/Icons/Test.png",
+            "stages": []
+        }
+    });
+    let dictionary = serde_json::json!({
+        "/Lotus/Language/OstronJobs/AttritionBountyCapTitle": "CAPTURE THEIR LEADER",
+        "/Lotus/Language/OstronJobs/AttritionBountyCapDesc": "Draw out the target.",
+        "/Lotus/Language/SolarisJobs/ArtifactTitle": "RECOVER THE ARTIFACT",
+        "/Lotus/Language/SolarisJobs/ArtifactDesc": "Find the artifact."
+    });
+    let assets = timed::parse_location_bounty_assets(&export.to_string(), &dictionary.to_string())
+        .expect("location-bounties static assetsをparseできること");
+    let locations = serde_json::json!({
+        "expiry": expiry.timestamp_millis(),
+        "CetusSyndicate": {"TentA": [known_path]},
+        "SolarisSyndicate": {"BountyNefsHead": [other_path]},
+        "EntratiSyndicate": {"ChamberA": [unknown_path]}
+    });
+    let cards = timed::parse_location_bounty_cards(&locations.to_string(), now, &assets)
+        .expect("location-bounties fixtureを3 cardへ変換できること");
+    assert_eq!(
+        cards.iter().map(|card| card.variant.as_deref()).collect::<Vec<_>>(),
+        vec![Some("ostrons"), Some("solaris-united"), Some("entrati")],
+        "${msg} (location 3勢力variant)",
+    );
+    assert!(cards.iter().all(|card| {
+        card.kind == "area-objective"
+            && card.expiry == Some(expiry)
+            && card.source_id == timed::TimedSourceId::BrowseWfLocationBounties
+            && !card.stages.is_empty()
+    }), "${msg} (location card正規化)");
+    assert_eq!(cards[0].stages[0].title, "TentA", "${msg} (location tagを推測改名した)");
+    assert_eq!(cards[0].stages[0].choices, vec!["Capture Their Leader"], "${msg} (ExportBounties/dict join)");
+    assert_eq!(cards[2].stages[0].choices, vec!["UnknownObjective"], "${msg} (未知identifier raw leaf fallback)");
+
+    let mut missing_syndicate = locations.clone();
+    missing_syndicate.as_object_mut().unwrap().remove("SolarisSyndicate");
+    assert!(timed::parse_location_bounty_cards(&missing_syndicate.to_string(), now, &assets).is_err(), "${msg} (location必須勢力欠落)");
+    let mut empty_location = locations.clone();
+    empty_location["CetusSyndicate"]["TentA"] = serde_json::json!([]);
+    assert!(timed::parse_location_bounty_cards(&empty_location.to_string(), now, &assets).is_err(), "${msg} (location空配列)");
+    let mut duplicate_path = locations.clone();
+    duplicate_path["CetusSyndicate"]["TentA"] = serde_json::json!([known_path, known_path]);
+    assert!(timed::parse_location_bounty_cards(&duplicate_path.to_string(), now, &assets).is_err(), "${msg} (location path重複)");
+    let mut bad_path = locations.clone();
+    bad_path["CetusSyndicate"]["TentA"] = serde_json::json!(["not-a-resource-path"]);
+    assert!(timed::parse_location_bounty_cards(&bad_path.to_string(), now, &assets).is_err(), "${msg} (location不正path)");
+    let mut expired = locations.clone();
+    expired["expiry"] = serde_json::json!(now.timestamp_millis());
+    assert!(timed::parse_location_bounty_cards(&expired.to_string(), now, &assets).is_err(), "${msg} (location期限切れ)");
+}`;
       case "rich_details":
         return `
 /// ${c.id}: ${c.desc}
@@ -1999,6 +2355,12 @@ fn ${name}() {
     let first_job_expiry = now + Duration::hours(2);
     let second_job_expiry = now + Duration::hours(4);
     let expired_job_expiry = now - Duration::minutes(30);
+    let area_cycle = |id: &str, state: &str| serde_json::json!({
+        "id": id,
+        "activation": mission_activation.to_rfc3339(),
+        "expiry": mission_expiry.clone(),
+        "state": state
+    });
     let area_job = |id: &str, title: &str, expiry: DateTime<Utc>, count: u32| {
         serde_json::json!({
             "id": id,
@@ -2073,7 +2435,13 @@ fn ${name}() {
                     }
                 ]
             }]
-        }]
+        }],
+        "cetusCycle": area_cycle("cetus", "day"),
+        "vallisCycle": area_cycle("vallis", "cold"),
+        "cambionCycle": area_cycle("cambion", "fass"),
+        "zarimanCycle": area_cycle("zariman", "corpus"),
+        "duviriCycle": area_cycle("duviri", "fear"),
+        "events": []
     });
     let wfcd = timed::parse_wfcd_json(&wfcd_fixture.to_string(), now)
         .expect("WFCD rich fixtureをparseできること");
@@ -2147,7 +2515,13 @@ fn ${name}() {
             }]
         },
         "syndicateMissions": [],
-        "archimedeas": []
+        "archimedeas": [],
+        "cetusCycle": area_cycle("cetus", "day"),
+        "vallisCycle": area_cycle("vallis", "cold"),
+        "cambionCycle": area_cycle("cambion", "fass"),
+        "zarimanCycle": area_cycle("zariman", "corpus"),
+        "duviriCycle": area_cycle("duviri", "fear"),
+        "events": []
     });
     let branch_specific = timed::parse_wfcd_json(&branch_specific_fixture.to_string(), now)
         .expect("Sortie/Archonの未使用field欠落を許容すること");
@@ -2778,6 +3152,145 @@ test("${c.id} ${name}", () => {
   }
 }
 
+// ---- bun test(開発tooling)の生成 ----
+function genToolingClause(c: Clause): string {
+  const name = fnName(c.id);
+  switch (c.scenario) {
+    case "e2e_targeted_cleanup":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} ${name}", async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "relico-e2e-cleanup-"));
+  const leasePath = join(tempRoot, "owned.lease");
+  const otherLeasePath = join(tempRoot, "other.lease");
+  writeFileSync(leasePath, "owned");
+  writeFileSync(otherLeasePath, "other");
+
+  let foreign: ChildProcess | undefined;
+  let survivor: ChildProcess | undefined;
+  let owned: ChildProcess | undefined;
+  let idle: ChildProcess | undefined;
+  let stubborn: ChildProcess | undefined;
+  let changed: ChildProcess | undefined;
+  try {
+    const foreignFixture = await spawnFixture({ listen: true });
+    foreign = foreignFixture.child;
+    const survivorFixture = await spawnFixture({ listen: true, leasePath: otherLeasePath });
+    survivor = survivorFixture.child;
+    expect(processExists(foreign.pid!)).toBe(true);
+    expect(processExists(survivor.pid!)).toBe(true);
+
+    // leaseを持たない同port listenerはfail-closedで拒否し、終了しない。
+    await expect(
+      cleanupOwnedListener({
+        port: foreignFixture.port!,
+        expectedExecutable: process.execPath,
+        leasePath,
+        graceMs: 200,
+      }),
+    ).rejects.toThrow(/refusing to terminate foreign listener/);
+    expect(processExists(foreign.pid!)).toBe(true);
+
+    await stopFixture(foreign);
+    const ownedFixture = await spawnFixture({ listen: true, leasePath });
+    owned = ownedFixture.child;
+    const graceful = await cleanupOwnedListener({
+      port: ownedFixture.port!,
+      expectedExecutable: process.execPath,
+      leasePath,
+      graceMs: 1_000,
+    });
+    expect(graceful.terminatedPids).toEqual([owned.pid]);
+    expect(graceful.forcedPids).toEqual([]);
+    expect(processExists(owned.pid!)).toBe(false);
+    // 同じ実行ファイルでも別port・別leaseなら対象にしない。
+    expect(processExists(survivor.pid!)).toBe(true);
+
+    // holder/listenerなしは冪等なno-op。
+    const noOp = await cleanupOwnedListener({
+      port: ownedFixture.port!,
+      expectedExecutable: process.execPath,
+      leasePath,
+      graceMs: 200,
+    });
+    expect(noOp).toEqual({ terminatedPids: [], forcedPids: [] });
+
+    // portをまだLISTENしていなくても、lease holderを回収する。
+    const idleFixture = await spawnFixture({ leasePath });
+    idle = idleFixture.child;
+    const preBind = await cleanupOwnedListener({
+      port: ownedFixture.port!,
+      expectedExecutable: process.execPath,
+      leasePath,
+      graceMs: 1_000,
+    });
+    expect(preBind.terminatedPids).toEqual([idle.pid]);
+    expect(preBind.forcedPids).toEqual([]);
+    expect(processExists(idle.pid!)).toBe(false);
+
+    // TERMを無視する対象だけ、identity再照合後のKILLへ進む。
+    const stubbornFixture = await spawnFixture({ ignoreTerm: true, leasePath });
+    stubborn = stubbornFixture.child;
+    const forced = await cleanupOwnedListener({
+      port: ownedFixture.port!,
+      expectedExecutable: process.execPath,
+      leasePath,
+      graceMs: 100,
+    });
+    expect(forced.terminatedPids).toEqual([stubborn.pid]);
+    expect(forced.forcedPids).toEqual([stubborn.pid]);
+    expect(processExists(stubborn.pid!)).toBe(false);
+
+    // TERM後にlease inodeが変わったPIDへはKILLを送らず、cleanup自体を失敗させる。
+    const changedFixture = await spawnFixture({ ignoreTerm: true, leasePath });
+    changed = changedFixture.child;
+    const termSeen = once(changed.stdout!, "data");
+    const changedCleanup = cleanupOwnedListener({
+      port: ownedFixture.port!,
+      expectedExecutable: process.execPath,
+      leasePath,
+      graceMs: 500,
+    });
+    await termSeen;
+    renameSync(leasePath, leasePath + ".previous");
+    writeFileSync(leasePath, "replacement");
+    await expect(changedCleanup).rejects.toThrow(/ownership identity changed/);
+    expect(processExists(changed.pid!)).toBe(true);
+    expect(leaseHolderPids(leasePath)).not.toContain(changed.pid!);
+  } finally {
+    await Promise.all([
+      stopFixture(foreign),
+      stopFixture(survivor),
+      stopFixture(owned),
+      stopFixture(idle),
+      stopFixture(stubborn),
+      stopFixture(changed),
+    ]);
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+
+  const justfile = readFileSync(new URL("../../justfile", import.meta.url), "utf8");
+  const wdioConfig = readFileSync(new URL("../../wdio.conf.ts", import.meta.url), "utf8");
+  const mainRs = readFileSync(new URL("../../src-tauri/src/main.rs", import.meta.url), "utf8");
+  expect(justfile).toContain("tools/e2e-process.ts cleanup");
+  expect(justfile).toContain("trap cleanup EXIT");
+  expect(justfile).toContain("src-tauri/target.noindex");
+  expect(justfile).toContain("e2e_port=4445");
+  expect(justfile).toContain('TAURI_WEBDRIVER_PORT="$e2e_port"');
+  expect(justfile).toContain('RELICO_E2E_LEASE_PATH="$e2e_lease"');
+  expect(justfile).toContain("cap_status");
+  expect(justfile).toContain("lease_status");
+  expect(wdioConfig).toContain("embeddedPort: e2ePort");
+  expect(wdioConfig).not.toContain("4445");
+  expect(mainRs).toContain("RELICO_E2E_LEASE_PATH");
+  expect(mainRs).toContain("std::fs::File::open");
+  expect(justfile).not.toMatch(/\\b(?:pkill|killall)\\b/);
+});`;
+    default:
+      throw new Error(`未知のtoolingシナリオ: ${c.scenario} (${c.id})`);
+  }
+}
+
 // ---- Playwright renderer統合テスト(IPC mock)の生成 ----
 function genRendererClause(c: Clause): string {
   switch (c.scenario) {
@@ -3357,12 +3870,20 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
   ).toBeVisible();
 
   await page.keyboard.press("Meta+6");
-  await expect(
-    page.locator('#panel-area-missions .timed-card-group[data-group="worldstate"]'),
-  ).toBeVisible();
-  await expect(
-    page.locator('#panel-area-missions .timed-card-group[data-group="bounties"]'),
-  ).toBeVisible();
+  const areaGroups = page.locator("#panel-area-missions .timed-card-group");
+  await expect(areaGroups).toHaveCount(5);
+  expect(
+    await areaGroups.evaluateAll((groups) => groups.map((group) => group.getAttribute("data-group"))),
+  ).toEqual(["environments", "worldstate", "location-objectives", "bounties", "events"]);
+  await expect(page.locator('#panel-area-missions .timed-card-group[data-group="environments"] .timed-card')).toHaveCount(5);
+  await expect(page.locator('#panel-area-missions .timed-card-group[data-group="location-objectives"] .timed-card')).toHaveCount(3);
+  await expect(page.locator('#panel-area-missions .timed-card-group[data-group="events"] .timed-card')).toHaveCount(1);
+  const areaFactionVariants = await page
+    .locator('#panel-area-missions .timed-card-group[data-group="worldstate"] .timed-card, #panel-area-missions .timed-card-group[data-group="bounties"] .timed-card')
+    .evaluateAll((cards) => cards.map((card) => card.getAttribute("data-variant")));
+  for (const variant of ["ostrons", "solaris-united", "entrati", "holdfasts", "cavia", "hex"]) {
+    expect(areaFactionVariants).toContain(variant);
+  }
   await expect(
     page.locator(
       '#panel-area-missions .timed-source-error[data-source="wfcd"][data-freshness="stale"]',
@@ -3373,6 +3894,11 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
       '#panel-area-missions .timed-source-error[data-source="browseWfBounties"][data-freshness="unavailable"]',
     ),
   ).toContainText("oracle down");
+  await expect(
+    page.locator(
+      '#panel-area-missions .timed-source-error[data-source="browseWfLocationBounties"][data-freshness="unavailable"]',
+    ),
+  ).toContainText("location oracle down");
 
   await page.keyboard.press("Meta+7");
   const circuit = page.locator('#panel-circuit .timed-card[data-provenance="official-live"]');
@@ -3455,10 +3981,13 @@ const localeGoldens = {
       ["#pause-btn", "common.pause", "一時停止"],
       ['#mute-check [data-i18n-key="delivery.muteSchedule"]', "delivery.muteSchedule", "通知ミュート"],
     ],
+    appTitle: "RELICO — 時限コンテンツ",
     tabsLabel: "時限コンテンツ",
     languageLabel: "表示言語",
     rulePlaceholder: "ルール名 (R1)",
     arbitrationProvenance: "コミュニティ予測",
+    areaGroups: ["環境サイクル", "通常依頼", "ローカル依頼候補", "追加依頼", "エリアイベント"],
+    environmentState: "状態 昼",
     circuitStages: ["通常サーキット", "鋼の道のりサーキット"],
     circuitProgress: "公開ワールドステートから今週の候補は取得できますが、個人のサーキット進行度は取得できません。ゲーム内で確認してください。",
   },
@@ -3479,10 +4008,13 @@ const localeGoldens = {
       ["#pause-btn", "common.pause", "Pause"],
       ['#mute-check [data-i18n-key="delivery.muteSchedule"]', "delivery.muteSchedule", "Notification mute"],
     ],
+    appTitle: "RELICO — TIMED CONTENT",
     tabsLabel: "Timed content",
     languageLabel: "Display language",
     rulePlaceholder: "Rule name (R1)",
     arbitrationProvenance: "Community prediction",
+    areaGroups: ["Environments", "Open-world bounties", "Objective rotations", "Additional bounties", "Area events"],
+    environmentState: "State Day",
     circuitStages: ["Normal Circuit", "Steel Path Circuit"],
     circuitProgress: "The public world-state provides this week's choices, but not your personal Circuit progress. Check it in game.",
   },
@@ -3503,10 +4035,13 @@ const localeGoldens = {
       ["#pause-btn", "common.pause", "暂停"],
       ['#mute-check [data-i18n-key="delivery.muteSchedule"]', "delivery.muteSchedule", "通知静音"],
     ],
+    appTitle: "RELICO — 限时内容",
     tabsLabel: "限时内容",
     languageLabel: "显示语言",
     rulePlaceholder: "规则名称 (R1)",
     arbitrationProvenance: "社区预测",
+    areaGroups: ["环境周期", "开放世界赏金", "目标轮换", "额外赏金", "地区活动"],
+    environmentState: "状态 白昼",
     circuitStages: ["普通无尽回廊", "钢铁之路无尽回廊"],
     circuitProgress: "公共世界状态可提供本周候选，但无法提供你的个人无尽回廊进度，请在游戏内确认。",
   },
@@ -3518,6 +4053,7 @@ for (const [locale, golden] of Object.entries(localeGoldens)) {
     await bootConsole(page, { locale: locale as "ja" | "en" | "zh-Hans" });
     await expect(page.locator("html")).toHaveAttribute("lang", locale);
     await expect(page.locator("#locale-select")).toHaveValue(locale);
+    await expect(page).toHaveTitle(golden.appTitle);
 
     for (const [selector, key, expectedText] of golden.text) {
       const node = page.locator(selector);
@@ -3539,6 +4075,15 @@ for (const [locale, golden] of Object.entries(localeGoldens)) {
     await expect(
       page.locator('#panel-arbitration .timed-card[data-provenance="community-schedule"] .timed-provenance-badge'),
     ).toHaveText(golden.arbitrationProvenance);
+    await page.locator("#tab-area-missions").click();
+    const areaHeadings = page.locator("#panel-area-missions .timed-group-heading");
+    await expect(areaHeadings).toHaveCount(5);
+    for (const [index, expected] of golden.areaGroups.entries()) {
+      await expect(areaHeadings.nth(index)).toHaveText(expected);
+    }
+    await expect(
+      page.locator('#panel-area-missions .timed-card-group[data-group="environments"] .timed-card').first().locator(".timed-meta"),
+    ).toContainText(golden.environmentState);
     const circuitStages = page.locator("#panel-circuit .timed-stage-title");
     await expect(circuitStages).toHaveCount(2);
     await expect(circuitStages.nth(0)).toHaveText(golden.circuitStages[0]);
@@ -3623,22 +4168,37 @@ describe("${c.id}", () => {
 // ${c.id}: ${c.desc}
 describe("${c.id}", () => {
   it("locale round-trips through real config IPC", async () => {
+    const expectSynchronizedTitle = async (expected: string) => {
+      const documentTitle = await browser.execute(() => document.title);
+      const states = (await browser.tauri.execute(({ core }) =>
+        core.invoke("plugin:wdio|get_window_states"),
+      )) as Array<{ label: string; title: string }>;
+      expect(documentTitle).toBe(expected);
+      expect(states.find((state) => state.label === "main")?.title).toBe(expected);
+    };
+    const selectLocale = async (locale: "en" | "zh-Hans") => {
+      await $("#locale-select").selectByAttribute("value", locale);
+      // tauri-plugin-wdioのWebKit select helperは値だけを変えてchangeを発火しないため、
+      // rendererで検証済みのDOM結線を明示発火し、その先の実set_config往復をここで検査する。
+      await browser.execute((nextLocale) => {
+        const select = document.querySelector("#locale-select") as HTMLSelectElement | null;
+        if (!select) throw new Error("locale-select not found");
+        select.value = nextLocale;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      }, locale);
+      await browser.waitUntil(
+        async () => (await browser.execute(() => document.documentElement.lang)) === locale,
+        { timeoutMsg: "locale変更が実set_config完了後に反映されない" },
+      );
+    };
+
     await waitForInit();
+    await expectSynchronizedTitle("RELICO — 時限コンテンツ");
     await $("#delivery-tab").click();
-    await $("#locale-select").selectByAttribute("value", "zh-Hans");
-    // tauri-plugin-wdioのWebKit select helperは値だけを変えてchangeを発火しないため、
-    // rendererで検証済みのDOM結線を明示発火し、その先の実set_config往復をここで検査する。
-    await browser.execute(() => {
-      const select = document.querySelector("#locale-select") as HTMLSelectElement | null;
-      if (!select) throw new Error("locale-select not found");
-      select.value = "zh-Hans";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    // html langの切替はset_config成功後に行う契約なので、ここまで待てば永続化も完了している。
-    await browser.waitUntil(
-      async () => (await $("html").getAttribute("lang")) === "zh-Hans",
-      { timeoutMsg: "locale変更が実set_config完了後に反映されない" },
-    );
+    await selectLocale("en");
+    await expectSynchronizedTitle("RELICO — TIMED CONTENT");
+    await selectLocale("zh-Hans");
+    await expectSynchronizedTitle("RELICO — 限时内容");
     await expect($("#tab-fissures")).toHaveText("裂隙");
 
     await browser.refresh();
@@ -3646,6 +4206,7 @@ describe("${c.id}", () => {
     await expect($("html")).toHaveAttribute("lang", "zh-Hans");
     await expect($("#locale-select")).toHaveValue("zh-Hans");
     await expect($("#tab-fissures")).toHaveText("裂隙");
+    await expectSynchronizedTitle("RELICO — 限时内容");
   });
 });`;
     default:
@@ -3663,7 +4224,12 @@ const RUST_EXAMPLE_PATTERNS = new Set([
   "static_check",
   "approved_asset",
 ]);
-const TS_EXAMPLE_PATTERNS = new Set(["renderer_glyphs", "renderer_scenario", "e2e_scenario"]);
+const TS_EXAMPLE_PATTERNS = new Set([
+  "renderer_glyphs",
+  "tooling_scenario",
+  "renderer_scenario",
+  "e2e_scenario",
+]);
 for (const c of spec.clauses) {
   if (
     c.label === "example-tested" &&
@@ -3686,6 +4252,10 @@ const exampleTests = spec.clauses
 const glyphTests = spec.clauses
   .filter((c) => c.pattern === "renderer_glyphs")
   .map(genGlyphClause)
+  .join("\n");
+const toolingTests = spec.clauses
+  .filter((c) => c.pattern === "tooling_scenario")
+  .map(genToolingClause)
   .join("\n");
 const rendererTests = spec.clauses
   .filter((c) => c.pattern === "renderer_scenario")
@@ -3863,8 +4433,64 @@ const unitOracle = `// @generated by tools/spec-gen.ts from specs/notifier.pkl �
 // 実行: bun test tests/unit
 
 import { expect, test } from "bun:test";
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { candidateGlyphHtml, glyphHtml, planetForFissure, type GlyphKind } from "../../src/icons";
+import { cleanupOwnedListener, leaseHolderPids, processExists } from "../../tools/e2e-process";
+
+const E2E_PROCESS_FIXTURE = ${JSON.stringify(`
+const fs = require("node:fs");
+const net = require("node:net");
+if (process.env.RELICO_TEST_IGNORE_TERM === "1") {
+  process.on("SIGTERM", () => process.stdout.write("term\\n"));
+}
+if (process.env.RELICO_TEST_LEASE) {
+  globalThis.__relicoLeaseFd = fs.openSync(process.env.RELICO_TEST_LEASE, "r");
+}
+if (process.env.RELICO_TEST_LISTEN === "1") {
+  const server = net.createServer();
+  server.listen(0, "127.0.0.1", () => {
+    process.stdout.write(String(server.address().port) + "\\n");
+  });
+} else {
+  process.stdout.write("ready\\n");
+}
+setInterval(() => {}, 1000);
+`)};
+
+async function spawnFixture(options: {
+  listen?: boolean;
+  ignoreTerm?: boolean;
+  leasePath?: string;
+}): Promise<{ child: ChildProcess; port: number | null }> {
+  const child = spawn(process.execPath, ["-e", E2E_PROCESS_FIXTURE], {
+    env: {
+      ...process.env,
+      RELICO_TEST_IGNORE_TERM: options.ignoreTerm ? "1" : "0",
+      RELICO_TEST_LISTEN: options.listen ? "1" : "0",
+      RELICO_TEST_LEASE: options.leasePath ?? "",
+    },
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const [chunk] = (await once(child.stdout!, "data")) as [Buffer];
+  const ready = chunk.toString().trim();
+  return { child, port: options.listen ? Number(ready) : null };
+}
+
+async function stopFixture(child?: ChildProcess): Promise<void> {
+  if (!child) return;
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
+  child.kill("SIGKILL");
+  await Promise.race([
+    once(child, "exit"),
+    new Promise((resolve) => setTimeout(resolve, 1_000)),
+  ]);
+}
 ${glyphTests}
+${toolingTests}
 `;
 
 const rendererOracle = `// @generated by tools/spec-gen.ts from specs/notifier.pkl — DO NOT EDIT
@@ -3886,7 +4512,12 @@ const e2eOracle = `// @generated by tools/spec-gen.ts from specs/notifier.pkl �
 import { $, browser, expect } from "@wdio/globals";
 
 async function waitForInit(): Promise<void> {
-  await browser.waitUntil(async () => (await $("#sb-watch").getText()).length > 0, {
+  // title同期前に$()/findElementを呼ぶとtauri-serviceのauto-focusが旧titleを探索するため、
+  // 初期ready判定はfocus hook対象外のexecuteだけで行う。
+  await browser.waitUntil(async () => await browser.execute(() => {
+    const watch = document.querySelector("#sb-watch");
+    return document.readyState === "complete" && Boolean(watch?.textContent?.trim());
+  }), {
     timeout: 20000,
     timeoutMsg: "コンソールが初期化されない",
   });
@@ -3937,7 +4568,7 @@ ${rows}
   .join(" / ")}
 
 オラクルの実行先: \`rule_*\` 等のRustパターンは \`cargo test\`(src-tauri/tests/oracles_generated.rs)、
-\`renderer_glyphs\` は \`bun test tests/unit\`、\`renderer_scenario\` は \`just renderer-test\`
+\`renderer_glyphs\` / \`tooling_scenario\` は \`bun test tests/unit\`、\`renderer_scenario\` は \`just renderer-test\`
 (Playwright/WebKit、Tauri IPCはmock — Rust commandやOS通知を通った証明にはしない。docs/E2E.md参照)、
 \`e2e_scenario\` は \`just e2e\`(WDIO Tauri E2E。実IPC・実WKWebViewを通し、専用identity
 com.annenpolka.relico.e2e で実行する)。

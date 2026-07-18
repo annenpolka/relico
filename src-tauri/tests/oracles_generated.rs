@@ -787,7 +787,7 @@ proptest! {
         }
     }
 
-    /// SRC-001: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する
+    /// SRC-001: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する
     #[test]
     fn src_001(future_secs in 1i64..86_400, expired_secs in -86_400i64..1) {
         let now = base_now();
@@ -803,9 +803,9 @@ proptest! {
             now,
             Err(timed::TimedSourceError::failed("oracle down")),
         );
-        prop_assert_eq!(failed_cards, vec![future.clone()], "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (失敗時のLKG期限処理)");
-        prop_assert_eq!(failed_status.freshness, timed::TimedFreshness::Stale, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (生存LKGをstaleにしない)");
-        prop_assert_eq!(failed_status.error.as_deref(), Some("oracle down"), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (source errorを保持しない)");
+        prop_assert_eq!(failed_cards, vec![future.clone()], "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (失敗時のLKG期限処理)");
+        prop_assert_eq!(failed_status.freshness, timed::TimedFreshness::Stale, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (生存LKGをstaleにしない)");
+        prop_assert_eq!(failed_status.error.as_deref(), Some("oracle down"), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (source errorを保持しない)");
 
         let mut unavailable_cards = vec![expired.clone(), missing_expiry];
         let mut unavailable_status = mk_timed_status(timed::TimedSourceId::BrowseWfBountyCycle);
@@ -815,8 +815,8 @@ proptest! {
             now,
             Err(timed::TimedSourceError::failed("still down")),
         );
-        prop_assert!(unavailable_cards.is_empty(), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (期限切れLKGを保持した)");
-        prop_assert_eq!(unavailable_status.freshness, timed::TimedFreshness::Unavailable, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (LKGなしをunavailableにしない)");
+        prop_assert!(unavailable_cards.is_empty(), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (期限切れLKGを保持した)");
+        prop_assert_eq!(unavailable_status.freshness, timed::TimedFreshness::Unavailable, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (LKGなしをunavailableにしない)");
 
         let mut replaced_cards = vec![future.clone()];
         let mut replaced_status = mk_timed_status(timed::TimedSourceId::BrowseWfBountyCycle);
@@ -830,10 +830,10 @@ proptest! {
         prop_assert_eq!(
             replaced_cards.as_slice(),
             std::slice::from_ref(&replacement),
-            "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (成功sliceを原子的に置換・期限処理しない)",
+            "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (成功sliceを原子的に置換・期限処理しない)",
         );
-        prop_assert_eq!(replaced_status.freshness, timed::TimedFreshness::Fresh, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (成功sourceをfreshにしない)");
-        prop_assert!(replaced_status.error.is_none(), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (成功後もerrorを残した)");
+        prop_assert_eq!(replaced_status.freshness, timed::TimedFreshness::Fresh, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (成功sourceをfreshにしない)");
+        prop_assert!(replaced_status.error.is_none(), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (成功後もerrorを残した)");
 
         timed::apply_timed_source_result(
             &mut replaced_cards,
@@ -841,8 +841,8 @@ proptest! {
             now,
             Err(timed::TimedSourceError::out_of_range("schedule ended")),
         );
-        prop_assert!(replaced_cards.is_empty(), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (範囲外でcardを残した)");
-        prop_assert_eq!(replaced_status.freshness, timed::TimedFreshness::OutOfRange, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (範囲外health)");
+        prop_assert!(replaced_cards.is_empty(), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (範囲外でcardを残した)");
+        prop_assert_eq!(replaced_status.freshness, timed::TimedFreshness::OutOfRange, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (範囲外health)");
 
         // 実snapshot結線は、全source成功と各sourceだけが失敗するmatrixで検査する。
         // これによりsuccess/failureのどちらの分岐でもslice・healthのcross-wireを捕捉する。
@@ -852,6 +852,7 @@ proptest! {
             Some("descendia"),
             Some("circuit"),
             Some("bounties"),
+            Some("location"),
             Some("arbitration"),
         ] {
             let lkg_expiry = now + Duration::hours(1);
@@ -861,16 +862,21 @@ proptest! {
             snapshot.archon = vec![mk_timed_card("wfcd-archon-lkg", Some(lkg_expiry))];
             snapshot.syndicates = vec![mk_timed_card("wfcd-syndicates-lkg", Some(lkg_expiry))];
             snapshot.area_missions = vec![mk_timed_card("wfcd-area-lkg", Some(lkg_expiry))];
+            snapshot.area_environments = vec![mk_timed_card("wfcd-environment-lkg", Some(lkg_expiry))];
+            snapshot.area_events = vec![mk_timed_card("wfcd-event-lkg", Some(lkg_expiry))];
             snapshot.archimedea = vec![mk_timed_card("wfcd-archimedea-lkg", Some(lkg_expiry))];
             snapshot.descendia = vec![mk_timed_card("descendia-lkg", Some(lkg_expiry))];
             snapshot.circuit = vec![mk_timed_card("circuit-lkg", Some(lkg_expiry))];
             snapshot.bounties = vec![mk_timed_card("bounties-lkg", Some(lkg_expiry))];
+            snapshot.area_objectives = vec![mk_timed_card("location-lkg", Some(lkg_expiry))];
             snapshot.arbitration = vec![mk_timed_card("arbitration-lkg", Some(lkg_expiry))];
             snapshot.sources.wfcd = mk_timed_status(timed::TimedSourceId::WfcdWorldstate);
             snapshot.sources.de_descendia = mk_timed_status(timed::TimedSourceId::DeWorldstate);
             snapshot.sources.de_circuit = mk_timed_status(timed::TimedSourceId::DeWorldstate);
             snapshot.sources.browse_wf_bounties =
                 mk_timed_status(timed::TimedSourceId::BrowseWfBountyCycle);
+            snapshot.sources.browse_wf_location_bounties =
+                mk_timed_status(timed::TimedSourceId::BrowseWfLocationBounties);
             snapshot.sources.browse_wf_arbitration =
                 mk_timed_status(timed::TimedSourceId::BrowseWfArbitrationSchedule);
 
@@ -885,6 +891,8 @@ proptest! {
                             archon: vec![mk_timed_card("wfcd-archon-replacement", Some(replacement_expiry))],
                             syndicates: vec![mk_timed_card("wfcd-syndicates-replacement", Some(replacement_expiry))],
                             area_missions: vec![mk_timed_card("wfcd-area-replacement", Some(replacement_expiry))],
+                            area_environments: vec![mk_timed_card("wfcd-environment-replacement", Some(replacement_expiry))],
+                            area_events: vec![mk_timed_card("wfcd-event-replacement", Some(replacement_expiry))],
                             archimedea: vec![mk_timed_card("wfcd-archimedea-replacement", Some(replacement_expiry))],
                         })
                     },
@@ -903,6 +911,11 @@ proptest! {
                     } else {
                         Ok(vec![mk_timed_card("bounties-replacement", Some(replacement_expiry))])
                     },
+                    area_objectives: if failed_source == Some("location") {
+                        Err(timed::TimedSourceError::failed("location down"))
+                    } else {
+                        Ok(vec![mk_timed_card("location-replacement", Some(replacement_expiry))])
+                    },
                     arbitration: if failed_source == Some("arbitration") {
                         Err(timed::TimedSourceError::failed("arbitration down"))
                     } else {
@@ -916,15 +929,18 @@ proptest! {
                 ("wfcd", &snapshot.archon, "wfcd-archon-lkg", "wfcd-archon-replacement"),
                 ("wfcd", &snapshot.syndicates, "wfcd-syndicates-lkg", "wfcd-syndicates-replacement"),
                 ("wfcd", &snapshot.area_missions, "wfcd-area-lkg", "wfcd-area-replacement"),
+                ("wfcd", &snapshot.area_environments, "wfcd-environment-lkg", "wfcd-environment-replacement"),
+                ("wfcd", &snapshot.area_events, "wfcd-event-lkg", "wfcd-event-replacement"),
                 ("wfcd", &snapshot.archimedea, "wfcd-archimedea-lkg", "wfcd-archimedea-replacement"),
                 ("descendia", &snapshot.descendia, "descendia-lkg", "descendia-replacement"),
                 ("circuit", &snapshot.circuit, "circuit-lkg", "circuit-replacement"),
                 ("bounties", &snapshot.bounties, "bounties-lkg", "bounties-replacement"),
+                ("location", &snapshot.area_objectives, "location-lkg", "location-replacement"),
                 ("arbitration", &snapshot.arbitration, "arbitration-lkg", "arbitration-replacement"),
             ] {
-                prop_assert_eq!(cards.len(), 1, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} slice件数; failed={:?})", source, failed_source);
+                prop_assert_eq!(cards.len(), 1, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} slice件数; failed={:?})", source, failed_source);
                 let expected_id = if failed_source == Some(source) { lkg_id } else { replacement_id };
-                prop_assert_eq!(cards[0].id.as_str(), expected_id, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} slice誤配線; failed={:?})", source, failed_source);
+                prop_assert_eq!(cards[0].id.as_str(), expected_id, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} slice誤配線; failed={:?})", source, failed_source);
             }
 
             for (source, status, expected_source) in [
@@ -932,70 +948,94 @@ proptest! {
                 ("descendia", &snapshot.sources.de_descendia, timed::TimedSourceId::DeWorldstate),
                 ("circuit", &snapshot.sources.de_circuit, timed::TimedSourceId::DeWorldstate),
                 ("bounties", &snapshot.sources.browse_wf_bounties, timed::TimedSourceId::BrowseWfBountyCycle),
+                ("location", &snapshot.sources.browse_wf_location_bounties, timed::TimedSourceId::BrowseWfLocationBounties),
                 ("arbitration", &snapshot.sources.browse_wf_arbitration, timed::TimedSourceId::BrowseWfArbitrationSchedule),
             ] {
                 let failed_here = failed_source == Some(source);
                 let expected_error = failed_here.then(|| format!("{source} down"));
-                prop_assert_eq!(status.source, expected_source, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} source ID; failed={:?})", source, failed_source);
+                prop_assert_eq!(status.source, expected_source, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} source ID; failed={:?})", source, failed_source);
                 prop_assert_eq!(
                     status.freshness,
                     if failed_here { timed::TimedFreshness::Stale } else { timed::TimedFreshness::Fresh },
-                    "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} freshness; failed={:?})",
+                    "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} freshness; failed={:?})",
                     source,
                     failed_source,
                 );
-                prop_assert_eq!(status.error.as_deref(), expected_error.as_deref(), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} error; failed={:?})", source, failed_source);
-                prop_assert_eq!(status.last_attempt, Some(now), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} last_attempt; failed={:?})", source, failed_source);
+                prop_assert_eq!(status.error.as_deref(), expected_error.as_deref(), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} error; failed={:?})", source, failed_source);
+                prop_assert_eq!(status.last_attempt, Some(now), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} last_attempt; failed={:?})", source, failed_source);
                 prop_assert_eq!(
                     status.last_success,
                     Some(if failed_here { now - Duration::minutes(5) } else { now }),
-                    "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} last_success; failed={:?})",
+                    "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} last_success; failed={:?})",
                     source,
                     failed_source,
                 );
                 prop_assert_eq!(
                     status.valid_until,
                     Some(if failed_here { lkg_expiry } else { replacement_expiry }),
-                    "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} valid_until; failed={:?})",
+                    "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} valid_until; failed={:?})",
                     source,
                     failed_source,
                 );
             }
-            prop_assert_eq!(snapshot.last_poll, Some(now), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (snapshot poll時刻; failed={:?})", failed_source);
+            prop_assert_eq!(snapshot.last_poll, Some(now), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (snapshot poll時刻; failed={:?})", failed_source);
         }
 
         // validなdynamic payloadのstatic join失敗と、dynamic payload自体の失敗を分離する。
         let bounty_static_join_error: Result<Vec<timed::TimedContent>, timed::TimedSourceError> =
             Err(timed::TimedSourceError::failed("bounty join failed"));
+        let location_static_join_error: Result<Vec<timed::TimedContent>, timed::TimedSourceError> =
+            Err(timed::TimedSourceError::failed("location join failed"));
+        let location_ok: Result<Vec<timed::TimedContent>, timed::TimedSourceError> = Ok(vec![]);
         let arbitration_ok: Result<Vec<timed::TimedContent>, timed::TimedSourceError> = Ok(vec![]);
         let hints = timed::static_asset_refresh_hints(
             true,
+            false,
             &bounty_static_join_error,
+            &location_ok,
             &arbitration_ok,
         );
-        prop_assert!(hints.bounties, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (valid Bounty payloadのstatic join失敗でBounty asset refreshを要求しない)");
-        prop_assert!(!hints.arbitration, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Bounty join失敗がArbitration asset refreshへ伝播した)");
+        prop_assert!(hints.bounties, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (valid Bounty payloadのstatic join失敗でBounty asset refreshを要求しない)");
+        prop_assert!(!hints.location_bounties, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Bounty join失敗がlocation asset refreshへ伝播した)");
+        prop_assert!(!hints.arbitration, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Bounty join失敗がArbitration asset refreshへ伝播した)");
+
+        let bounty_ok: Result<Vec<timed::TimedContent>, timed::TimedSourceError> = Ok(vec![]);
+        let hints = timed::static_asset_refresh_hints(
+            false,
+            true,
+            &bounty_ok,
+            &location_static_join_error,
+            &arbitration_ok,
+        );
+        prop_assert!(!hints.bounties, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (location join失敗がBounty asset refreshへ伝播した)");
+        prop_assert!(hints.location_bounties, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (valid location payloadのjoin失敗でlocation asset refreshを要求しない)");
+        prop_assert!(!hints.arbitration, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (location join失敗がArbitration asset refreshへ伝播した)");
 
         let bounty_dynamic_payload_error: Result<Vec<timed::TimedContent>, timed::TimedSourceError> =
             Err(timed::TimedSourceError::failed("malformed bounty payload"));
         let hints = timed::static_asset_refresh_hints(
             false,
+            false,
             &bounty_dynamic_payload_error,
+            &location_ok,
             &arbitration_ok,
         );
-        prop_assert!(!hints.bounties, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Bounty dynamic payload失敗でstatic cacheをinvalidateした)");
-        prop_assert!(!hints.arbitration, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Bounty dynamic payload失敗がArbitration asset refreshへ伝播した)");
+        prop_assert!(!hints.bounties, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Bounty dynamic payload失敗でstatic cacheをinvalidateした)");
+        prop_assert!(!hints.location_bounties, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Bounty dynamic payload失敗がlocation cacheへ伝播した)");
+        prop_assert!(!hints.arbitration, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Bounty dynamic payload失敗がArbitration asset refreshへ伝播した)");
 
-        let bounty_ok: Result<Vec<timed::TimedContent>, timed::TimedSourceError> = Ok(vec![]);
         let arbitration_out_of_range: Result<Vec<timed::TimedContent>, timed::TimedSourceError> =
             Err(timed::TimedSourceError::out_of_range("schedule ended"));
         let hints = timed::static_asset_refresh_hints(
             false,
+            false,
             &bounty_ok,
+            &location_ok,
             &arbitration_out_of_range,
         );
-        prop_assert!(!hints.bounties, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Arbitration範囲外がBounty asset refreshへ伝播した)");
-        prop_assert!(hints.arbitration, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Arbitration範囲外でArbitration asset refreshを要求しない)");
+        prop_assert!(!hints.bounties, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Arbitration範囲外がBounty asset refreshへ伝播した)");
+        prop_assert!(!hints.location_bounties, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Arbitration範囲外がlocation asset refreshへ伝播した)");
+        prop_assert!(hints.arbitration, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Arbitration範囲外でArbitration asset refreshを要求しない)");
 
         let join_retry_delays = (1..=5)
             .map(timed::static_join_retry_delay_secs)
@@ -1003,7 +1043,7 @@ proptest! {
         prop_assert_eq!(
             join_retry_delays,
             vec![60, 300, 1_800, 7_200, 7_200],
-            "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (join不整合の再取得backoffが1分/5分/30分/2時間上限でない)",
+            "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (join不整合の再取得backoffが1分/5分/30分/2時間上限でない)",
         );
     }
 
@@ -1654,7 +1694,7 @@ fn cfg_005() {
     );
 }
 
-/// TMD-001: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない
+/// TMD-001: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない
 #[test]
 fn tmd_001() {
     let mut snapshot = timed::TimedContentSnapshot::default();
@@ -1688,35 +1728,54 @@ fn tmd_001() {
     };
     bounty.source_id = timed::TimedSourceId::BrowseWfBountyCycle;
 
+    let mut area_objective = mk_timed_card("area-objective", Some(base_now() + Duration::hours(2)));
+    area_objective.kind = "area-objective".to_string();
+    area_objective.provenance = timed::TimedProvenance {
+        kind: timed::TimedSourceKind::CommunityLive,
+        contributors: vec![
+            timed::TimedSourceId::BrowseWfLocationBounties,
+            timed::TimedSourceId::BrowseWfExportBounties,
+            timed::TimedSourceId::BrowseWfDictionaryEn,
+        ],
+    };
+    area_objective.source_id = timed::TimedSourceId::BrowseWfLocationBounties;
+
     snapshot.arbitration = vec![arbitration];
     snapshot.circuit = vec![circuit];
     snapshot.bounties = vec![bounty];
+    snapshot.area_objectives = vec![area_objective];
     snapshot.sources.wfcd.freshness = timed::TimedFreshness::Fresh;
     snapshot.sources.de_descendia.freshness = timed::TimedFreshness::Stale;
     snapshot.sources.de_circuit.freshness = timed::TimedFreshness::OutOfRange;
     snapshot.sources.browse_wf_bounties.freshness = timed::TimedFreshness::Unavailable;
+    snapshot.sources.browse_wf_location_bounties.freshness = timed::TimedFreshness::Stale;
     snapshot.last_poll = Some(base_now());
 
     let value = serde_json::to_value(&snapshot).expect("TimedContentSnapshotをserializeできること");
-    assert_eq!(value["arbitration"][0]["temporalStatus"], "active", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (active wire)");
-    assert_eq!(value["circuit"][0]["temporalStatus"], "upcoming", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (upcoming wire)");
-    assert_eq!(value["arbitration"][0]["provenance"]["kind"], "community-schedule", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (schedule provenance)");
-    assert_eq!(value["bounties"][0]["provenance"]["kind"], "community-live", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (community live provenance)");
-    assert_eq!(value["circuit"][0]["provenance"]["kind"], "official-live", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (official provenance)");
+    assert_eq!(value["arbitration"][0]["temporalStatus"], "active", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (active wire)");
+    assert_eq!(value["circuit"][0]["temporalStatus"], "upcoming", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (upcoming wire)");
+    assert_eq!(value["arbitration"][0]["provenance"]["kind"], "community-schedule", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (schedule provenance)");
+    assert_eq!(value["bounties"][0]["provenance"]["kind"], "community-live", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (community live provenance)");
+    assert_eq!(value["circuit"][0]["provenance"]["kind"], "official-live", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (official provenance)");
     assert_eq!(
         value["arbitration"][0]["provenance"]["contributors"],
         serde_json::json!(["browse-wf-arbitration-schedule", "browse-wf-regions"]),
-        "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (物理contributor ID群)",
+        "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (物理contributor ID群)",
     );
-    assert_eq!(value["sources"]["wfcd"]["freshness"], "fresh", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (fresh wire)");
-    assert_eq!(value["sources"]["deDescendia"]["freshness"], "stale", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (stale wire)");
-    assert_eq!(value["sources"]["deCircuit"]["freshness"], "out-of-range", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (out-of-range wire)");
-    assert_eq!(value["sources"]["browseWfBounties"]["freshness"], "unavailable", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (unavailable wire)");
-    assert!(value.get("areaMissions").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (camelCase areaMissions)");
-    assert!(value.get("lastPoll").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (camelCase lastPoll)");
+    assert_eq!(value["sources"]["wfcd"]["freshness"], "fresh", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (fresh wire)");
+    assert_eq!(value["sources"]["deDescendia"]["freshness"], "stale", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (stale wire)");
+    assert_eq!(value["sources"]["deCircuit"]["freshness"], "out-of-range", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (out-of-range wire)");
+    assert_eq!(value["sources"]["browseWfBounties"]["freshness"], "unavailable", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (unavailable wire)");
+    assert_eq!(value["sources"]["browseWfLocationBounties"]["freshness"], "stale", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (location freshness wire)");
+    assert_eq!(value["areaObjectives"][0]["sourceId"], "browse-wf-location-bounties", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (location source wire)");
+    assert!(value.get("areaMissions").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase areaMissions)");
+    assert!(value.get("areaEnvironments").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase areaEnvironments)");
+    assert!(value.get("areaObjectives").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase areaObjectives)");
+    assert!(value.get("areaEvents").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase areaEvents)");
+    assert!(value.get("lastPoll").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase lastPoll)");
     let encoded = serde_json::to_string(&value).unwrap();
-    assert!(!encoded.contains("availability"), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (旧synthetic availabilityを残した)");
-    assert!(!encoded.contains("netracells"), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (取得不能netracells fieldを残した)");
+    assert!(!encoded.contains("availability"), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (旧synthetic availabilityを残した)");
+    assert!(!encoded.contains("netracells"), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (取得不能netracells fieldを残した)");
 }
 
 /// TMD-002: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する
@@ -2033,6 +2092,12 @@ fn tmd_005() {
     let first_job_expiry = now + Duration::hours(2);
     let second_job_expiry = now + Duration::hours(4);
     let expired_job_expiry = now - Duration::minutes(30);
+    let area_cycle = |id: &str, state: &str| serde_json::json!({
+        "id": id,
+        "activation": mission_activation.to_rfc3339(),
+        "expiry": mission_expiry.clone(),
+        "state": state
+    });
     let area_job = |id: &str, title: &str, expiry: DateTime<Utc>, count: u32| {
         serde_json::json!({
             "id": id,
@@ -2107,7 +2172,13 @@ fn tmd_005() {
                     }
                 ]
             }]
-        }]
+        }],
+        "cetusCycle": area_cycle("cetus", "day"),
+        "vallisCycle": area_cycle("vallis", "cold"),
+        "cambionCycle": area_cycle("cambion", "fass"),
+        "zarimanCycle": area_cycle("zariman", "corpus"),
+        "duviriCycle": area_cycle("duviri", "fear"),
+        "events": []
     });
     let wfcd = timed::parse_wfcd_json(&wfcd_fixture.to_string(), now)
         .expect("WFCD rich fixtureをparseできること");
@@ -2181,7 +2252,13 @@ fn tmd_005() {
             }]
         },
         "syndicateMissions": [],
-        "archimedeas": []
+        "archimedeas": [],
+        "cetusCycle": area_cycle("cetus", "day"),
+        "vallisCycle": area_cycle("vallis", "cold"),
+        "cambionCycle": area_cycle("cambion", "fass"),
+        "zarimanCycle": area_cycle("zariman", "corpus"),
+        "duviriCycle": area_cycle("duviri", "fear"),
+        "events": []
     });
     let branch_specific = timed::parse_wfcd_json(&branch_specific_fixture.to_string(), now)
         .expect("Sortie/Archonの未使用field欠落を許容すること");
@@ -2330,6 +2407,300 @@ fn tmd_005() {
             "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (不正Descents {case}を部分受理した)",
         );
     }
+}
+
+/// TMD-006: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない
+#[test]
+fn tmd_006() {
+    let now = base_now();
+    let activation = now - Duration::hours(1);
+    let expiry = now + Duration::hours(2);
+    let mission_expiry = now + Duration::hours(6);
+    let area_job = |id: &str, title: &str| serde_json::json!({
+        "id": id,
+        "expiry": expiry.to_rfc3339(),
+        "type": title,
+        "enemyLevels": [5, 15],
+        "standingStages": [400, 600, 1000],
+        "minMR": 0,
+        "locationTag": null,
+        "timeBound": null,
+        "rewardPool": ["Endo"],
+        "rewardPoolDrops": [{
+            "item": "Endo",
+            "rarity": "Common",
+            "chance": 25.0,
+            "count": 100
+        }],
+        "uniqueName": format!("/Lotus/Jobs/{id}"),
+        "isVault": false
+    });
+    let event_job = |title: &str| serde_json::json!({
+        "type": title,
+        "expiry": expiry.to_rfc3339(),
+        "enemyLevels": [15, 25],
+        "standingStages": [310, 310, 460],
+        "minMR": 0,
+        "rewardPool": ["Event Reward"]
+    });
+    let fixture = serde_json::json!({
+        "sortie": null,
+        "archonHunt": null,
+        "syndicateMissions": [
+            {
+                "id": "ostrons",
+                "activation": activation.to_rfc3339(),
+                "expiry": mission_expiry.to_rfc3339(),
+                "syndicate": "Ostrons",
+                "syndicateKey": "CetusSyndicate",
+                "nodes": [],
+                "jobs": [area_job("ostrons-job", "Ostron Bounty")]
+            },
+            {
+                "id": "solaris",
+                "activation": activation.to_rfc3339(),
+                "expiry": mission_expiry.to_rfc3339(),
+                "syndicate": "Solaris United",
+                "syndicateKey": "SolarisSyndicate",
+                "nodes": [],
+                "jobs": [area_job("solaris-job", "Solaris Bounty")]
+            },
+            {
+                "id": "entrati",
+                "activation": activation.to_rfc3339(),
+                "expiry": mission_expiry.to_rfc3339(),
+                "syndicate": "Entrati",
+                "syndicateKey": "EntratiSyndicate",
+                "nodes": [],
+                "jobs": [area_job("entrati-job", "Entrati Bounty")]
+            }
+        ],
+        "archimedeas": [],
+        "cetusCycle": {
+            "id": "cetus-cycle",
+            "activation": activation.to_rfc3339(),
+            "expiry": expiry.to_rfc3339(),
+            "state": "day",
+            "isDay": true,
+        },
+        "vallisCycle": {
+            "id": "vallis-cycle",
+            "activation": activation.to_rfc3339(),
+            "expiry": expiry.to_rfc3339(),
+            "state": "cold",
+            "isWarm": false,
+        },
+        "cambionCycle": {
+            "id": "cambion-cycle",
+            "activation": activation.to_rfc3339(),
+            "expiry": expiry.to_rfc3339(),
+            "state": "fass"
+        },
+        "zarimanCycle": {
+            "id": "zariman-cycle",
+            "activation": activation.to_rfc3339(),
+            "expiry": expiry.to_rfc3339(),
+            "state": "grineer",
+            "isCorpus": false,
+        },
+        "duviriCycle": {
+            "id": "duviri-cycle",
+            "activation": activation.to_rfc3339(),
+            "expiry": expiry.to_rfc3339(),
+            "state": "fear",
+            "choices": [{"category":"normal","choices":["Ash","Mag","Volt"]}],
+        },
+        "earthCycle": {
+            "id": "earth-cycle",
+            "activation": activation.to_rfc3339(),
+            "expiry": expiry.to_rfc3339(),
+            "state": "night"
+        },
+        "events": [
+            {
+                "id": "thermia",
+                "activation": activation.to_rfc3339(),
+                "expiry": expiry.to_rfc3339(),
+                "description": "Thermia Fractures",
+                "tooltip": "Seal fractures across the Orb Vallis",
+                "node": "Orb Vallis (Venus)",
+                "tag": "HeatFissure",
+                "currentScore": 19,
+                "maximumScore": 100,
+                "health": 19,
+                "jobs": []
+            },
+            {
+                "id": "ghouls",
+                "activation": activation.to_rfc3339(),
+                "expiry": expiry.to_rfc3339(),
+                "description": "Ghoul Purge",
+                "tooltip": "Defeat the Ghouls",
+                "node": null,
+                "tag": "GhoulEmergence",
+                "affiliatedWith": "Ostrons",
+                "jobs": [event_job("Eliminate A Ghoul Alpha")]
+            },
+            {
+                "id": "plague-star",
+                "activation": activation.to_rfc3339(),
+                "expiry": expiry.to_rfc3339(),
+                "description": "Operation: Plague Star",
+                "tooltip": "Defend the Plains",
+                "node": null,
+                "tag": "InfestedPlains",
+                "affiliatedWith": "Operations Syndicate",
+                "jobs": [event_job("Plague Star")]
+            },
+            {
+                "id": "unrelated",
+                "activation": "not-a-date",
+                "expiry": "also-not-a-date",
+                "description": "Unrelated Relay",
+                "tag": "TennoConRelay",
+                "jobs": []
+            },
+            {
+                "id": "expired-thermia",
+                "activation": (now - Duration::days(2)).to_rfc3339(),
+                "expiry": (now - Duration::days(1)).to_rfc3339(),
+                "description": "Old Thermia",
+                "tag": "HeatFissure",
+                "jobs": []
+            }
+        ]
+    });
+
+    let parsed = timed::parse_wfcd_json(&fixture.to_string(), now)
+        .expect("Areaを含むWFCD fixtureをparseできること");
+    let environment_variants = parsed
+        .area_environments
+        .iter()
+        .filter_map(|card| card.variant.as_deref())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        environment_variants,
+        std::collections::BTreeSet::from(["cetus", "vallis", "cambion", "zariman", "duviri"]),
+        "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (5 environment variant)",
+    );
+    assert!(parsed.area_environments.iter().all(|card| {
+        card.kind == "area-environment"
+            && card.activation == Some(activation)
+            && card.expiry == Some(expiry)
+            && card.metadata.iter().any(|item| item.key == "state")
+            && card.stages.is_empty()
+    }), "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (cycle正規化)");
+    assert!(parsed.area_environments.iter().all(|card| card.variant.as_deref() != Some("earth")), "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (earthCycleをAreaへ複製した)");
+    assert!(parsed.area_environments.iter().all(|card| card.stages.iter().all(|stage| stage.choices.is_empty())), "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (Duviri choicesをAreaへ複製した)");
+
+    let core_variants = parsed
+        .area_missions
+        .iter()
+        .filter_map(|card| card.variant.as_deref())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        core_variants,
+        std::collections::BTreeSet::from(["ostrons", "solaris-united", "entrati"]),
+        "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (WFCD 3勢力variant)",
+    );
+
+    let event_variants = parsed
+        .area_events
+        .iter()
+        .filter_map(|card| card.variant.as_deref())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        event_variants,
+        std::collections::BTreeSet::from(["heat-fissure", "ghoul-emergence", "infested-plains"]),
+        "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (allowlisted active event)",
+    );
+    assert!(parsed.area_events.iter().all(|card| {
+        card.kind == "area-event"
+            && card.expiry == Some(expiry)
+            && !card.metadata.iter().any(|item| ["currentScore", "maximumScore", "health"].contains(&item.key.as_str()))
+    }), "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (event正規化または個人進捗表示)");
+
+    for (field, state) in [
+        ("cetusCycle", "eclipse"),
+        ("vallisCycle", "storm"),
+        ("cambionCycle", "night"),
+        ("zarimanCycle", "murmur"),
+        ("duviriCycle", "calm"),
+    ] {
+        let mut invalid = fixture.clone();
+        invalid[field]["state"] = serde_json::json!(state);
+        assert!(timed::parse_wfcd_json(&invalid.to_string(), now).is_err(), "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない ({field} unknown state)");
+    }
+    let mut inconsistent_day = fixture.clone();
+    inconsistent_day["cetusCycle"]["isDay"] = serde_json::json!(false);
+    assert!(timed::parse_wfcd_json(&inconsistent_day.to_string(), now).is_err(), "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (Cetus state/isDay不一致)");
+    let mut missing_cycle = fixture.clone();
+    missing_cycle.as_object_mut().unwrap().remove("duviriCycle");
+    assert!(timed::parse_wfcd_json(&missing_cycle.to_string(), now).is_err(), "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (cycle root欠落)");
+
+    let known_path = "/Lotus/Types/Gameplay/Eidolon/Jobs/AttritionBountyCap";
+    let other_path = "/Lotus/Types/Gameplay/Venus/Jobs/VenusArtifactJobAmbush";
+    let unknown_path = "/Lotus/Types/Gameplay/InfestedMicroplanet/Jobs/UnknownObjective";
+    let export = serde_json::json!({
+        (known_path): {
+            "name": "/Lotus/Language/OstronJobs/AttritionBountyCapTitle",
+            "description": "/Lotus/Language/OstronJobs/AttritionBountyCapDesc",
+            "icon": "/Lotus/Interface/Icons/Test.png",
+            "stages": []
+        },
+        (other_path): {
+            "name": "/Lotus/Language/SolarisJobs/ArtifactTitle",
+            "description": "/Lotus/Language/SolarisJobs/ArtifactDesc",
+            "icon": "/Lotus/Interface/Icons/Test.png",
+            "stages": []
+        }
+    });
+    let dictionary = serde_json::json!({
+        "/Lotus/Language/OstronJobs/AttritionBountyCapTitle": "CAPTURE THEIR LEADER",
+        "/Lotus/Language/OstronJobs/AttritionBountyCapDesc": "Draw out the target.",
+        "/Lotus/Language/SolarisJobs/ArtifactTitle": "RECOVER THE ARTIFACT",
+        "/Lotus/Language/SolarisJobs/ArtifactDesc": "Find the artifact."
+    });
+    let assets = timed::parse_location_bounty_assets(&export.to_string(), &dictionary.to_string())
+        .expect("location-bounties static assetsをparseできること");
+    let locations = serde_json::json!({
+        "expiry": expiry.timestamp_millis(),
+        "CetusSyndicate": {"TentA": [known_path]},
+        "SolarisSyndicate": {"BountyNefsHead": [other_path]},
+        "EntratiSyndicate": {"ChamberA": [unknown_path]}
+    });
+    let cards = timed::parse_location_bounty_cards(&locations.to_string(), now, &assets)
+        .expect("location-bounties fixtureを3 cardへ変換できること");
+    assert_eq!(
+        cards.iter().map(|card| card.variant.as_deref()).collect::<Vec<_>>(),
+        vec![Some("ostrons"), Some("solaris-united"), Some("entrati")],
+        "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (location 3勢力variant)",
+    );
+    assert!(cards.iter().all(|card| {
+        card.kind == "area-objective"
+            && card.expiry == Some(expiry)
+            && card.source_id == timed::TimedSourceId::BrowseWfLocationBounties
+            && !card.stages.is_empty()
+    }), "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (location card正規化)");
+    assert_eq!(cards[0].stages[0].title, "TentA", "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (location tagを推測改名した)");
+    assert_eq!(cards[0].stages[0].choices, vec!["Capture Their Leader"], "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (ExportBounties/dict join)");
+    assert_eq!(cards[2].stages[0].choices, vec!["UnknownObjective"], "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (未知identifier raw leaf fallback)");
+
+    let mut missing_syndicate = locations.clone();
+    missing_syndicate.as_object_mut().unwrap().remove("SolarisSyndicate");
+    assert!(timed::parse_location_bounty_cards(&missing_syndicate.to_string(), now, &assets).is_err(), "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (location必須勢力欠落)");
+    let mut empty_location = locations.clone();
+    empty_location["CetusSyndicate"]["TentA"] = serde_json::json!([]);
+    assert!(timed::parse_location_bounty_cards(&empty_location.to_string(), now, &assets).is_err(), "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (location空配列)");
+    let mut duplicate_path = locations.clone();
+    duplicate_path["CetusSyndicate"]["TentA"] = serde_json::json!([known_path, known_path]);
+    assert!(timed::parse_location_bounty_cards(&duplicate_path.to_string(), now, &assets).is_err(), "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (location path重複)");
+    let mut bad_path = locations.clone();
+    bad_path["CetusSyndicate"]["TentA"] = serde_json::json!(["not-a-resource-path"]);
+    assert!(timed::parse_location_bounty_cards(&bad_path.to_string(), now, &assets).is_err(), "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (location不正path)");
+    let mut expired = locations.clone();
+    expired["expiry"] = serde_json::json!(now.timestamp_millis());
+    assert!(timed::parse_location_bounty_cards(&expired.to_string(), now, &assets).is_err(), "SPEC TMD-006 違反: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない (location期限切れ)");
 }
 
 /// NTF-001: 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する

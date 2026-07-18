@@ -13,14 +13,16 @@ mod de;
 mod wfcd;
 
 use browse_wf::{
-    arbitration_card_from_assets, bounty_cards_from_cycle, parse_arbitration_assets,
-    parse_bounty_assets, parse_shared_community_assets, ArbitrationAssets, BountyAssets,
+    arbitration_card_from_assets, bounty_cards_from_cycle, location_bounty_cards_from_cycle,
+    parse_arbitration_assets, parse_bounty_assets, parse_location_bounty_cycle_json,
+    parse_shared_community_assets, ArbitrationAssets, BountyAssets,
 };
 
 pub use browse_wf::{
     arbitration_card, arbitration_slot_at, parse_arbitration_schedule, parse_bounty_cards,
-    parse_bounty_cycle_json, parse_community_assets, ArbitrationSchedule, ArbitrationSlot,
-    CommunityAssets,
+    parse_bounty_cycle_json, parse_community_assets, parse_location_bounty_assets,
+    parse_location_bounty_cards, ArbitrationSchedule, ArbitrationSlot, CommunityAssets,
+    LocationBountyAssets,
 };
 pub use de::{parse_circuit_json, parse_descents_json};
 pub use wfcd::{parse_wfcd_json, WfcdTimedContent};
@@ -28,11 +30,14 @@ pub use wfcd::{parse_wfcd_json, WfcdTimedContent};
 pub const WFCD_WORLDSTATE_URL: &str = "https://api.warframestat.us/pc";
 pub const DE_WORLDSTATE_URL: &str = "https://api.warframe.com/cdn/worldState.php";
 pub const BROWSE_WF_BOUNTY_URL: &str = "https://oracle.browse.wf/bounty-cycle";
+pub const BROWSE_WF_LOCATION_BOUNTIES_URL: &str = "https://oracle.browse.wf/location-bounties";
 pub const BROWSE_WF_ARBITRATION_URL: &str = "https://browse.wf/arbys.txt";
 pub const BROWSE_WF_REGIONS_URL: &str =
     "https://browse.wf/warframe-public-export-plus/ExportRegions.json";
 pub const BROWSE_WF_CHALLENGES_URL: &str =
     "https://browse.wf/warframe-public-export-plus/ExportChallenges.json";
+pub const BROWSE_WF_EXPORT_BOUNTIES_URL: &str =
+    "https://browse.wf/warframe-public-export-plus/ExportBounties.json";
 pub const BROWSE_WF_DICTIONARY_URL: &str =
     "https://browse.wf/warframe-public-export-plus/dict.en.json";
 pub const BROWSE_WF_FACTIONS_URL: &str =
@@ -68,6 +73,8 @@ pub enum TimedSourceId {
     DeWorldstate,
     BrowseWfArbitrationSchedule,
     BrowseWfBountyCycle,
+    BrowseWfLocationBounties,
+    BrowseWfExportBounties,
     BrowseWfRegions,
     BrowseWfChallenges,
     BrowseWfDictionaryEn,
@@ -146,6 +153,7 @@ pub struct TimedSourceStatuses {
     pub de_descendia: TimedSourceStatus,
     pub de_circuit: TimedSourceStatus,
     pub browse_wf_bounties: TimedSourceStatus,
+    pub browse_wf_location_bounties: TimedSourceStatus,
     pub browse_wf_arbitration: TimedSourceStatus,
 }
 
@@ -156,6 +164,9 @@ impl Default for TimedSourceStatuses {
             de_descendia: TimedSourceStatus::new(TimedSourceId::DeWorldstate),
             de_circuit: TimedSourceStatus::new(TimedSourceId::DeWorldstate),
             browse_wf_bounties: TimedSourceStatus::new(TimedSourceId::BrowseWfBountyCycle),
+            browse_wf_location_bounties: TimedSourceStatus::new(
+                TimedSourceId::BrowseWfLocationBounties,
+            ),
             browse_wf_arbitration: TimedSourceStatus::new(
                 TimedSourceId::BrowseWfArbitrationSchedule,
             ),
@@ -282,8 +293,11 @@ pub struct TimedContentSnapshot {
     pub sortie: Vec<TimedContent>,
     pub archon: Vec<TimedContent>,
     pub syndicates: Vec<TimedContent>,
+    pub area_environments: Vec<TimedContent>,
     pub area_missions: Vec<TimedContent>,
+    pub area_objectives: Vec<TimedContent>,
     pub bounties: Vec<TimedContent>,
+    pub area_events: Vec<TimedContent>,
     pub circuit: Vec<TimedContent>,
     pub archimedea: Vec<TimedContent>,
     pub descendia: Vec<TimedContent>,
@@ -377,24 +391,29 @@ pub struct TimedPollResults {
     pub descendia: Result<Vec<TimedContent>, TimedSourceError>,
     pub circuit: Result<Vec<TimedContent>, TimedSourceError>,
     pub bounties: Result<Vec<TimedContent>, TimedSourceError>,
+    pub area_objectives: Result<Vec<TimedContent>, TimedSourceError>,
     pub arbitration: Result<Vec<TimedContent>, TimedSourceError>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct TimedAssetHealth {
     bounties_error: Option<String>,
+    location_bounties_error: Option<String>,
     arbitration_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TimedAssetRefreshHints {
     pub bounties: bool,
+    pub location_bounties: bool,
     pub arbitration: bool,
 }
 
 pub fn static_asset_refresh_hints(
     bounty_static_join_failed: bool,
+    location_static_join_failed: bool,
     bounties: &Result<Vec<TimedContent>, TimedSourceError>,
+    area_objectives: &Result<Vec<TimedContent>, TimedSourceError>,
     arbitration: &Result<Vec<TimedContent>, TimedSourceError>,
 ) -> TimedAssetRefreshHints {
     TimedAssetRefreshHints {
@@ -403,6 +422,7 @@ pub fn static_asset_refresh_hints(
         // reached the join may mean that its identifiers are newer than our
         // validated Export cache.
         bounties: bounty_static_join_failed && bounties.is_err(),
+        location_bounties: location_static_join_failed && area_objectives.is_err(),
         // Arbitration has no dynamic body: Failed and OutOfRange both warrant
         // an early schedule/Public Export refresh.
         arbitration: arbitration.is_err(),
@@ -420,6 +440,7 @@ pub fn static_join_retry_delay_secs(consecutive_failures: u32) -> u64 {
 struct TimedAssetDerivationFeedback {
     refresh_hints: TimedAssetRefreshHints,
     bounties_join_succeeded: bool,
+    location_bounties_join_succeeded: bool,
     arbitration_succeeded: bool,
 }
 
@@ -455,6 +476,13 @@ impl TimedContentSnapshot {
             asset_health.bounties_error,
         );
         apply_timed_source_result_with_asset_error(
+            &mut self.area_objectives,
+            &mut self.sources.browse_wf_location_bounties,
+            now,
+            results.area_objectives,
+            asset_health.location_bounties_error,
+        );
+        apply_timed_source_result_with_asset_error(
             &mut self.arbitration,
             &mut self.sources.browse_wf_arbitration,
             now,
@@ -475,7 +503,9 @@ impl TimedContentSnapshot {
                     &mut next.sortie,
                     &mut next.archon,
                     &mut next.syndicates,
+                    &mut next.area_environments,
                     &mut next.area_missions,
+                    &mut next.area_events,
                     &mut next.archimedea,
                 ] {
                     retain_unexpired(cards, now);
@@ -484,7 +514,9 @@ impl TimedContentSnapshot {
                 self.sortie = next.sortie;
                 self.archon = next.archon;
                 self.syndicates = next.syndicates;
+                self.area_environments = next.area_environments;
                 self.area_missions = next.area_missions;
+                self.area_events = next.area_events;
                 self.archimedea = next.archimedea;
                 self.sources.wfcd.fresh(now, valid_until);
             }
@@ -493,7 +525,9 @@ impl TimedContentSnapshot {
                     &mut self.sortie,
                     &mut self.archon,
                     &mut self.syndicates,
+                    &mut self.area_environments,
                     &mut self.area_missions,
+                    &mut self.area_events,
                     &mut self.archimedea,
                 ] {
                     retain_unexpired(cards, now);
@@ -502,7 +536,9 @@ impl TimedContentSnapshot {
                     &self.sortie,
                     &self.archon,
                     &self.syndicates,
+                    &self.area_environments,
                     &self.area_missions,
+                    &self.area_events,
                     &self.archimedea,
                 ]
                 .into_iter()
@@ -516,7 +552,9 @@ impl TimedContentSnapshot {
                 self.sortie.clear();
                 self.archon.clear();
                 self.syndicates.clear();
+                self.area_environments.clear();
                 self.area_missions.clear();
+                self.area_events.clear();
                 self.archimedea.clear();
                 self.sources.wfcd.out_of_range(now, error);
             }
@@ -616,6 +654,7 @@ impl<T> CachedAsset<T> {
 struct StaticAssetsCache {
     arbitration: CachedAsset<ArbitrationAssets>,
     bounties: CachedAsset<BountyAssets>,
+    location_bounties: CachedAsset<LocationBountyAssets>,
 }
 
 impl StaticAssetsCache {
@@ -623,6 +662,7 @@ impl StaticAssetsCache {
         TimedAssetRefreshHints {
             arbitration: self.arbitration.refresh_due(now),
             bounties: self.bounties.refresh_due(now),
+            location_bounties: self.location_bounties.refresh_due(now),
         }
     }
 
@@ -632,6 +672,9 @@ impl StaticAssetsCache {
         }
         if let Some(result) = refresh.bounties {
             self.bounties.apply_refresh(now, result);
+        }
+        if let Some(result) = refresh.location_bounties {
+            self.location_bounties.apply_refresh(now, result);
         }
     }
 
@@ -646,11 +689,17 @@ impl StaticAssetsCache {
         } else if feedback.bounties_join_succeeded {
             self.bounties.record_join_success();
         }
+        if feedback.refresh_hints.location_bounties {
+            self.location_bounties.record_join_failure(now);
+        } else if feedback.location_bounties_join_succeeded {
+            self.location_bounties.record_join_success();
+        }
     }
 
     fn health(&self) -> TimedAssetHealth {
         TimedAssetHealth {
             bounties_error: self.bounties.error.clone(),
+            location_bounties_error: self.location_bounties.error.clone(),
             arbitration_error: self.arbitration.error.clone(),
         }
     }
@@ -660,6 +709,7 @@ impl StaticAssetsCache {
             .short_retry_delay_secs(now)
             .into_iter()
             .chain(self.bounties.short_retry_delay_secs(now))
+            .chain(self.location_bounties.short_retry_delay_secs(now))
             .min()
     }
 }
@@ -667,6 +717,7 @@ impl StaticAssetsCache {
 struct StaticAssetRefresh {
     arbitration: Option<Result<ArbitrationAssets, TimedSourceError>>,
     bounties: Option<Result<BountyAssets, TimedSourceError>>,
+    location_bounties: Option<Result<LocationBountyAssets, TimedSourceError>>,
 }
 
 async fn fetch_body(
@@ -728,6 +779,7 @@ fn parse_static_asset_bodies(
     schedule: Result<String, TimedSourceError>,
     regions: Result<String, TimedSourceError>,
     challenges: Result<String, TimedSourceError>,
+    export_bounties: Result<String, TimedSourceError>,
     dictionary: Result<String, TimedSourceError>,
     factions: Result<String, TimedSourceError>,
 ) -> StaticAssetRefresh {
@@ -751,9 +803,12 @@ fn parse_static_asset_bodies(
         }
         Err(error) => Err(error.clone()),
     };
+    let location_bounties = fetched_body(&export_bounties)
+        .and_then(|body| parse_location_bounty_assets(body, fetched_body(&dictionary)?));
     StaticAssetRefresh {
         arbitration: Some(arbitration),
         bounties: Some(bounties),
+        location_bounties: Some(location_bounties),
     }
 }
 
@@ -774,7 +829,7 @@ async fn fetch_static_assets(
     client: &reqwest::Client,
     targets: TimedAssetRefreshHints,
 ) -> StaticAssetRefresh {
-    let (schedule, regions, challenges, dictionary, factions) = tokio::join!(
+    let (schedule, regions, challenges, export_bounties, dictionary, factions) = tokio::join!(
         fetch_optional_body(
             client,
             targets.arbitration,
@@ -786,6 +841,12 @@ async fn fetch_static_assets(
             client,
             targets.bounties,
             BROWSE_WF_CHALLENGES_URL,
+            EXPORT_BODY_LIMIT
+        ),
+        fetch_optional_body(
+            client,
+            targets.location_bounties,
+            BROWSE_WF_EXPORT_BOUNTIES_URL,
             EXPORT_BODY_LIMIT
         ),
         fetch_body(client, BROWSE_WF_DICTIONARY_URL, EXPORT_BODY_LIMIT, false),
@@ -810,9 +871,14 @@ async fn fetch_static_assets(
         }
         Err(error) => Err(error.clone()),
     });
+    let location_bounties = export_bounties.map(|export_bounties| {
+        fetched_body(&export_bounties)
+            .and_then(|body| parse_location_bounty_assets(body, fetched_body(&dictionary)?))
+    });
     StaticAssetRefresh {
         arbitration,
         bounties,
+        location_bounties,
     }
 }
 
@@ -820,16 +886,22 @@ async fn poll_sources(
     client: &reqwest::Client,
     arbitration_assets: Option<&ArbitrationAssets>,
     bounty_assets: Option<&BountyAssets>,
+    location_bounty_assets: Option<&LocationBountyAssets>,
 ) -> (
     DateTime<Utc>,
     TimedPollResults,
     TimedAssetDerivationFeedback,
 ) {
     let bounty_url = format!("{BROWSE_WF_BOUNTY_URL}?relico={}", Utc::now().timestamp());
-    let (wfcd, de, bounty) = tokio::join!(
+    let location_bounties_url = format!(
+        "{BROWSE_WF_LOCATION_BOUNTIES_URL}?relico={}",
+        Utc::now().timestamp()
+    );
+    let (wfcd, de, bounty, location_bounties) = tokio::join!(
         fetch_body(client, WFCD_WORLDSTATE_URL, WORLDSTATE_BODY_LIMIT, false),
         fetch_body(client, DE_WORLDSTATE_URL, WORLDSTATE_BODY_LIMIT, false),
         fetch_body(client, &bounty_url, WORLDSTATE_BODY_LIMIT, true),
+        fetch_body(client, &location_bounties_url, WORLDSTATE_BODY_LIMIT, true),
     );
     let now = Utc::now();
     let wfcd = wfcd.and_then(|body| parse_wfcd_json(&body, now));
@@ -856,15 +928,36 @@ async fn poll_sources(
         },
         Err(error) => (Err(error), false, false),
     };
+    let (area_objectives, location_static_join_failed, location_bounties_join_succeeded) =
+        match location_bounties {
+            Ok(body) => match parse_location_bounty_cycle_json(&body, now) {
+                Ok(cycle) => match location_bounty_assets {
+                    Some(assets) => {
+                        let result = location_bounty_cards_from_cycle(cycle, assets);
+                        let join_failed = result.is_err();
+                        (result, join_failed, !join_failed)
+                    }
+                    None => (Err(missing_assets()), true, false),
+                },
+                Err(error) => (Err(error), false, false),
+            },
+            Err(error) => (Err(error), false, false),
+        };
     let arbitration = match arbitration_assets {
         Some(assets) => arbitration_card_from_assets(assets, now).map(|card| vec![card]),
         None => Err(missing_assets()),
     };
-    let asset_refresh_hints =
-        static_asset_refresh_hints(bounty_static_join_failed, &bounties, &arbitration);
+    let asset_refresh_hints = static_asset_refresh_hints(
+        bounty_static_join_failed,
+        location_static_join_failed,
+        &bounties,
+        &area_objectives,
+        &arbitration,
+    );
     let asset_feedback = TimedAssetDerivationFeedback {
         refresh_hints: asset_refresh_hints,
         bounties_join_succeeded,
+        location_bounties_join_succeeded,
         arbitration_succeeded: arbitration.is_ok(),
     };
     (
@@ -874,6 +967,7 @@ async fn poll_sources(
             descendia,
             circuit,
             bounties,
+            area_objectives,
             arbitration,
         },
         asset_feedback,
@@ -891,8 +985,11 @@ fn next_poll_delay(
         &snapshot.sortie,
         &snapshot.archon,
         &snapshot.syndicates,
+        &snapshot.area_environments,
         &snapshot.area_missions,
+        &snapshot.area_objectives,
         &snapshot.bounties,
+        &snapshot.area_events,
         &snapshot.circuit,
         &snapshot.archimedea,
         &snapshot.descendia,
@@ -911,6 +1008,15 @@ fn next_poll_delay(
     {
         seconds = seconds.min(STATIC_RETRY_SECS);
     }
+    if snapshot
+        .sources
+        .browse_wf_location_bounties
+        .last_attempt
+        .is_some()
+        && snapshot.sources.browse_wf_location_bounties.freshness == TimedFreshness::Unavailable
+    {
+        seconds = seconds.min(STATIC_RETRY_SECS);
+    }
     if let Some(delay) = static_retry_delay_secs {
         seconds = seconds.min(delay.max(1));
     }
@@ -924,7 +1030,10 @@ pub async fn run(app: AppHandle, state: Arc<Mutex<PollerState>>) {
     loop {
         let before_fetch = Utc::now();
         let refresh_targets = cache.refresh_targets(before_fetch);
-        if refresh_targets.arbitration || refresh_targets.bounties {
+        if refresh_targets.arbitration
+            || refresh_targets.bounties
+            || refresh_targets.location_bounties
+        {
             let refresh = fetch_static_assets(&client, refresh_targets).await;
             if let Some(Err(error)) = &refresh.arbitration {
                 let cache_note = if cache.arbitration.value.is_some() {
@@ -942,6 +1051,14 @@ pub async fn run(app: AppHandle, state: Arc<Mutex<PollerState>>) {
                 };
                 eprintln!("browse.wf bounty asset refresh failed{cache_note}: {error}");
             }
+            if let Some(Err(error)) = &refresh.location_bounties {
+                let cache_note = if cache.location_bounties.value.is_some() {
+                    "; using validated cache"
+                } else {
+                    ""
+                };
+                eprintln!("browse.wf location bounty asset refresh failed{cache_note}: {error}");
+            }
             cache.apply_refresh(before_fetch, refresh);
         }
 
@@ -950,6 +1067,7 @@ pub async fn run(app: AppHandle, state: Arc<Mutex<PollerState>>) {
             &client,
             cache.arbitration.value.as_ref(),
             cache.bounties.value.as_ref(),
+            cache.location_bounties.value.as_ref(),
         )
         .await;
         cache.record_derivation(now, asset_feedback);
@@ -983,13 +1101,14 @@ mod tests {
         Utc.with_ymd_and_hms(2026, 7, 18, 0, 0, 0).unwrap()
     }
 
-    fn static_asset_bodies() -> (String, String, String, String, String) {
+    fn static_asset_bodies() -> (String, String, String, String, String, String) {
         let base = now().timestamp();
         (
             format!("{base},ClanNode7\n{},ClanNode7\n", base + 3600),
             r#"{"ClanNode7":{"name":"/node/Cholistan","systemName":"/system/Europa","missionName":"/mission/Excavation","faction":"FC_INFESTATION","minEnemyLevel":23,"maxEnemyLevel":33}}"#.to_string(),
             r#"{"/challenge/kill":{"name":"/challenge/name","description":"/challenge/description","requiredCount":10}}"#.to_string(),
-            r#"{"/node/Cholistan":"Cholistan"}"#.to_string(),
+            r#"{"/Lotus/Types/Gameplay/Eidolon/Jobs/Known":{"name":"/challenge/name"}}"#.to_string(),
+            r#"{"/node/Cholistan":"Cholistan","/challenge/name":"Known Bounty"}"#.to_string(),
             r#"{"FC_INFESTATION":{"name":"/faction/infested"}}"#.to_string(),
         )
     }
@@ -1019,38 +1138,66 @@ mod tests {
 
     #[test]
     fn schedule_and_challenges_fail_independently_while_shared_failures_affect_both() {
-        let (_, regions, challenges, dictionary, factions) = static_asset_bodies();
+        let (_, regions, challenges, export_bounties, dictionary, factions) = static_asset_bodies();
         let schedule_failed = parse_static_asset_bodies(
             Err(TimedSourceError::failed("schedule down")),
             Ok(regions),
             Ok(challenges),
+            Ok(export_bounties),
             Ok(dictionary),
             Ok(factions),
         );
         assert!(schedule_failed.arbitration.as_ref().unwrap().is_err());
         assert!(schedule_failed.bounties.as_ref().unwrap().is_ok());
+        assert!(schedule_failed.location_bounties.as_ref().unwrap().is_ok());
 
-        let (schedule, regions, _, dictionary, factions) = static_asset_bodies();
+        let (schedule, regions, _, export_bounties, dictionary, factions) = static_asset_bodies();
         let challenges_failed = parse_static_asset_bodies(
             Ok(schedule),
             Ok(regions),
             Err(TimedSourceError::failed("challenges down")),
+            Ok(export_bounties),
             Ok(dictionary),
             Ok(factions),
         );
         assert!(challenges_failed.arbitration.as_ref().unwrap().is_ok());
         assert!(challenges_failed.bounties.as_ref().unwrap().is_err());
+        assert!(challenges_failed
+            .location_bounties
+            .as_ref()
+            .unwrap()
+            .is_ok());
 
-        let (schedule, _, challenges, dictionary, factions) = static_asset_bodies();
+        let (schedule, regions, challenges, _, dictionary, factions) = static_asset_bodies();
+        let export_bounties_failed = parse_static_asset_bodies(
+            Ok(schedule),
+            Ok(regions),
+            Ok(challenges),
+            Err(TimedSourceError::failed("ExportBounties down")),
+            Ok(dictionary),
+            Ok(factions),
+        );
+        assert!(export_bounties_failed.arbitration.as_ref().unwrap().is_ok());
+        assert!(export_bounties_failed.bounties.as_ref().unwrap().is_ok());
+        assert!(export_bounties_failed
+            .location_bounties
+            .as_ref()
+            .unwrap()
+            .is_err());
+
+        let (schedule, _, challenges, export_bounties, dictionary, factions) =
+            static_asset_bodies();
         let shared_failed = parse_static_asset_bodies(
             Ok(schedule),
             Err(TimedSourceError::failed("regions down")),
             Ok(challenges),
+            Ok(export_bounties),
             Ok(dictionary),
             Ok(factions),
         );
         assert!(shared_failed.arbitration.as_ref().unwrap().is_err());
         assert!(shared_failed.bounties.as_ref().unwrap().is_err());
+        assert!(shared_failed.location_bounties.as_ref().unwrap().is_ok());
     }
 
     #[test]
@@ -1126,22 +1273,27 @@ mod tests {
     fn selective_static_refresh_does_not_touch_the_other_cache() {
         let mut cache = StaticAssetsCache::default();
         cache.arbitration.last_attempt = Some(now());
+        cache.location_bounties.last_attempt = Some(now());
         cache.bounties.last_attempt = None;
 
         let targets = cache.refresh_targets(now());
         assert!(!targets.arbitration);
         assert!(targets.bounties);
+        assert!(!targets.location_bounties);
 
         cache.apply_refresh(
             now() + Duration::minutes(1),
             StaticAssetRefresh {
                 arbitration: None,
                 bounties: Some(Err(TimedSourceError::failed("challenges down"))),
+                location_bounties: None,
             },
         );
 
         assert_eq!(cache.arbitration.last_attempt, Some(now()));
         assert_eq!(cache.arbitration.error, None);
+        assert_eq!(cache.location_bounties.last_attempt, Some(now()));
+        assert_eq!(cache.location_bounties.error, None);
         assert_eq!(cache.bounties.error.as_deref(), Some("challenges down"));
     }
 

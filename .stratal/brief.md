@@ -8,6 +8,7 @@ Warframeの時限コンテンツを、公式ライブ・コミュニティライ
 
 - `specs/*.pkl`を挙動の正本とし、生成物を直接編集しない。
 - コンテンツは亀裂、仲裁、ソーティー、アルコン、シンジケート、エリアミッション、Circuit、アルキメデア、Descendiaの9タブで扱う。
+- エリアミッションタブでは、環境サイクル、通常依頼、補助objective rotation、追加エリア依頼、エリアイベントを由来別グループで分離する。
 - 公式ライブ値、コミュニティによるライブ整形、コミュニティ予測scheduleをcard上で分離し、各sourceの一時的な取得障害ではそのsourceの最後の有効snapshotとエラーを併記する。
 - 公開sourceから個人状態を取得できないネットセル等は取得タブ化せず、必要になっても明示的なローカルtrackerとして分離する。
 - i18nは同一の依存なしカタログをTSとRustから利用し、意味DOMのgoldenで3言語を検査する。
@@ -72,6 +73,24 @@ Revisit when:
 - DE公式またはWFCDが仲裁の安定したライブ値を提供したとき、またはネットセルを返す認証済みプレイヤーAPIが利用可能になったとき。
 Status: active
 Retention: carry-forward
+
+### エリア情報は核心依頼・補助rotation・環境・eventへ分離する
+Authority: Human stated and external source
+Evidence: Stated by user to include the additional obtainable area data; Observed WFCD `/pc`、browse.wf Oracle `bounty-cycle` / `location-bounties`、Public Export Plusを2026-07-18に実測
+Working default:
+- 核心の依頼一覧はWFCDのOstrons・Solaris United・Entratiと、Oracle `bounty-cycle`のHoldfasts・Cavia・Hexの6勢力を固定保証する。Narmer依頼とIsolation Vaultも除外しない。
+- `location-bounties`はCetus・Solaris・Entratiの現在objective列を補う独立したcommunity-live sourceとし、失敗・schema変更・期限切れで核心のWFCD依頼を消さない。
+- objective名は`ExportBounties.json`と英語辞書で解決し、未知identifierは空欄化せずraw leafへfallbackする。
+- 環境はCetus、Orb Vallis、Cambion Drift、Zariman、Duviriの5 cycleをWFCDから表示し、重複する`earthCycle`とCircuit候補はAreaへ複製しない。
+- エリアeventは公開worldstateで明示的に識別できるものだけを別groupへ出し、公開payloadから個人進捗を推測・表示しない。
+Why it matters:
+- 「取得できる」を勢力追加、objective詳細、環境状態、eventのどれかへ曖昧に丸めず、弱い補助sourceが強い核心依頼の可用性を下げない。
+Validation:
+- 6勢力fixture、5環境cycle、Narmer/Isolation Vault、location objective解決とraw fallback、補助source単独障害、対象eventと非対象eventの分離を生成テストで検査し、Areaの5groupを3言語renderer goldenで確認する。
+Revisit when:
+- Oracleが`location-bounties`を廃止・正式採用したとき、WFCDが後半3勢力のJobsを返すようになったとき、または新しい公開area bounty tag/cycle/event識別子が追加されたとき。
+Status: active
+Retention: repo-contract
 
 ### 9タブのブラウザ風操作と既存ルール操作
 Authority: Human stated

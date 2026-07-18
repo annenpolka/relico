@@ -34,12 +34,45 @@ e2e:
     #!/usr/bin/env bash
     set -euo pipefail
     bundle_root="$PWD/src-tauri/target.noindex"
+    app_binary="$bundle_root/debug/relico"
+    e2e_lease="$bundle_root/e2e-process.lease"
+    e2e_port=4445
     cap="src-tauri/capabilities/e2e.json"
-    cp tools/e2e-capability.json "$cap"
-    cleanup() { rm -f "$cap"; }
+    cleanup() {
+        status=$?
+        trap - EXIT INT TERM
+        set +e
+        bun tools/e2e-process.ts cleanup --port "$e2e_port" --executable "$app_binary" --lease "$e2e_lease"
+        janitor_status=$?
+        lease_status=0
+        if [[ $janitor_status -eq 0 ]]; then
+            rm -f "$e2e_lease"
+            lease_status=$?
+        fi
+        rm -f "$cap"
+        cap_status=$?
+        if [[ $status -eq 0 && $janitor_status -ne 0 ]]; then
+            status=$janitor_status
+        elif [[ $status -eq 0 && $lease_status -ne 0 ]]; then
+            status=$lease_status
+        elif [[ $status -eq 0 && $cap_status -ne 0 ]]; then
+            status=$cap_status
+        fi
+        exit "$status"
+    }
     trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    mkdir -p "$bundle_root"
+    touch "$e2e_lease"
+    # 前回runnerだけが異常終了して残したE2E専用lease holderも、build前に対象限定で回収する。
+    bun tools/e2e-process.ts cleanup --port "$e2e_port" --executable "$app_binary" --lease "$e2e_lease"
+    # 回収済みの旧run inodeは再利用せず、このrunだけのlease inodeへ入れ替える。
+    rm -f "$e2e_lease"
+    touch "$e2e_lease"
+    cp tools/e2e-capability.json "$cap"
     CARGO_TARGET_DIR="$bundle_root" bun tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json
-    bunx wdio run wdio.conf.ts
+    TAURI_WEBDRIVER_PORT="$e2e_port" RELICO_E2E_LEASE_PATH="$e2e_lease" bunx wdio run wdio.conf.ts
 
 dev:
     bun tauri dev

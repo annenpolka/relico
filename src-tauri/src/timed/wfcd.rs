@@ -5,8 +5,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{
-    TimedCondition, TimedConditionKind, TimedContent, TimedProvenance, TimedRewardDrop,
-    TimedSourceError, TimedSourceId, TimedSourceKind, TimedStage, TimedTemporalStatus,
+    TimedCondition, TimedConditionKind, TimedContent, TimedMetadata, TimedProvenance,
+    TimedRewardDrop, TimedSourceError, TimedSourceId, TimedSourceKind, TimedStage,
+    TimedTemporalStatus,
 };
 
 const WFCD_SOURCE_URL: &str = "https://api.warframestat.us/pc";
@@ -17,6 +18,8 @@ pub struct WfcdTimedContent {
     pub archon: Vec<TimedContent>,
     pub syndicates: Vec<TimedContent>,
     pub area_missions: Vec<TimedContent>,
+    pub area_environments: Vec<TimedContent>,
+    pub area_events: Vec<TimedContent>,
     pub archimedea: Vec<TimedContent>,
 }
 
@@ -27,6 +30,8 @@ impl WfcdTimedContent {
             .chain(self.archon.iter())
             .chain(self.syndicates.iter())
             .chain(self.area_missions.iter())
+            .chain(self.area_environments.iter())
+            .chain(self.area_events.iter())
             .chain(self.archimedea.iter())
     }
 }
@@ -37,7 +42,62 @@ struct RawWfcdWorldstate {
     sortie: Option<RawSortie>,
     archon_hunt: Option<RawSortie>,
     syndicate_missions: Vec<RawSyndicateMission>,
+    cetus_cycle: RawAreaCycle,
+    vallis_cycle: RawAreaCycle,
+    cambion_cycle: RawAreaCycle,
+    zariman_cycle: RawAreaCycle,
+    duviri_cycle: RawAreaCycle,
+    events: Vec<Value>,
     archimedeas: Vec<RawArchimedea>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawAreaCycle {
+    #[serde(default)]
+    id: String,
+    activation: String,
+    expiry: String,
+    state: String,
+    is_day: Option<bool>,
+    is_warm: Option<bool>,
+    is_corpus: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawAreaEvent {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    tooltip: Option<String>,
+    #[serde(default)]
+    jobs: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawEventJob {
+    #[serde(default)]
+    expiry: Option<String>,
+    #[serde(default)]
+    r#type: String,
+    #[serde(default)]
+    enemy_levels: Vec<u32>,
+    #[serde(default)]
+    standing_stages: Vec<u32>,
+    #[serde(default, rename = "minMR")]
+    min_mr: u32,
+    #[serde(default)]
+    location_tag: Option<String>,
+    #[serde(default)]
+    time_bound: Option<String>,
+    #[serde(default)]
+    reward_pool: Vec<String>,
+    #[serde(default)]
+    reward_pool_drops: Vec<RawRewardDrop>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -241,6 +301,314 @@ fn card(
     }
 }
 
+fn area_environment_card(
+    raw: RawAreaCycle,
+    now: DateTime<Utc>,
+    variant: &str,
+    title: &str,
+    allowed_states: &[&str],
+) -> Result<TimedContent, TimedSourceError> {
+    let field = format!("{variant}Cycle");
+    let activation = parse_iso(&raw.activation, &format!("{field}.activation"))?;
+    let expiry = parse_iso(&raw.expiry, &format!("{field}.expiry"))?;
+    validate_window(activation, expiry, &field)?;
+    if expiry <= now {
+        return Err(TimedSourceError::failed(format!(
+            "WFCD {field} expired at {expiry}"
+        )));
+    }
+    require_text(&raw.state, &format!("{field}.state"))?;
+    if !allowed_states.contains(&raw.state.as_str()) {
+        return Err(TimedSourceError::failed(format!(
+            "WFCD {field}.state {} is not supported",
+            raw.state
+        )));
+    }
+
+    let cross_check = match variant {
+        "cetus" => raw
+            .is_day
+            .map(|actual| ("isDay", actual, raw.state == "day")),
+        "vallis" => raw
+            .is_warm
+            .map(|actual| ("isWarm", actual, raw.state == "warm")),
+        "zariman" => raw
+            .is_corpus
+            .map(|actual| ("isCorpus", actual, raw.state == "corpus")),
+        _ => None,
+    };
+    if let Some((boolean_field, actual, expected)) = cross_check {
+        if actual != expected {
+            return Err(TimedSourceError::failed(format!(
+                "WFCD {field}.{boolean_field} contradicts state {}",
+                raw.state
+            )));
+        }
+    }
+
+    let id = if raw.id.trim().is_empty() {
+        format!(
+            "area-environment:{variant}:{}",
+            activation.timestamp_millis()
+        )
+    } else {
+        raw.id
+    };
+    let mut result = card(
+        id,
+        "area-environment",
+        title.to_string(),
+        None,
+        activation,
+        expiry,
+        vec![],
+    );
+    result.variant = Some(variant.to_string());
+    result.temporal_status = if activation <= now {
+        TimedTemporalStatus::Active
+    } else {
+        TimedTemporalStatus::Upcoming
+    };
+    result.metadata = vec![TimedMetadata {
+        key: "state".to_string(),
+        value: raw.state,
+    }];
+    Ok(result)
+}
+
+fn area_environment_cards(
+    cetus: RawAreaCycle,
+    vallis: RawAreaCycle,
+    cambion: RawAreaCycle,
+    zariman: RawAreaCycle,
+    duviri: RawAreaCycle,
+    now: DateTime<Utc>,
+) -> Result<Vec<TimedContent>, TimedSourceError> {
+    Ok(vec![
+        area_environment_card(cetus, now, "cetus", "Cetus", &["day", "night"])?,
+        area_environment_card(vallis, now, "vallis", "Orb Vallis", &["warm", "cold"])?,
+        area_environment_card(cambion, now, "cambion", "Cambion Drift", &["fass", "vome"])?,
+        area_environment_card(zariman, now, "zariman", "Zariman", &["corpus", "grineer"])?,
+        area_environment_card(
+            duviri,
+            now,
+            "duviri",
+            "Duviri",
+            &["sorrow", "fear", "joy", "anger", "envy"],
+        )?,
+    ])
+}
+
+fn validate_reward_drops(drops: &[RawRewardDrop], field: &str) -> Result<(), TimedSourceError> {
+    for drop in drops {
+        if drop.item.trim().is_empty()
+            || drop.rarity.trim().is_empty()
+            || !drop.chance.is_finite()
+            || !(0.0..=100.0).contains(&drop.chance)
+            || drop.count == 0
+        {
+            return Err(TimedSourceError::failed(format!(
+                "WFCD {field} contains a malformed reward drop"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn event_stage(
+    index: usize,
+    job: RawEventJob,
+    event_activation: DateTime<Utc>,
+    event_expiry: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<Option<TimedStage>, TimedSourceError> {
+    let raw_expiry = job
+        .expiry
+        .as_deref()
+        .ok_or_else(|| TimedSourceError::failed("WFCD active area event job is missing expiry"))?;
+    let expiry = parse_iso(raw_expiry, "events[].jobs[].expiry")?;
+    validate_window(event_activation, expiry, "events[].jobs[]")?;
+    if expiry > event_expiry {
+        return Err(TimedSourceError::failed(
+            "WFCD area event job expiry exceeds its parent event expiry",
+        ));
+    }
+    if expiry <= now {
+        return Ok(None);
+    }
+
+    require_text(&job.r#type, "events[].jobs[].type")?;
+    if job.enemy_levels.len() != 2 || job.enemy_levels[0] > job.enemy_levels[1] {
+        return Err(TimedSourceError::failed(
+            "WFCD area event job enemyLevels must be an ordered pair",
+        ));
+    }
+    if job.standing_stages.is_empty() {
+        return Err(TimedSourceError::failed(
+            "WFCD area event job standingStages is empty",
+        ));
+    }
+    if job.reward_pool.is_empty() || job.reward_pool.iter().any(|item| item.trim().is_empty()) {
+        return Err(TimedSourceError::failed(
+            "WFCD area event job rewardPool is empty or malformed",
+        ));
+    }
+    validate_reward_drops(&job.reward_pool_drops, "area event job")?;
+
+    let order = u32::try_from(index + 1)
+        .map_err(|_| TimedSourceError::failed("WFCD area event job count exceeds u32"))?;
+    let mut stage = TimedStage::new(order, job.r#type);
+    stage.node = job.location_tag.filter(|value| !value.trim().is_empty());
+    stage.enemy_levels = job.enemy_levels;
+    stage.standing_stages = job.standing_stages;
+    stage.min_mr = (job.min_mr > 0).then_some(job.min_mr);
+    stage.time_bound = job.time_bound.filter(|value| !value.trim().is_empty());
+    stage.reward_pool = job.reward_pool;
+    stage.reward_drops = job
+        .reward_pool_drops
+        .into_iter()
+        .map(|drop| TimedRewardDrop {
+            item: drop.item,
+            rarity: drop.rarity,
+            chance_percent: drop.chance,
+            count: drop.count,
+        })
+        .collect();
+    Ok(Some(stage))
+}
+
+fn area_event_identity(tag: &str) -> Option<(&'static str, &'static str, u8)> {
+    match tag {
+        "HeatFissure" => Some(("heat-fissure", "Thermia Fractures", 0)),
+        "GhoulEmergence" => Some(("ghoul-emergence", "Ghoul Purge", 1)),
+        "InfestedPlains" => Some(("infested-plains", "Plague Star", 2)),
+        _ => None,
+    }
+}
+
+fn area_event_cards(
+    events: Vec<Value>,
+    now: DateTime<Utc>,
+) -> Result<Vec<TimedContent>, TimedSourceError> {
+    let mut cards = vec![];
+    for raw_event in events {
+        let Some(tag) = raw_event
+            .get("tag")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let Some((variant, fallback_title, rank)) = area_event_identity(&tag) else {
+            continue;
+        };
+        let raw_expiry = raw_event
+            .get("expiry")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                TimedSourceError::failed(format!("WFCD active area event {tag} is missing expiry"))
+            })?;
+        let expiry = parse_iso(raw_expiry, "events[].expiry")?;
+        if expiry <= now {
+            continue;
+        }
+        let raw_activation = raw_event
+            .get("activation")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                TimedSourceError::failed(format!(
+                    "WFCD active area event {tag} is missing activation"
+                ))
+            })?;
+        let activation = parse_iso(raw_activation, "events[].activation")?;
+        validate_window(activation, expiry, "events[]")?;
+        if activation > now {
+            continue;
+        }
+
+        let event: RawAreaEvent = serde_json::from_value(raw_event).map_err(|error| {
+            TimedSourceError::failed(format!("WFCD active area event {tag} is invalid: {error}"))
+        })?;
+
+        let mut stages = vec![];
+        for raw_job in event.jobs {
+            let job: RawEventJob = serde_json::from_value(raw_job).map_err(|error| {
+                TimedSourceError::failed(format!(
+                    "WFCD active area event {tag} job is invalid: {error}"
+                ))
+            })?;
+            if let Some(stage) = event_stage(stages.len(), job, activation, expiry, now)? {
+                stages.push(stage);
+            }
+        }
+        let title = if event.description.trim().is_empty() {
+            fallback_title.to_string()
+        } else {
+            event.description
+        };
+        let subtitle = event.tooltip.filter(|value| !value.trim().is_empty());
+        let id = if event.id.trim().is_empty() {
+            format!("area-event:{tag}:{}", activation.timestamp_millis())
+        } else {
+            event.id
+        };
+        let mut result = card(
+            id,
+            "area-event",
+            title,
+            subtitle,
+            activation,
+            expiry,
+            stages,
+        );
+        result.variant = Some(variant.to_string());
+        cards.push((rank, result));
+    }
+    cards.sort_by_key(|(rank, _)| *rank);
+    Ok(cards.into_iter().map(|(_, card)| card).collect())
+}
+
+fn slug(value: &str) -> String {
+    let mut result = String::new();
+    let mut separator_pending = false;
+    for character in value.trim().chars() {
+        if character.is_alphanumeric() {
+            if separator_pending && !result.is_empty() {
+                result.push('-');
+            }
+            result.extend(character.to_lowercase());
+            separator_pending = false;
+        } else if !result.is_empty() {
+            separator_pending = true;
+        }
+    }
+    result
+}
+
+fn area_mission_variant(syndicate: &str, syndicate_key: &str) -> String {
+    for value in [syndicate_key, syndicate] {
+        match slug(value).as_str() {
+            "ostrons" | "cetussyndicate" => return "ostrons".to_string(),
+            "solaris-united" | "solarissyndicate" => {
+                return "solaris-united".to_string();
+            }
+            "entrati" | "entratisyndicate" => return "entrati".to_string(),
+            _ => {}
+        }
+    }
+    let raw = if syndicate_key.trim().is_empty() {
+        syndicate
+    } else {
+        syndicate_key
+    };
+    let raw_slug = slug(raw);
+    if raw_slug.is_empty() {
+        "syndicate".to_string()
+    } else {
+        raw_slug
+    }
+}
+
 fn sortie_card(
     raw: RawSortie,
     now: DateTime<Utc>,
@@ -391,6 +759,7 @@ fn syndicate_cards(
             continue;
         }
         let title = display_value(&mission.syndicate, &mission.syndicate_key, "Syndicate");
+        let area_variant = area_mission_variant(&mission.syndicate, &mission.syndicate_key);
         let base_id = if mission.id.is_empty() {
             format!(
                 "syndicate:{}:{}",
@@ -445,7 +814,7 @@ fn syndicate_cards(
                     .enumerate()
                     .map(|(index, job)| area_stage(index, job))
                     .collect::<Result<_, _>>()?;
-                area_missions.push(card(
+                let mut area_card = card(
                     format!("{base_id}:area:{}", job_expiry.timestamp_millis()),
                     "area-mission",
                     title.clone(),
@@ -453,7 +822,9 @@ fn syndicate_cards(
                     activation,
                     job_expiry,
                     stages,
-                ));
+                );
+                area_card.variant = Some(area_variant.clone());
+                area_missions.push(area_card);
             }
         }
     }
@@ -588,7 +959,18 @@ pub fn parse_wfcd_json(
 ) -> Result<WfcdTimedContent, TimedSourceError> {
     let value: Value = serde_json::from_str(body)
         .map_err(|error| TimedSourceError::failed(format!("WFCD JSON: {error}")))?;
-    for field in ["sortie", "archonHunt", "syndicateMissions", "archimedeas"] {
+    for field in [
+        "sortie",
+        "archonHunt",
+        "syndicateMissions",
+        "cetusCycle",
+        "vallisCycle",
+        "cambionCycle",
+        "zarimanCycle",
+        "duviriCycle",
+        "events",
+        "archimedeas",
+    ] {
         if value.get(field).is_none() {
             return Err(TimedSourceError::failed(format!(
                 "WFCD JSON is missing {field}"
@@ -597,6 +979,15 @@ pub fn parse_wfcd_json(
     }
     let raw: RawWfcdWorldstate = serde_json::from_value(value)
         .map_err(|error| TimedSourceError::failed(format!("WFCD JSON: {error}")))?;
+    let area_environments = area_environment_cards(
+        raw.cetus_cycle,
+        raw.vallis_cycle,
+        raw.cambion_cycle,
+        raw.zariman_cycle,
+        raw.duviri_cycle,
+        now,
+    )?;
+    let area_events = area_event_cards(raw.events, now)?;
     let (syndicates, area_missions) = syndicate_cards(raw.syndicate_missions, now)?;
     let sortie = raw
         .sortie
@@ -617,6 +1008,8 @@ pub fn parse_wfcd_json(
         archon,
         syndicates,
         area_missions,
+        area_environments,
+        area_events,
         archimedea: archimedea_cards(raw.archimedeas, now)?,
     })
 }

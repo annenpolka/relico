@@ -108,6 +108,18 @@ pub fn update_tray(app: &AppHandle, cfg: &AppConfig, snap: &StatusSnapshot) {
     });
 }
 
+/// WebView側がlocaleから設定するdocument.titleへ、WDIOが参照するnative titleを揃える。
+/// title更新失敗は常駐・設定保存を止めず、次の設定更新または再起動で再試行する。
+pub(crate) fn sync_window_title(app: &AppHandle, cfg: &AppConfig) {
+    let Some(window) = app.get_webview_window("main") else {
+        eprintln!("main console window not found while synchronizing title");
+        return;
+    };
+    if let Err(error) = window.set_title(&i18n::text(cfg.locale, "app.title")) {
+        eprintln!("window title synchronization failed: {error}");
+    }
+}
+
 fn toggle_pause(app: &AppHandle) {
     let state = app.state::<AppState>();
     let mut cfg = state.cfg_tx.borrow().clone();
@@ -191,6 +203,7 @@ pub fn run() {
             let notified_path = config_dir.join("notified.json");
 
             let cfg = AppConfig::load(&config_path);
+            sync_window_title(app.handle(), &cfg);
             let (cfg_tx, cfg_rx) = watch::channel(cfg.clone());
             let poller_state = Arc::new(Mutex::new(PollerState::new(
                 NotifiedSet::load(&notified_path),

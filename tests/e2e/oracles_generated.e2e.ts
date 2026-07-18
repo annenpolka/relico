@@ -7,7 +7,12 @@
 import { $, browser, expect } from "@wdio/globals";
 
 async function waitForInit(): Promise<void> {
-  await browser.waitUntil(async () => (await $("#sb-watch").getText()).length > 0, {
+  // title同期前に$()/findElementを呼ぶとtauri-serviceのauto-focusが旧titleを探索するため、
+  // 初期ready判定はfocus hook対象外のexecuteだけで行う。
+  await browser.waitUntil(async () => await browser.execute(() => {
+    const watch = document.querySelector("#sb-watch");
+    return document.readyState === "complete" && Boolean(watch?.textContent?.trim());
+  }), {
     timeout: 20000,
     timeoutMsg: "コンソールが初期化されない",
   });
@@ -57,25 +62,40 @@ describe("E2E-002", () => {
   });
 });
 
-// E2E-003: 実アプリで表示言語をzh-Hansへ変更すると、本物のset_config完了後にhtml langとcritical UIが切り替わり、再読込後も実get_configからzh-Hansが復元される(WDIO Tauri E2E)
+// E2E-003: 実アプリの起動時ja、en変更後、zh-Hans変更後、再読込後でdocument.titleとmain native window titleが各localeのapp.titleへ同期し、表示言語は本物のset_config完了後にhtml langとcritical UIへ反映され、再読込後も実get_configからzh-Hansが復元される(WDIO Tauri E2E)
 describe("E2E-003", () => {
   it("locale round-trips through real config IPC", async () => {
+    const expectSynchronizedTitle = async (expected: string) => {
+      const documentTitle = await browser.execute(() => document.title);
+      const states = (await browser.tauri.execute(({ core }) =>
+        core.invoke("plugin:wdio|get_window_states"),
+      )) as Array<{ label: string; title: string }>;
+      expect(documentTitle).toBe(expected);
+      expect(states.find((state) => state.label === "main")?.title).toBe(expected);
+    };
+    const selectLocale = async (locale: "en" | "zh-Hans") => {
+      await $("#locale-select").selectByAttribute("value", locale);
+      // tauri-plugin-wdioのWebKit select helperは値だけを変えてchangeを発火しないため、
+      // rendererで検証済みのDOM結線を明示発火し、その先の実set_config往復をここで検査する。
+      await browser.execute((nextLocale) => {
+        const select = document.querySelector("#locale-select") as HTMLSelectElement | null;
+        if (!select) throw new Error("locale-select not found");
+        select.value = nextLocale;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      }, locale);
+      await browser.waitUntil(
+        async () => (await browser.execute(() => document.documentElement.lang)) === locale,
+        { timeoutMsg: "locale変更が実set_config完了後に反映されない" },
+      );
+    };
+
     await waitForInit();
+    await expectSynchronizedTitle("RELICO — 時限コンテンツ");
     await $("#delivery-tab").click();
-    await $("#locale-select").selectByAttribute("value", "zh-Hans");
-    // tauri-plugin-wdioのWebKit select helperは値だけを変えてchangeを発火しないため、
-    // rendererで検証済みのDOM結線を明示発火し、その先の実set_config往復をここで検査する。
-    await browser.execute(() => {
-      const select = document.querySelector("#locale-select") as HTMLSelectElement | null;
-      if (!select) throw new Error("locale-select not found");
-      select.value = "zh-Hans";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    // html langの切替はset_config成功後に行う契約なので、ここまで待てば永続化も完了している。
-    await browser.waitUntil(
-      async () => (await $("html").getAttribute("lang")) === "zh-Hans",
-      { timeoutMsg: "locale変更が実set_config完了後に反映されない" },
-    );
+    await selectLocale("en");
+    await expectSynchronizedTitle("RELICO — TIMED CONTENT");
+    await selectLocale("zh-Hans");
+    await expectSynchronizedTitle("RELICO — 限时内容");
     await expect($("#tab-fissures")).toHaveText("裂隙");
 
     await browser.refresh();
@@ -83,5 +103,6 @@ describe("E2E-003", () => {
     await expect($("html")).toHaveAttribute("lang", "zh-Hans");
     await expect($("#locale-select")).toHaveValue("zh-Hans");
     await expect($("#tab-fissures")).toHaveText("裂隙");
+    await expectSynchronizedTitle("RELICO — 限时内容");
   });
 });

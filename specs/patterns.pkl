@@ -288,7 +288,7 @@ class AppConfigCompat extends Clause {
 class TimedContentFixture extends Clause {
   pattern = "timed_content_fixture"
   label = "example-tested"
-  scenario: "wire_shape" | "arbitration_join" | "oracle_bounties" | "circuit" | "rich_details"
+  scenario: "wire_shape" | "arbitration_join" | "oracle_bounties" | "circuit" | "rich_details" | "area_sources"
 }
 
 /// 通知テストの結果表示・payload・raw dev時の案内を、固定した具体例で検証する。
@@ -324,6 +324,15 @@ class RendererGlyphs extends Clause {
   pattern = "renderer_glyphs"
   label = "example-tested"
   scenario: "glyph_known_values" | "planet_proxima_view"
+}
+
+/// 開発・検証toolingの実行時契約をbun testで検査する。
+/// アプリ本体の挙動や外部OS UIの証明には使わない。
+/// 生成先: tests/unit/oracles_generated.test.ts
+class ToolingScenario extends Clause {
+  pattern = "tooling_scenario"
+  label = "example-tested"
+  scenario: "e2e_targeted_cleanup"
 }
 
 /// Tauri IPCをmockしたWebKit renderer統合テスト(Playwright)。

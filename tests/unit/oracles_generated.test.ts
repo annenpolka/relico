@@ -3,7 +3,44 @@
 // 実行: bun test tests/unit
 
 import { expect, test } from "bun:test";
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { candidateGlyphHtml, glyphHtml, planetForFissure, type GlyphKind } from "../../src/icons";
+import { cleanupOwnedListener, leaseHolderPids, processExists } from "../../tools/e2e-process";
+
+const E2E_PROCESS_FIXTURE = "\nconst fs = require(\"node:fs\");\nconst net = require(\"node:net\");\nif (process.env.RELICO_TEST_IGNORE_TERM === \"1\") {\n  process.on(\"SIGTERM\", () => process.stdout.write(\"term\\n\"));\n}\nif (process.env.RELICO_TEST_LEASE) {\n  globalThis.__relicoLeaseFd = fs.openSync(process.env.RELICO_TEST_LEASE, \"r\");\n}\nif (process.env.RELICO_TEST_LISTEN === \"1\") {\n  const server = net.createServer();\n  server.listen(0, \"127.0.0.1\", () => {\n    process.stdout.write(String(server.address().port) + \"\\n\");\n  });\n} else {\n  process.stdout.write(\"ready\\n\");\n}\nsetInterval(() => {}, 1000);\n";
+
+async function spawnFixture(options: {
+  listen?: boolean;
+  ignoreTerm?: boolean;
+  leasePath?: string;
+}): Promise<{ child: ChildProcess; port: number | null }> {
+  const child = spawn(process.execPath, ["-e", E2E_PROCESS_FIXTURE], {
+    env: {
+      ...process.env,
+      RELICO_TEST_IGNORE_TERM: options.ignoreTerm ? "1" : "0",
+      RELICO_TEST_LISTEN: options.listen ? "1" : "0",
+      RELICO_TEST_LEASE: options.leasePath ?? "",
+    },
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const [chunk] = (await once(child.stdout!, "data")) as [Buffer];
+  const ready = chunk.toString().trim();
+  return { child, port: options.listen ? Number(ready) : null };
+}
+
+async function stopFixture(child?: ChildProcess): Promise<void> {
+  if (!child) return;
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
+  child.kill("SIGKILL");
+  await Promise.race([
+    once(child, "exit"),
+    new Promise((resolve) => setTimeout(resolve, 1_000)),
+  ]);
+}
 
 // ICN-001: 既知のTier・惑星・ミッション・ファクション・難易度・VOID嵐・アクション値には汎用と区別できる専用SVGグリフが割り当てられ、未知値はカテゴリ別の汎用グリフへフォールバックし、グリフは装飾(aria-hidden)である
 test("ICN-001 icn_001", () => {
@@ -44,4 +81,133 @@ test("ICN-002 icn_002", () => {
   expect(planetForFissure("  Earth  ", true)).toBe("Earth Proxima");
   expect(planetForFissure(null, true)).toBe("");
   expect(planetForFissure(null, false)).toBe("");
+});
+
+// TLG-001: just e2eは単一のTAURI_WEBDRIVER_PORTとE2E専用lease fileを実行前とEXIT時に検査し、lease inodeを開いたtarget.noindex/debug/relicoのcanonical executable完全一致だけをTERM、期限後も同じPID・実行ファイル・lease identityならKILLして回収する。portのLISTEN前またはlistener終了後でもlease holderを回収し、leaseなしの同port listenerは拒否する。holder/listenerなしは成功し、別port・別leaseの同一実行ファイルと同portの別実行ファイルは終了しない。basenameによるpkill/killallは使わない
+test("TLG-001 tlg_001", async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "relico-e2e-cleanup-"));
+  const leasePath = join(tempRoot, "owned.lease");
+  const otherLeasePath = join(tempRoot, "other.lease");
+  writeFileSync(leasePath, "owned");
+  writeFileSync(otherLeasePath, "other");
+
+  let foreign: ChildProcess | undefined;
+  let survivor: ChildProcess | undefined;
+  let owned: ChildProcess | undefined;
+  let idle: ChildProcess | undefined;
+  let stubborn: ChildProcess | undefined;
+  let changed: ChildProcess | undefined;
+  try {
+    const foreignFixture = await spawnFixture({ listen: true });
+    foreign = foreignFixture.child;
+    const survivorFixture = await spawnFixture({ listen: true, leasePath: otherLeasePath });
+    survivor = survivorFixture.child;
+    expect(processExists(foreign.pid!)).toBe(true);
+    expect(processExists(survivor.pid!)).toBe(true);
+
+    // leaseを持たない同port listenerはfail-closedで拒否し、終了しない。
+    await expect(
+      cleanupOwnedListener({
+        port: foreignFixture.port!,
+        expectedExecutable: process.execPath,
+        leasePath,
+        graceMs: 200,
+      }),
+    ).rejects.toThrow(/refusing to terminate foreign listener/);
+    expect(processExists(foreign.pid!)).toBe(true);
+
+    await stopFixture(foreign);
+    const ownedFixture = await spawnFixture({ listen: true, leasePath });
+    owned = ownedFixture.child;
+    const graceful = await cleanupOwnedListener({
+      port: ownedFixture.port!,
+      expectedExecutable: process.execPath,
+      leasePath,
+      graceMs: 1_000,
+    });
+    expect(graceful.terminatedPids).toEqual([owned.pid]);
+    expect(graceful.forcedPids).toEqual([]);
+    expect(processExists(owned.pid!)).toBe(false);
+    // 同じ実行ファイルでも別port・別leaseなら対象にしない。
+    expect(processExists(survivor.pid!)).toBe(true);
+
+    // holder/listenerなしは冪等なno-op。
+    const noOp = await cleanupOwnedListener({
+      port: ownedFixture.port!,
+      expectedExecutable: process.execPath,
+      leasePath,
+      graceMs: 200,
+    });
+    expect(noOp).toEqual({ terminatedPids: [], forcedPids: [] });
+
+    // portをまだLISTENしていなくても、lease holderを回収する。
+    const idleFixture = await spawnFixture({ leasePath });
+    idle = idleFixture.child;
+    const preBind = await cleanupOwnedListener({
+      port: ownedFixture.port!,
+      expectedExecutable: process.execPath,
+      leasePath,
+      graceMs: 1_000,
+    });
+    expect(preBind.terminatedPids).toEqual([idle.pid]);
+    expect(preBind.forcedPids).toEqual([]);
+    expect(processExists(idle.pid!)).toBe(false);
+
+    // TERMを無視する対象だけ、identity再照合後のKILLへ進む。
+    const stubbornFixture = await spawnFixture({ ignoreTerm: true, leasePath });
+    stubborn = stubbornFixture.child;
+    const forced = await cleanupOwnedListener({
+      port: ownedFixture.port!,
+      expectedExecutable: process.execPath,
+      leasePath,
+      graceMs: 100,
+    });
+    expect(forced.terminatedPids).toEqual([stubborn.pid]);
+    expect(forced.forcedPids).toEqual([stubborn.pid]);
+    expect(processExists(stubborn.pid!)).toBe(false);
+
+    // TERM後にlease inodeが変わったPIDへはKILLを送らず、cleanup自体を失敗させる。
+    const changedFixture = await spawnFixture({ ignoreTerm: true, leasePath });
+    changed = changedFixture.child;
+    const termSeen = once(changed.stdout!, "data");
+    const changedCleanup = cleanupOwnedListener({
+      port: ownedFixture.port!,
+      expectedExecutable: process.execPath,
+      leasePath,
+      graceMs: 500,
+    });
+    await termSeen;
+    renameSync(leasePath, leasePath + ".previous");
+    writeFileSync(leasePath, "replacement");
+    await expect(changedCleanup).rejects.toThrow(/ownership identity changed/);
+    expect(processExists(changed.pid!)).toBe(true);
+    expect(leaseHolderPids(leasePath)).not.toContain(changed.pid!);
+  } finally {
+    await Promise.all([
+      stopFixture(foreign),
+      stopFixture(survivor),
+      stopFixture(owned),
+      stopFixture(idle),
+      stopFixture(stubborn),
+      stopFixture(changed),
+    ]);
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+
+  const justfile = readFileSync(new URL("../../justfile", import.meta.url), "utf8");
+  const wdioConfig = readFileSync(new URL("../../wdio.conf.ts", import.meta.url), "utf8");
+  const mainRs = readFileSync(new URL("../../src-tauri/src/main.rs", import.meta.url), "utf8");
+  expect(justfile).toContain("tools/e2e-process.ts cleanup");
+  expect(justfile).toContain("trap cleanup EXIT");
+  expect(justfile).toContain("src-tauri/target.noindex");
+  expect(justfile).toContain("e2e_port=4445");
+  expect(justfile).toContain('TAURI_WEBDRIVER_PORT="$e2e_port"');
+  expect(justfile).toContain('RELICO_E2E_LEASE_PATH="$e2e_lease"');
+  expect(justfile).toContain("cap_status");
+  expect(justfile).toContain("lease_status");
+  expect(wdioConfig).toContain("embeddedPort: e2ePort");
+  expect(wdioConfig).not.toContain("4445");
+  expect(mainRs).toContain("RELICO_E2E_LEASE_PATH");
+  expect(mainRs).toContain("std::fs::File::open");
+  expect(justfile).not.toMatch(/\b(?:pkill|killall)\b/);
 });

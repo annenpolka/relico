@@ -34,6 +34,7 @@ fn persist(app: &AppHandle, state: &State<AppState>, mut cfg: AppConfig) -> Resu
     cfg.save(&state.config_path).map_err(|error| {
         localized_error(locale, "error.configSave", "error", &error.to_string())
     })?;
+    crate::sync_window_title(app, &cfg);
     let _ = tauri::Emitter::emit(app, "config", &cfg);
     state.cfg_tx.send(cfg.clone()).map_err(|error| {
         localized_error(locale, "error.configBroadcast", "error", &error.to_string())

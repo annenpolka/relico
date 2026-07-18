@@ -61,6 +61,8 @@ export type TimedSourceId =
   | "de-worldstate"
   | "browse-wf-arbitration-schedule"
   | "browse-wf-bounty-cycle"
+  | "browse-wf-location-bounties"
+  | "browse-wf-export-bounties"
   | "browse-wf-regions"
   | "browse-wf-challenges"
   | "browse-wf-dictionary-en"
@@ -87,6 +89,7 @@ export interface TimedSourceStatuses {
   deDescendia: TimedSourceStatus;
   deCircuit: TimedSourceStatus;
   browseWfBounties: TimedSourceStatus;
+  browseWfLocationBounties: TimedSourceStatus;
   browseWfArbitration: TimedSourceStatus;
 }
 
@@ -153,8 +156,11 @@ export interface TimedContentSnapshot {
   sortie: TimedContentCard[];
   archon: TimedContentCard[];
   syndicates: TimedContentCard[];
+  areaEnvironments: TimedContentCard[];
   areaMissions: TimedContentCard[];
+  areaObjectives: TimedContentCard[];
   bounties: TimedContentCard[];
+  areaEvents: TimedContentCard[];
   circuit: TimedContentCard[];
   archimedea: TimedContentCard[];
   descendia: TimedContentCard[];

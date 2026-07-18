@@ -7,6 +7,7 @@ use serde::Deserialize;
 use super::{
     TimedContent, TimedMetadata, TimedProvenance, TimedSourceError, TimedSourceId, TimedSourceKind,
     TimedStage, TimedTemporalStatus, BROWSE_WF_ARBITRATION_URL, BROWSE_WF_BOUNTY_URL,
+    BROWSE_WF_LOCATION_BOUNTIES_URL,
 };
 
 const REQUIRED_BOUNTY_TAGS: [(&str, &str, &str); 3] = [
@@ -14,6 +15,14 @@ const REQUIRED_BOUNTY_TAGS: [(&str, &str, &str); 3] = [
     ("EntratiLabSyndicate", "cavia", "Cavia"),
     ("HexSyndicate", "hex", "The Hex"),
 ];
+
+const REQUIRED_LOCATION_BOUNTY_TAGS: [(&str, &str, &str); 3] = [
+    ("CetusSyndicate", "ostrons", "Ostrons"),
+    ("SolarisSyndicate", "solaris-united", "Solaris United"),
+    ("EntratiSyndicate", "entrati", "Entrati"),
+];
+
+const LOCATION_BOUNTY_PATH_PREFIX: &str = "/Lotus/Types/Gameplay/";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArbitrationSlot {
@@ -84,6 +93,18 @@ pub(crate) struct BountyAssets {
     shared: Arc<SharedCommunityAssets>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct CommunityBounty {
+    name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct LocationBountyAssets {
+    bounties: BTreeMap<String, CommunityBounty>,
+    dictionary: BTreeMap<String, String>,
+}
+
 /// Compatibility wrapper used by the public fixture API. Runtime polling keeps
 /// these two validated asset groups in independent caches.
 #[derive(Debug, Clone)]
@@ -117,6 +138,23 @@ pub struct BountyCycle {
     pub vault_rot: String,
     pub zariman_faction: String,
     pub bounties: BTreeMap<String, Vec<BountyEntry>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawLocationBountyCycle {
+    expiry: i64,
+    #[serde(rename = "CetusSyndicate")]
+    cetus: BTreeMap<String, Vec<String>>,
+    #[serde(rename = "SolarisSyndicate")]
+    solaris: BTreeMap<String, Vec<String>>,
+    #[serde(rename = "EntratiSyndicate")]
+    entrati: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LocationBountyCycle {
+    pub(crate) expiry: DateTime<Utc>,
+    locations: BTreeMap<String, BTreeMap<String, Vec<String>>>,
 }
 
 pub fn parse_arbitration_schedule(body: &str) -> Result<ArbitrationSchedule, TimedSourceError> {
@@ -336,6 +374,27 @@ pub(crate) fn parse_bounty_assets(
     Ok(BountyAssets { challenges, shared })
 }
 
+pub fn parse_location_bounty_assets(
+    export_body: &str,
+    dictionary_body: &str,
+) -> Result<LocationBountyAssets, TimedSourceError> {
+    let bounties: BTreeMap<String, CommunityBounty> = serde_json::from_str(export_body)
+        .map_err(|error| TimedSourceError::failed(format!("ExportBounties JSON: {error}")))?;
+    let dictionary: BTreeMap<String, String> = serde_json::from_str(dictionary_body)
+        .map_err(|error| TimedSourceError::failed(format!("dict.en JSON: {error}")))?;
+
+    if bounties.is_empty() || dictionary.is_empty() {
+        return Err(TimedSourceError::failed(
+            "browse.wf location bounty asset contains an empty root object",
+        ));
+    }
+
+    Ok(LocationBountyAssets {
+        bounties,
+        dictionary,
+    })
+}
+
 pub fn parse_bounty_cycle_json(
     body: &str,
     now: DateTime<Utc>,
@@ -387,6 +446,69 @@ pub fn parse_bounty_cycle_json(
         zariman_faction: raw.zariman_faction,
         bounties: raw.bounties,
     })
+}
+
+pub(crate) fn parse_location_bounty_cycle_json(
+    body: &str,
+    now: DateTime<Utc>,
+) -> Result<LocationBountyCycle, TimedSourceError> {
+    let raw: RawLocationBountyCycle = serde_json::from_str(body)
+        .map_err(|error| TimedSourceError::failed(format!("location-bounties JSON: {error}")))?;
+    let expiry = DateTime::from_timestamp_millis(raw.expiry).ok_or_else(|| {
+        TimedSourceError::failed("location-bounties expiry is outside DateTime range")
+    })?;
+    if expiry <= now {
+        return Err(TimedSourceError::failed(format!(
+            "location-bounties payload expired at {expiry}"
+        )));
+    }
+
+    let mut locations = BTreeMap::new();
+    for (tag, entries) in [
+        ("CetusSyndicate", raw.cetus),
+        ("SolarisSyndicate", raw.solaris),
+        ("EntratiSyndicate", raw.entrati),
+    ] {
+        if entries.is_empty() {
+            return Err(TimedSourceError::failed(format!(
+                "location-bounties {tag} is empty"
+            )));
+        }
+        for (location, paths) in &entries {
+            if location.trim().is_empty() || location.trim() != location {
+                return Err(TimedSourceError::failed(format!(
+                    "location-bounties {tag} contains an invalid location tag"
+                )));
+            }
+            if paths.is_empty() {
+                return Err(TimedSourceError::failed(format!(
+                    "location-bounties {tag}.{location} is empty"
+                )));
+            }
+
+            let mut seen = BTreeSet::new();
+            for (index, path) in paths.iter().enumerate() {
+                if path.trim() != path
+                    || !path.starts_with(LOCATION_BOUNTY_PATH_PREFIX)
+                    || path.ends_with('/')
+                    || path.contains(char::is_whitespace)
+                    || raw_leaf(path).is_empty()
+                {
+                    return Err(TimedSourceError::failed(format!(
+                        "location-bounties {tag}.{location}[{index}] has an invalid path"
+                    )));
+                }
+                if !seen.insert(path) {
+                    return Err(TimedSourceError::failed(format!(
+                        "location-bounties {tag}.{location} contains duplicate path {path}"
+                    )));
+                }
+            }
+        }
+        locations.insert(tag.to_string(), entries);
+    }
+
+    Ok(LocationBountyCycle { expiry, locations })
 }
 
 pub fn arbitration_card(
@@ -492,6 +614,15 @@ pub fn parse_bounty_cards(
     assets: &CommunityAssets,
 ) -> Result<Vec<TimedContent>, TimedSourceError> {
     parse_bounty_cards_from_assets(body, now, &assets.bounties)
+}
+
+pub fn parse_location_bounty_cards(
+    body: &str,
+    now: DateTime<Utc>,
+    assets: &LocationBountyAssets,
+) -> Result<Vec<TimedContent>, TimedSourceError> {
+    let cycle = parse_location_bounty_cycle_json(body, now)?;
+    location_bounty_cards_from_cycle(cycle, assets)
 }
 
 pub(crate) fn parse_bounty_cards_from_assets(
@@ -608,6 +739,86 @@ pub(crate) fn bounty_cards_from_cycle(
     }
 
     Ok(cards)
+}
+
+pub(crate) fn location_bounty_cards_from_cycle(
+    cycle: LocationBountyCycle,
+    assets: &LocationBountyAssets,
+) -> Result<Vec<TimedContent>, TimedSourceError> {
+    let mut cards = Vec::with_capacity(REQUIRED_LOCATION_BOUNTY_TAGS.len());
+
+    for (tag, variant, title) in REQUIRED_LOCATION_BOUNTY_TAGS {
+        let locations = cycle.locations.get(tag).ok_or_else(|| {
+            TimedSourceError::failed(format!("location-bounties is missing {tag}"))
+        })?;
+        let mut stages = Vec::with_capacity(locations.len());
+        for (index, (location, paths)) in locations.iter().enumerate() {
+            let order = u32::try_from(index + 1).map_err(|_| {
+                TimedSourceError::failed("location-bounties location count exceeds u32")
+            })?;
+            let mut stage = TimedStage::new(order, location.clone());
+            stage.choices = paths
+                .iter()
+                .map(|path| resolve_location_bounty_name(assets, path))
+                .collect();
+            stages.push(stage);
+        }
+
+        cards.push(TimedContent {
+            id: format!(
+                "area-objective:{variant}:{}",
+                cycle.expiry.timestamp_millis()
+            ),
+            kind: "area-objective".to_string(),
+            variant: Some(variant.to_string()),
+            title: title.to_string(),
+            subtitle: None,
+            activation: None,
+            expiry: Some(cycle.expiry),
+            temporal_status: TimedTemporalStatus::Active,
+            provenance: TimedProvenance {
+                kind: TimedSourceKind::CommunityLive,
+                contributors: vec![
+                    TimedSourceId::BrowseWfLocationBounties,
+                    TimedSourceId::BrowseWfExportBounties,
+                    TimedSourceId::BrowseWfDictionaryEn,
+                ],
+            },
+            source_id: TimedSourceId::BrowseWfLocationBounties,
+            source_name: "browse.wf".to_string(),
+            source_url: Some(BROWSE_WF_LOCATION_BOUNTIES_URL.to_string()),
+            metadata: vec![],
+            personal_modifiers: vec![],
+            stages,
+        });
+    }
+
+    Ok(cards)
+}
+
+fn resolve_location_bounty_name(assets: &LocationBountyAssets, path: &str) -> String {
+    let Some(bounty) = assets.bounties.get(path) else {
+        return raw_leaf(path);
+    };
+    let name_key = bounty.name.trim();
+    if name_key.is_empty() {
+        return raw_leaf(path);
+    }
+    assets
+        .dictionary
+        .get(name_key)
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| normalize_display_text(value))
+        .unwrap_or_else(|| raw_leaf(name_key))
+}
+
+fn raw_leaf(value: &str) -> String {
+    value
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn resolve_text(assets: &SharedCommunityAssets, key: &str) -> String {
@@ -772,6 +983,47 @@ mod tests {
             }
         })
         .to_string()
+    }
+
+    fn location_bounty_asset_fixture() -> LocationBountyAssets {
+        parse_location_bounty_assets(
+            &json!({
+                "/Lotus/Types/Gameplay/Eidolon/Jobs/KnownCetus": {
+                    "name": "/Lotus/Language/Jobs/KnownTitle"
+                },
+                "/Lotus/Types/Gameplay/InfestedMicroplanet/Jobs/MissingDictionary": {
+                    "name": "/Lotus/Language/Jobs/MissingTitle"
+                }
+            })
+            .to_string(),
+            &json!({
+                "/Lotus/Language/Jobs/KnownTitle": "KNOWN BOUNTY"
+            })
+            .to_string(),
+        )
+        .unwrap()
+    }
+
+    fn location_bounty_fixture(expiry_millis: i64) -> serde_json::Value {
+        json!({
+            "expiry": expiry_millis,
+            "CetusSyndicate": {
+                "TentA": [
+                    "/Lotus/Types/Gameplay/Eidolon/Jobs/KnownCetus",
+                    "/Lotus/Types/Gameplay/Eidolon/Jobs/UnknownCetus"
+                ]
+            },
+            "SolarisSyndicate": {
+                "BountyNefsHead": [
+                    "/Lotus/Types/Gameplay/Venus/Jobs/KnownSolaris"
+                ]
+            },
+            "EntratiSyndicate": {
+                "ChamberA": [
+                    "/Lotus/Types/Gameplay/InfestedMicroplanet/Jobs/MissingDictionary"
+                ]
+            }
+        })
     }
 
     #[test]
@@ -968,5 +1220,76 @@ mod tests {
             .iter()
             .flat_map(|card| &card.stages)
             .all(|stage| stage.title == "ClanNode7"));
+    }
+
+    #[test]
+    fn location_bounties_create_three_cards_with_location_choices_and_raw_fallbacks() {
+        let now = at(FIRST_EPOCH);
+        let assets = location_bounty_asset_fixture();
+        let fixture = location_bounty_fixture((now + Duration::hours(1)).timestamp_millis());
+        let cards = parse_location_bounty_cards(&fixture.to_string(), now, &assets).unwrap();
+
+        assert_eq!(
+            cards
+                .iter()
+                .map(|card| card.variant.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            ["ostrons", "solaris-united", "entrati"]
+        );
+        assert!(cards.iter().all(|card| {
+            card.kind == "area-objective"
+                && card.provenance.kind == TimedSourceKind::CommunityLive
+                && card.provenance.contributors
+                    == [
+                        TimedSourceId::BrowseWfLocationBounties,
+                        TimedSourceId::BrowseWfExportBounties,
+                        TimedSourceId::BrowseWfDictionaryEn,
+                    ]
+        }));
+        assert_eq!(cards[0].stages[0].title, "TentA");
+        assert_eq!(cards[0].stages[0].choices, ["Known Bounty", "UnknownCetus"]);
+        assert_eq!(cards[1].stages[0].choices, ["KnownSolaris"]);
+        assert_eq!(cards[2].stages[0].choices, ["MissingTitle"]);
+    }
+
+    #[test]
+    fn location_bounties_reject_stale_missing_empty_duplicate_and_invalid_paths() {
+        let now = at(FIRST_EPOCH);
+        let valid_expiry = (now + Duration::hours(1)).timestamp_millis();
+
+        assert!(parse_location_bounty_cycle_json(
+            &location_bounty_fixture(now.timestamp_millis()).to_string(),
+            now
+        )
+        .is_err());
+
+        let mut missing = location_bounty_fixture(valid_expiry);
+        missing.as_object_mut().unwrap().remove("SolarisSyndicate");
+        assert!(parse_location_bounty_cycle_json(&missing.to_string(), now).is_err());
+
+        let mut empty = location_bounty_fixture(valid_expiry);
+        empty["CetusSyndicate"]["TentA"] = json!([]);
+        assert!(parse_location_bounty_cycle_json(&empty.to_string(), now).is_err());
+
+        let mut duplicate = location_bounty_fixture(valid_expiry);
+        duplicate["CetusSyndicate"]["TentA"] = json!([
+            "/Lotus/Types/Gameplay/Eidolon/Jobs/KnownCetus",
+            "/Lotus/Types/Gameplay/Eidolon/Jobs/KnownCetus"
+        ]);
+        assert!(parse_location_bounty_cycle_json(&duplicate.to_string(), now).is_err());
+
+        let mut invalid = location_bounty_fixture(valid_expiry);
+        invalid["EntratiSyndicate"]["ChamberA"] = json!(["not-a-resource-path"]);
+        assert!(parse_location_bounty_cycle_json(&invalid.to_string(), now).is_err());
+    }
+
+    #[test]
+    fn location_bounty_assets_reject_empty_roots() {
+        assert!(parse_location_bounty_assets("{}", r#"{"key":"value"}"#).is_err());
+        assert!(parse_location_bounty_assets(
+            r#"{"/Lotus/Types/Gameplay/Eidolon/Jobs/Test":{"name":"/name"}}"#,
+            "{}"
+        )
+        .is_err());
     }
 }

@@ -550,7 +550,13 @@ const TIMED_TAB_FIELDS: Record<TimedTabId, readonly TimedCardField[]> = {
   sortie: ["sortie"],
   archon: ["archon"],
   syndicates: ["syndicates"],
-  "area-missions": ["areaMissions", "bounties"],
+  "area-missions": [
+    "areaEnvironments",
+    "areaMissions",
+    "areaObjectives",
+    "bounties",
+    "areaEvents",
+  ],
   circuit: ["circuit"],
   archimedea: ["archimedea"],
   descendia: ["descendia"],
@@ -561,7 +567,7 @@ const TIMED_TAB_SOURCES: Record<TimedTabId, readonly TimedSourceKey[]> = {
   sortie: ["wfcd"],
   archon: ["wfcd"],
   syndicates: ["wfcd"],
-  "area-missions": ["wfcd", "browseWfBounties"],
+  "area-missions": ["wfcd", "browseWfLocationBounties", "browseWfBounties"],
   circuit: ["deCircuit"],
   archimedea: ["wfcd"],
   descendia: ["deDescendia"],
@@ -589,6 +595,7 @@ const SOURCE_NAME_KEYS: Record<TimedSourceKey, MessageKey> = {
   deDescendia: "timed.sourceDeDescendia",
   deCircuit: "timed.sourceDeCircuit",
   browseWfBounties: "timed.sourceBrowseBounties",
+  browseWfLocationBounties: "timed.sourceBrowseLocationBounties",
   browseWfArbitration: "timed.sourceBrowseArbitration",
 };
 
@@ -607,7 +614,32 @@ const TIMED_METADATA_KEYS: Partial<Record<string, MessageKey>> = {
   zarimanFaction: "timed.faction",
   faction: "timed.faction",
   week: "timed.week",
+  state: "timed.environmentState",
 };
+
+const TIMED_STATE_KEYS: Partial<Record<string, MessageKey>> = {
+  day: "timed.state.day",
+  night: "timed.state.night",
+  warm: "timed.state.warm",
+  cold: "timed.state.cold",
+  fass: "timed.state.fass",
+  vome: "timed.state.vome",
+  corpus: "timed.state.corpus",
+  grineer: "timed.state.grineer",
+  sorrow: "timed.state.sorrow",
+  fear: "timed.state.fear",
+  joy: "timed.state.joy",
+  anger: "timed.state.anger",
+  envy: "timed.state.envy",
+};
+
+function timedMetadataValue(item: NonNullable<TimedContentCard["metadata"]>[number]): string {
+  if (item.key === "state") {
+    const stateKey = TIMED_STATE_KEYS[item.value.toLowerCase()];
+    if (stateKey) return t(stateKey);
+  }
+  return item.value;
+}
 
 function localizedDate(value: string): string {
   const timestamp = Date.parse(value);
@@ -895,7 +927,7 @@ function timedCardElement(card: TimedContentCard, headingTag: "h2" | "h3" = "h2"
       .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
       .replace(/[-_]+/g, " ")
       .trim();
-    appendTimedMetaLabel(meta, key ? t(key) : fallback, item.value);
+    appendTimedMetaLabel(meta, key ? t(key) : fallback, timedMetadataValue(item));
   }
   article.append(meta);
 
@@ -990,7 +1022,7 @@ function cardsForTab(tab: TimedTabId, timed: TimedContentSnapshot | undefined): 
 }
 
 function areaGroup(
-  group: "worldstate" | "bounties",
+  group: "environments" | "worldstate" | "location-objectives" | "bounties" | "events",
   labelKey: MessageKey,
   cards: TimedContentCard[],
 ): HTMLElement | null {
@@ -1029,14 +1061,28 @@ function renderTimedPanel(tab: TimedTabId): void {
     empty.textContent = t("timed.noContent");
     children.push(empty);
   } else if (tab === "area-missions") {
+    const environments = areaGroup(
+      "environments",
+      "timed.areaEnvironments",
+      timed?.areaEnvironments ?? [],
+    );
     const worldstate = areaGroup(
       "worldstate",
       "timed.areaWorldstate",
       timed?.areaMissions ?? [],
     );
+    const objectives = areaGroup(
+      "location-objectives",
+      "timed.areaObjectives",
+      timed?.areaObjectives ?? [],
+    );
     const bounties = areaGroup("bounties", "timed.areaBounties", timed?.bounties ?? []);
-    if (worldstate) children.push(worldstate);
-    if (bounties) children.push(bounties);
+    const events = areaGroup("events", "timed.areaEvents", timed?.areaEvents ?? []);
+    children.push(
+      ...[environments, worldstate, objectives, bounties, events].filter(
+        (group): group is HTMLElement => group !== null,
+      ),
+    );
   } else {
     children.push(
       ...cards.map((card) =>

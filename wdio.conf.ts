@@ -7,6 +7,12 @@ import { join } from "node:path";
 // DOM結線の網羅は tests/renderer(Playwright)が担い、ここは実IPCの証明に絞る(docs/E2E.md)。
 
 const appBinary = join(process.cwd(), "src-tauri/target.noindex/debug/relico");
+const e2ePort = Number(process.env.TAURI_WEBDRIVER_PORT);
+if (!Number.isInteger(e2ePort) || e2ePort < 1 || e2ePort > 65_535) {
+  throw new Error("TAURI_WEBDRIVER_PORT must be set by just e2e");
+}
+const e2eLeasePath = process.env.RELICO_E2E_LEASE_PATH;
+if (!e2eLeasePath) throw new Error("RELICO_E2E_LEASE_PATH must be set by just e2e");
 // 専用identityの設定ディレクトリ。テストの決定性のため毎回まっさらにする
 const e2eConfigDir = join(homedir(), "Library/Application Support/com.annenpolka.relico.e2e");
 
@@ -26,6 +32,9 @@ export const config: WebdriverIO.Config = {
       {
         appBinaryPath: appBinary,
         driverProvider: "embedded",
+        // 数値literalはjustfileだけに置き、ここでは同じenv値を検証して使う。
+        embeddedPort: e2ePort,
+        env: { RELICO_E2E_LEASE_PATH: e2eLeasePath },
       },
     ],
   ],

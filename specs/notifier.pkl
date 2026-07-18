@@ -138,7 +138,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.TimedSourceIsolation {
     id = "SRC-001"
-    desc = "WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する"
+    desc = "WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf location-bounties、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的payloadをstatic assetへjoinした失敗だけ該当Bounty/location cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的payloadのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する"
   }
   new patterns.BountyFreshness {
     id = "BNT-001"
@@ -214,7 +214,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.TimedContentFixture {
     id = "TMD-001"
-    desc = "時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない"
+    desc = "時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない"
     scenario = "wire_shape"
   }
   new patterns.TimedContentFixture {
@@ -236,6 +236,11 @@ clauses: Listing<patterns.Clause> = new {
     id = "TMD-005"
     desc = "既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する"
     scenario = "rich_details"
+  }
+  new patterns.TimedContentFixture {
+    id = "TMD-006"
+    desc = "AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない"
+    scenario = "area_sources"
   }
   new patterns.NotificationExample {
     id = "NTF-001"
@@ -281,6 +286,11 @@ clauses: Listing<patterns.Clause> = new {
     id = "STA-004"
     desc = "i18n専用の外部ライブラリを追加せず、TS/Rustの自前lookup・placeholder実装が同じsrc/locales.jsonを直接読む。TSのi18n moduleは相対importだけ、Rustは標準ライブラリ・crate内module・既存の汎用serde_json以外の外部crateを使わない"
     scenario = "dependency_free_i18n"
+  }
+  new patterns.ToolingScenario {
+    id = "TLG-001"
+    desc = "just e2eは単一のTAURI_WEBDRIVER_PORTとE2E専用lease fileを実行前とEXIT時に検査し、lease inodeを開いたtarget.noindex/debug/relicoのcanonical executable完全一致だけをTERM、期限後も同じPID・実行ファイル・lease identityならKILLして回収する。portのLISTEN前またはlistener終了後でもlease holderを回収し、leaseなしの同port listenerは拒否する。holder/listenerなしは成功し、別port・別leaseの同一実行ファイルと同portの別実行ファイルは終了しない。basenameによるpkill/killallは使わない"
+    scenario = "e2e_targeted_cleanup"
   }
   new patterns.ApprovedAsset {
     id = "AST-001"
@@ -351,7 +361,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-010"
-    desc = "コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。仲裁cardはcommunity schedule・browse.wf出典、将来Descendiaはupcoming、AreaはWFCDとOracleのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)"
+    desc = "コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。仲裁cardはcommunity schedule・browse.wf出典、将来Descendiaはupcoming、Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)"
     scenario = "content_tabs"
   }
   new patterns.RendererScenario {
@@ -361,7 +371,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-012"
-    desc = "locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、本文・aria-label・placeholderに加えて仲裁のcommunity schedule表示、Circuitの通常/鋼候補見出し・個人進捗非公開注記の言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合)"
+    desc = "locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、document.title、本文・aria-label・placeholderに加えて仲裁のcommunity schedule表示、Areaの5 group見出しと環境state、Circuitの通常/鋼候補見出し・個人進捗非公開注記の言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合)"
     scenario = "locale_display"
   }
   new patterns.E2eScenario {
@@ -376,7 +386,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.E2eScenario {
     id = "E2E-003"
-    desc = "実アプリで表示言語をzh-Hansへ変更すると、本物のset_config完了後にhtml langとcritical UIが切り替わり、再読込後も実get_configからzh-Hansが復元される(WDIO Tauri E2E)"
+    desc = "実アプリの起動時ja、en変更後、zh-Hans変更後、再読込後でdocument.titleとmain native window titleが各localeのapp.titleへ同期し、表示言語は本物のset_config完了後にhtml langとcritical UIへ反映され、再読込後も実get_configからzh-Hansが復元される(WDIO Tauri E2E)"
     scenario = "locale_config_roundtrip"
   }
   new patterns.Manual {
@@ -443,5 +453,11 @@ clauses: Listing<patterns.Clause> = new {
     id = "MAN-012"
     desc = "9つの時限コンテンツ表示はsourceの由来と時間状態を分離し、取得経路の部分障害や個人進捗の非公開性をもっともらしい推測値で埋めない"
     procedure = "リリース前に実データで確認する。1) DE公式、WFCD、browse.wf Oracle、browse.wf schedule/Public Exportへ実際に到達でき、cardのofficial/community/schedule badgeとbrowse.wf creditが文字として判読できる。2) 表示中の仲裁をbrowse.wf/liveとゲーム内から数件標本照合する。source別障害、期限切れ、schedule範囲外、個人進捗非推測はSRC-001・BNT-001・RND-010等で機械検証する。第三者scheduleの将来正確性とservice SLAは保証せず、この実データ確認でも将来の継続性を証明したとは扱わない。"
+  }
+  new patterns.Manual {
+    id = "MAN-013"
+    desc = "just e2eを中断してもE2E専用アプリだけが終了し、配布版・通知テスト版・通常開発版は終了しない"
+    cadence = "one-time"
+    procedure = "E2E cleanup配線を変更したときだけ確認する。別名義の配布版または通知テスト版を起動したままjust e2eをworker開始後にCtrl-Cで中断し、target.noindex/debug/relico・E2E lease holder・TCP 4445のlistenerが消え、一時capabilityが削除される一方、別名義のアプリとメニューバー監視は継続することを確認する。対象限定janitorのno-op・foreign listener拒否・port未bindのholder回収・identity変化時のKILL拒否・TERM/KILL・別port非干渉はTLG-001で機械検証する。"
   }
 }
