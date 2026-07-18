@@ -149,6 +149,28 @@ class MutedDelivery extends Clause {
   label = "property-tested"
 }
 
+/// browse.wf仲裁scheduleは空nodeを許さず、隣接slotが厳密に3600秒間隔で昇順になる。
+/// lookupは先頭以上・末尾slot終了未満だけを定義域とし、範囲外を循環・補間しない。
+class ArbitrationSchedule extends Clause {
+  pattern = "arbitration_schedule"
+  label = "property-tested"
+  scenario: "validation" | "lookup"
+}
+
+/// 時限コンテンツsourceは成功したsliceだけを置換し、失敗sliceはlast-known-goodを保持する。
+/// 他sourceのcard・healthを変更しないことを操作組合せで検査する。
+class TimedSourceIsolation extends Clause {
+  pattern = "timed_source_isolation"
+  label = "property-tested"
+}
+
+/// browse.wf Oracleのbounty-cycleはJSON/HTTP成功だけでは採用せず、
+/// expiryが有効な未来時刻である場合だけfreshとして扱う。
+class BountyFreshness extends Clause {
+  pattern = "bounty_freshness"
+  label = "property-tested"
+}
+
 /// 表示リストはフィルタ合致亀裂のみを含み(健全性)、
 /// 合致する亀裂を1件も取りこぼさない(完全性)
 class FilteredView extends Clause {
@@ -259,6 +281,14 @@ class RuleNotifyConfig extends Clause {
 class AppConfigCompat extends Clause {
   pattern = "app_config_compat"
   label = "example-tested"
+}
+
+/// 時限コンテンツの外部payloadを固定fixtureで正規化し、source・詳細field・wire shapeを検査する。
+/// network到達性や第三者scheduleの将来正確性はManualへ残す。
+class TimedContentFixture extends Clause {
+  pattern = "timed_content_fixture"
+  label = "example-tested"
+  scenario: "wire_shape" | "arbitration_join" | "oracle_bounties" | "circuit" | "rich_details"
 }
 
 /// 通知テストの結果表示・payload・raw dev時の案内を、固定した具体例で検証する。

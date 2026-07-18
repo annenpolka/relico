@@ -76,6 +76,14 @@ function installMock({
   };
 
   const iso = (offsetSecs: number) => new Date(Date.now() + offsetSecs * 1000).toISOString();
+  const sourceStatus = (source: string, validUntil: string | null = null) => ({
+    source,
+    freshness: "fresh",
+    lastAttempt: iso(0),
+    lastSuccess: iso(0),
+    validUntil,
+    error: null as string | null,
+  });
   const rule = (enabled: boolean, notify = true): Rule => ({
     enabled,
     notify,
@@ -166,6 +174,37 @@ function installMock({
       notificationsMuted,
       suppressedToday: notificationsMuted ? 2 : 0,
       timedContent: {
+        arbitration: [
+          {
+            id: "arbitration-current",
+            kind: "arbitration",
+            variant: null,
+            title: "Arbitration",
+            subtitle: "Infested",
+            activation: iso(-1800),
+            expiry: iso(1800),
+            temporalStatus: "active",
+            provenance: {
+              kind: "community-schedule",
+              contributors: ["browse-wf-arbitration-schedule", "browse-wf-regions"],
+            },
+            sourceId: "browse-wf-arbitration-schedule",
+            sourceName: "browse.wf schedule",
+            sourceUrl: "https://browse.wf/arbys.txt",
+            metadata: [{ key: "faction", value: "Infested" }],
+            personalModifiers: [],
+            stages: [
+              {
+                order: 1,
+                title: "Excavation",
+                node: "Cholistan (Europa)",
+                detail: "Dark Sector",
+                enemyLevels: [23, 33],
+                modifiers: ["Resource bonus 25%"],
+              },
+            ],
+          },
+        ],
         sortie: [
           {
             id: "sortie-current",
@@ -175,7 +214,13 @@ function installMock({
             subtitle: "Grineer",
             activation: iso(-3600),
             expiry: iso(18 * 3600),
-            availability: "available",
+            temporalStatus: "active",
+            provenance: { kind: "community-live", contributors: ["wfcd-worldstate"] },
+            sourceId: "wfcd-worldstate",
+            sourceName: "WFCD",
+            sourceUrl: "https://api.warframestat.us/pc",
+            metadata: [],
+            personalModifiers: [],
             stages: [
               {
                 order: 1,
@@ -183,19 +228,212 @@ function installMock({
                 node: "Adaro (Sedna)",
                 detail: null,
                 modifiers: ["Enemy Physical Enhancement"],
+                conditions: [],
               },
             ],
           },
         ],
         archon: [],
         syndicates: [],
-        areaMissions: [],
-        archimedea: [],
-        descendia: [],
-        wfcdOk: true,
-        wfcdError: null,
-        descentsOk: true,
-        descentsError: null,
+        areaMissions: [
+          {
+            id: "area-ostrons",
+            kind: "area-mission",
+            variant: null,
+            title: "Ostrons",
+            subtitle: null,
+            activation: iso(-1800),
+            expiry: iso(5400),
+            temporalStatus: "active",
+            provenance: { kind: "community-live", contributors: ["wfcd-worldstate"] },
+            sourceId: "wfcd-worldstate",
+            sourceName: "WFCD",
+            sourceUrl: "https://api.warframestat.us/pc",
+            metadata: [],
+            personalModifiers: [],
+            stages: [
+              {
+                order: 1,
+                title: "Capture the Grineer Commander",
+                node: "Plains of Eidolon",
+                detail: null,
+                enemyLevels: [5, 15],
+                standingStages: [400, 600, 1000],
+                rewardPool: ["Lith Relic", "Endo"],
+                rewardDrops: [
+                  { item: "Endo", rarity: "Common", chancePercent: 25, count: 100 },
+                ],
+              },
+            ],
+          },
+        ],
+        bounties: [
+          ...[
+            ["holdfasts", "The Holdfasts", "Zariman", null],
+            ["cavia", "Cavia", "Albrecht's Laboratories", null],
+            ["hex", "The Hex", "Höllvania", "Eleanor"],
+          ].map(([id, title, node, ally]) => ({
+            id: "bounty-" + id,
+            kind: "bounty",
+            variant: id,
+            title,
+            subtitle: null,
+            activation: null,
+            expiry: iso(4500),
+            temporalStatus: "active",
+            provenance: {
+              kind: "community-live",
+              contributors: ["browse-wf-bounty-cycle", "browse-wf-regions"],
+            },
+            sourceId: "browse-wf-bounty-cycle",
+            sourceName: "browse.wf Oracle",
+            sourceUrl: "https://oracle.browse.wf/bounty-cycle",
+            metadata: [{ key: "rotation", value: "B" }],
+            personalModifiers: [],
+            stages: [
+              {
+                order: 1,
+                title: "Complete the bonus objective",
+                node,
+                detail: null,
+                ally,
+              },
+            ],
+          })),
+        ],
+        circuit: [
+          {
+            id: "circuit-current",
+            kind: "circuit",
+            variant: null,
+            title: "Circuit",
+            subtitle: null,
+            activation: iso(-86400),
+            expiry: iso(5 * 86400),
+            temporalStatus: "active",
+            provenance: { kind: "official-live", contributors: ["de-worldstate"] },
+            sourceId: "de-worldstate",
+            sourceName: "Digital Extremes",
+            sourceUrl: "https://api.warframe.com/cdn/worldState.php",
+            metadata: [{ key: "week", value: "42" }],
+            personalModifiers: [],
+            stages: [
+              {
+                order: 1,
+                title: "Normal Circuit",
+                node: null,
+                detail: null,
+                choices: ["Excalibur", "Mag", "Volt"],
+              },
+              {
+                order: 2,
+                title: "Steel Path Circuit",
+                node: null,
+                detail: null,
+                choices: ["Braton", "Lato", "Skana", "Paris", "Kunai"],
+              },
+            ],
+          },
+        ],
+        archimedea: [
+          {
+            id: "archimedea-deep",
+            kind: "archimedea",
+            variant: "deep",
+            title: "Deep Archimedea",
+            subtitle: null,
+            activation: iso(-86400),
+            expiry: iso(5 * 86400),
+            temporalStatus: "active",
+            provenance: { kind: "community-live", contributors: ["wfcd-worldstate"] },
+            sourceId: "wfcd-worldstate",
+            sourceName: "WFCD",
+            sourceUrl: "https://api.warframestat.us/pc",
+            metadata: [],
+            personalModifiers: [
+              {
+                key: "gear-embargo",
+                name: "Gear Embargo",
+                description: "Gear items cannot be used.",
+                kind: "personal",
+                eliteOnly: false,
+              },
+            ],
+            stages: [
+              {
+                order: 1,
+                title: "Mirror Defense",
+                node: null,
+                detail: "The Murmur",
+                conditions: [
+                  {
+                    key: "energy-drain",
+                    name: "Energy Drain",
+                    description: "Energy drains over time.",
+                    kind: "deviation",
+                    eliteOnly: false,
+                  },
+                  {
+                    key: "reinforced-enemies",
+                    name: "Reinforced Enemies",
+                    description: "Enemies gain additional defenses.",
+                    kind: "risk",
+                    eliteOnly: true,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        descendia: [
+          ...[
+            ["current", "active", -86400, 5 * 86400],
+            ["next", "upcoming", 6 * 86400, 12 * 86400],
+          ].map(([id, temporalStatus, activation, expiry]) => ({
+            id: "descendia-" + id,
+            kind: "descendia",
+            variant: null,
+            title: "Descendia",
+            subtitle: null,
+            activation: iso(Number(activation)),
+            expiry: iso(Number(expiry)),
+            temporalStatus,
+            provenance: { kind: "official-live", contributors: ["de-worldstate"] },
+            sourceId: "de-worldstate",
+            sourceName: "Digital Extremes",
+            sourceUrl: "https://api.warframe.com/cdn/worldState.php",
+            metadata: [],
+            personalModifiers: [],
+            stages: [
+              {
+                order: 1,
+                title: "Survival",
+                node: "Floor 1",
+                detail: "Complete the floor challenge",
+                specs: ["No Gear"],
+                auras: ["Enemy Damage"],
+              },
+            ],
+          })),
+        ],
+        sources: {
+          wfcd: {
+            ...sourceStatus("wfcd-worldstate"),
+            freshness: "stale",
+            error: "wfcd down",
+          },
+          deDescendia: sourceStatus("de-worldstate"),
+          deCircuit: sourceStatus("de-worldstate"),
+          browseWfBounties: {
+            ...sourceStatus("browse-wf-bounty-cycle", iso(4500)),
+            freshness: "unavailable",
+            error: "oracle down",
+          },
+          browseWfArbitration: sourceStatus(
+            "browse-wf-arbitration-schedule",
+            "2029-10-12T08:00:00.000Z",
+          ),
+        },
         lastPoll: iso(0),
       },
     },
@@ -398,6 +636,7 @@ function installMock({
     invoke: (cmd: string, args?: Record<string, unknown>) => {
       recorded.push({ cmd, args });
       if (cmd.startsWith("plugin:event|")) return Promise.resolve(callbackId++);
+      if (cmd.startsWith("plugin:opener|")) return Promise.resolve(null);
       const handler = handlers[cmd];
       if (!handler) return Promise.reject(new Error("unmocked command: " + cmd));
       try {

@@ -14,6 +14,7 @@ use relico_lib::model::Fissure;
 use relico_lib::notify::{self, NotificationOutcome};
 use relico_lib::palette::{self, Candidate, Facet};
 use relico_lib::poller;
+use relico_lib::timed;
 
 const TIERS: &[&str] = &["Lith", "Meso", "Neo", "Axi", "Requiem", "Omnia"];
 const MISSIONS: &[&str] = &["Defense", "Survival", "Capture", "Extermination", "Rescue", "Disruption", "Mobile Defense", "Void Flood", "Void Cascade", "Volatile"];
@@ -22,6 +23,40 @@ const PLANETS: &[&str] = &["Mars", "Ceres", "Sedna", "Void", "Saturn", "Phobos",
 /// オラクルは純粋関数を対象とするため、現在時刻は固定値でよい
 fn base_now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap()
+}
+
+fn mk_timed_card(id: &str, expiry: Option<DateTime<Utc>>) -> timed::TimedContent {
+    timed::TimedContent {
+        id: id.to_string(),
+        kind: "test".to_string(),
+        variant: None,
+        title: id.to_string(),
+        subtitle: None,
+        activation: Some(base_now() - Duration::hours(1)),
+        expiry,
+        temporal_status: timed::TimedTemporalStatus::Active,
+        provenance: timed::TimedProvenance {
+            kind: timed::TimedSourceKind::CommunityLive,
+            contributors: vec![timed::TimedSourceId::WfcdWorldstate],
+        },
+        source_id: timed::TimedSourceId::WfcdWorldstate,
+        source_name: "WFCD".to_string(),
+        source_url: Some("https://api.warframestat.us/pc".to_string()),
+        metadata: vec![],
+        personal_modifiers: vec![],
+        stages: vec![],
+    }
+}
+
+fn mk_timed_status(source: timed::TimedSourceId) -> timed::TimedSourceStatus {
+    timed::TimedSourceStatus {
+        source,
+        freshness: timed::TimedFreshness::Fresh,
+        last_attempt: Some(base_now() - Duration::minutes(5)),
+        last_success: Some(base_now() - Duration::minutes(5)),
+        valid_until: Some(base_now() + Duration::hours(1)),
+        error: None,
+    }
 }
 
 fn arb_mode() -> impl Strategy<Value = Mode> {
@@ -684,6 +719,325 @@ proptest! {
         prop_assert!(seeded.is_empty(), "SPEC MUT-002 違反: 起動直後のseed中または通知ミュート中に観測した合致亀裂は通知済みidとしてmarkするが配送対象を1件も返さない。通常配送へ戻しても同じidを滞留通知せず、その後に現れた新規idだけを1回返す。配送判定はHTTP取得開始時ではなく取得後の最新設定を使い、ミュート・一時停止・表示言語の変更を次の配送前へ反映する。ミュートは一覧・通知候補・next表示を変えず、明示操作のTEST DELIVERYには適用しない (seed中に配送対象を返した)");
     }
 
+    /// ARB-001: browse.wf仲裁scheduleは2件以上の非空nodeを持ち、先頭timestampがUTC時間境界に揃い、隣接行ごとに厳密な3600秒間隔で増加するときだけ受理する。空node、重複、逆順、1秒でも異なるgap、数値でないtimestampは全体を不正として扱う
+    #[test]
+    fn arb_001(slot_count in 2usize..32) {
+        let base = base_now().timestamp();
+        let valid = (0..slot_count)
+            .map(|index| format!("{},Node{index}", base + index as i64 * 3600))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed = timed::parse_arbitration_schedule(&valid)
+            .expect("整形式の仲裁scheduleを受理すること");
+        prop_assert_eq!(parsed.slots.len(), slot_count, "SPEC ARB-001 違反: browse.wf仲裁scheduleは2件以上の非空nodeを持ち、先頭timestampがUTC時間境界に揃い、隣接行ごとに厳密な3600秒間隔で増加するときだけ受理する。空node、重複、逆順、1秒でも異なるgap、数値でないtimestampは全体を不正として扱う (正常行を欠落・追加した)");
+
+        for invalid in [
+            format!("{base},Node0"),
+            String::new(),
+            format!("{base},Node0\n{},", base + 3600),
+            format!("{base},Node0\n{base},Node1"),
+            format!("{base},Node0\n{},Node1", base - 3600),
+            format!("{base},Node0\n{},Node1", base + 3601),
+            "not-a-number,Node0\n3600,Node1".to_string(),
+            format!("{},Node0\n{},Node1", base + 1, base + 3601),
+        ] {
+            prop_assert!(
+                timed::parse_arbitration_schedule(&invalid).is_err(),
+                "SPEC ARB-001 違反: browse.wf仲裁scheduleは2件以上の非空nodeを持ち、先頭timestampがUTC時間境界に揃い、隣接行ごとに厳密な3600秒間隔で増加するときだけ受理する。空node、重複、逆順、1秒でも異なるgap、数値でないtimestampは全体を不正として扱う (不正scheduleを部分受理した: {})",
+                invalid,
+            );
+        }
+    }
+
+    /// ARB-002: 仲裁schedule lookupはnowをUTC時間slotへ切り下げ、先頭timestamp以上かつ末尾timestamp+3600秒未満だけ対応する行を返す。先頭より前と末尾slot終了以後はOutOfRangeであり、剰余による循環・端値補間を行わない
+    #[test]
+    fn arb_002(
+        slot_count in 2usize..32,
+        pick in any::<prop::sample::Index>(),
+        second in 0i64..3600,
+    ) {
+        let base = base_now();
+        let body = (0..slot_count)
+            .map(|index| format!("{},Node{index}", base.timestamp() + index as i64 * 3600))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let schedule = timed::parse_arbitration_schedule(&body)
+            .expect("整形式の仲裁scheduleを受理すること");
+        let index = pick.index(slot_count);
+        let now = base + Duration::seconds(index as i64 * 3600 + second);
+        let selected = timed::arbitration_slot_at(&schedule, now)
+            .expect("schedule定義域内のslotを選べること");
+        prop_assert_eq!(selected.node_key, format!("Node{index}"), "SPEC ARB-002 違反: 仲裁schedule lookupはnowをUTC時間slotへ切り下げ、先頭timestamp以上かつ末尾timestamp+3600秒未満だけ対応する行を返す。先頭より前と末尾slot終了以後はOutOfRangeであり、剰余による循環・端値補間を行わない (別slotを選んだ)");
+        prop_assert_eq!(selected.activation, base + Duration::hours(index as i64), "SPEC ARB-002 違反: 仲裁schedule lookupはnowをUTC時間slotへ切り下げ、先頭timestamp以上かつ末尾timestamp+3600秒未満だけ対応する行を返す。先頭より前と末尾slot終了以後はOutOfRangeであり、剰余による循環・端値補間を行わない (activation境界)");
+        prop_assert_eq!(selected.expiry, selected.activation + Duration::hours(1), "SPEC ARB-002 違反: 仲裁schedule lookupはnowをUTC時間slotへ切り下げ、先頭timestamp以上かつ末尾timestamp+3600秒未満だけ対応する行を返す。先頭より前と末尾slot終了以後はOutOfRangeであり、剰余による循環・端値補間を行わない (1時間slotでない)");
+
+        for outside in [
+            base - Duration::seconds(1),
+            base + Duration::hours(slot_count as i64),
+            base + Duration::hours(slot_count as i64 + 10_000),
+        ] {
+            prop_assert!(
+                matches!(
+                    timed::arbitration_slot_at(&schedule, outside),
+                    Err(timed::TimedSourceError::OutOfRange(_))
+                ),
+                "SPEC ARB-002 違反: 仲裁schedule lookupはnowをUTC時間slotへ切り下げ、先頭timestamp以上かつ末尾timestamp+3600秒未満だけ対応する行を返す。先頭より前と末尾slot終了以後はOutOfRangeであり、剰余による循環・端値補間を行わない (範囲外を循環・補間した: {})",
+                outside,
+            );
+        }
+    }
+
+    /// SRC-001: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する
+    #[test]
+    fn src_001(future_secs in 1i64..86_400, expired_secs in -86_400i64..1) {
+        let now = base_now();
+        let future = mk_timed_card("future", Some(now + Duration::seconds(future_secs)));
+        let expired = mk_timed_card("expired", Some(now + Duration::seconds(expired_secs)));
+        let missing_expiry = mk_timed_card("missing-expiry", None);
+
+        let mut failed_cards = vec![future.clone(), expired.clone(), missing_expiry.clone()];
+        let mut failed_status = mk_timed_status(timed::TimedSourceId::BrowseWfBountyCycle);
+        timed::apply_timed_source_result(
+            &mut failed_cards,
+            &mut failed_status,
+            now,
+            Err(timed::TimedSourceError::failed("oracle down")),
+        );
+        prop_assert_eq!(failed_cards, vec![future.clone()], "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (失敗時のLKG期限処理)");
+        prop_assert_eq!(failed_status.freshness, timed::TimedFreshness::Stale, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (生存LKGをstaleにしない)");
+        prop_assert_eq!(failed_status.error.as_deref(), Some("oracle down"), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (source errorを保持しない)");
+
+        let mut unavailable_cards = vec![expired.clone(), missing_expiry];
+        let mut unavailable_status = mk_timed_status(timed::TimedSourceId::BrowseWfBountyCycle);
+        timed::apply_timed_source_result(
+            &mut unavailable_cards,
+            &mut unavailable_status,
+            now,
+            Err(timed::TimedSourceError::failed("still down")),
+        );
+        prop_assert!(unavailable_cards.is_empty(), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (期限切れLKGを保持した)");
+        prop_assert_eq!(unavailable_status.freshness, timed::TimedFreshness::Unavailable, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (LKGなしをunavailableにしない)");
+
+        let mut replaced_cards = vec![future.clone()];
+        let mut replaced_status = mk_timed_status(timed::TimedSourceId::BrowseWfBountyCycle);
+        let replacement = mk_timed_card("replacement", Some(now + Duration::hours(2)));
+        timed::apply_timed_source_result(
+            &mut replaced_cards,
+            &mut replaced_status,
+            now,
+            Ok(vec![replacement.clone(), expired]),
+        );
+        prop_assert_eq!(
+            replaced_cards.as_slice(),
+            std::slice::from_ref(&replacement),
+            "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (成功sliceを原子的に置換・期限処理しない)",
+        );
+        prop_assert_eq!(replaced_status.freshness, timed::TimedFreshness::Fresh, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (成功sourceをfreshにしない)");
+        prop_assert!(replaced_status.error.is_none(), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (成功後もerrorを残した)");
+
+        timed::apply_timed_source_result(
+            &mut replaced_cards,
+            &mut replaced_status,
+            now,
+            Err(timed::TimedSourceError::out_of_range("schedule ended")),
+        );
+        prop_assert!(replaced_cards.is_empty(), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (範囲外でcardを残した)");
+        prop_assert_eq!(replaced_status.freshness, timed::TimedFreshness::OutOfRange, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (範囲外health)");
+
+        // 実snapshot結線は、全source成功と各sourceだけが失敗するmatrixで検査する。
+        // これによりsuccess/failureのどちらの分岐でもslice・healthのcross-wireを捕捉する。
+        for failed_source in [
+            None,
+            Some("wfcd"),
+            Some("descendia"),
+            Some("circuit"),
+            Some("bounties"),
+            Some("arbitration"),
+        ] {
+            let lkg_expiry = now + Duration::hours(1);
+            let replacement_expiry = now + Duration::hours(2);
+            let mut snapshot = timed::TimedContentSnapshot::default();
+            snapshot.sortie = vec![mk_timed_card("wfcd-sortie-lkg", Some(lkg_expiry))];
+            snapshot.archon = vec![mk_timed_card("wfcd-archon-lkg", Some(lkg_expiry))];
+            snapshot.syndicates = vec![mk_timed_card("wfcd-syndicates-lkg", Some(lkg_expiry))];
+            snapshot.area_missions = vec![mk_timed_card("wfcd-area-lkg", Some(lkg_expiry))];
+            snapshot.archimedea = vec![mk_timed_card("wfcd-archimedea-lkg", Some(lkg_expiry))];
+            snapshot.descendia = vec![mk_timed_card("descendia-lkg", Some(lkg_expiry))];
+            snapshot.circuit = vec![mk_timed_card("circuit-lkg", Some(lkg_expiry))];
+            snapshot.bounties = vec![mk_timed_card("bounties-lkg", Some(lkg_expiry))];
+            snapshot.arbitration = vec![mk_timed_card("arbitration-lkg", Some(lkg_expiry))];
+            snapshot.sources.wfcd = mk_timed_status(timed::TimedSourceId::WfcdWorldstate);
+            snapshot.sources.de_descendia = mk_timed_status(timed::TimedSourceId::DeWorldstate);
+            snapshot.sources.de_circuit = mk_timed_status(timed::TimedSourceId::DeWorldstate);
+            snapshot.sources.browse_wf_bounties =
+                mk_timed_status(timed::TimedSourceId::BrowseWfBountyCycle);
+            snapshot.sources.browse_wf_arbitration =
+                mk_timed_status(timed::TimedSourceId::BrowseWfArbitrationSchedule);
+
+            snapshot.apply_poll(
+                now,
+                timed::TimedPollResults {
+                    wfcd: if failed_source == Some("wfcd") {
+                        Err(timed::TimedSourceError::failed("wfcd down"))
+                    } else {
+                        Ok(timed::WfcdTimedContent {
+                            sortie: vec![mk_timed_card("wfcd-sortie-replacement", Some(replacement_expiry))],
+                            archon: vec![mk_timed_card("wfcd-archon-replacement", Some(replacement_expiry))],
+                            syndicates: vec![mk_timed_card("wfcd-syndicates-replacement", Some(replacement_expiry))],
+                            area_missions: vec![mk_timed_card("wfcd-area-replacement", Some(replacement_expiry))],
+                            archimedea: vec![mk_timed_card("wfcd-archimedea-replacement", Some(replacement_expiry))],
+                        })
+                    },
+                    descendia: if failed_source == Some("descendia") {
+                        Err(timed::TimedSourceError::failed("descendia down"))
+                    } else {
+                        Ok(vec![mk_timed_card("descendia-replacement", Some(replacement_expiry))])
+                    },
+                    circuit: if failed_source == Some("circuit") {
+                        Err(timed::TimedSourceError::failed("circuit down"))
+                    } else {
+                        Ok(vec![mk_timed_card("circuit-replacement", Some(replacement_expiry))])
+                    },
+                    bounties: if failed_source == Some("bounties") {
+                        Err(timed::TimedSourceError::failed("bounties down"))
+                    } else {
+                        Ok(vec![mk_timed_card("bounties-replacement", Some(replacement_expiry))])
+                    },
+                    arbitration: if failed_source == Some("arbitration") {
+                        Err(timed::TimedSourceError::failed("arbitration down"))
+                    } else {
+                        Ok(vec![mk_timed_card("arbitration-replacement", Some(replacement_expiry))])
+                    },
+                },
+            );
+
+            for (source, cards, lkg_id, replacement_id) in [
+                ("wfcd", &snapshot.sortie, "wfcd-sortie-lkg", "wfcd-sortie-replacement"),
+                ("wfcd", &snapshot.archon, "wfcd-archon-lkg", "wfcd-archon-replacement"),
+                ("wfcd", &snapshot.syndicates, "wfcd-syndicates-lkg", "wfcd-syndicates-replacement"),
+                ("wfcd", &snapshot.area_missions, "wfcd-area-lkg", "wfcd-area-replacement"),
+                ("wfcd", &snapshot.archimedea, "wfcd-archimedea-lkg", "wfcd-archimedea-replacement"),
+                ("descendia", &snapshot.descendia, "descendia-lkg", "descendia-replacement"),
+                ("circuit", &snapshot.circuit, "circuit-lkg", "circuit-replacement"),
+                ("bounties", &snapshot.bounties, "bounties-lkg", "bounties-replacement"),
+                ("arbitration", &snapshot.arbitration, "arbitration-lkg", "arbitration-replacement"),
+            ] {
+                prop_assert_eq!(cards.len(), 1, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} slice件数; failed={:?})", source, failed_source);
+                let expected_id = if failed_source == Some(source) { lkg_id } else { replacement_id };
+                prop_assert_eq!(cards[0].id.as_str(), expected_id, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} slice誤配線; failed={:?})", source, failed_source);
+            }
+
+            for (source, status, expected_source) in [
+                ("wfcd", &snapshot.sources.wfcd, timed::TimedSourceId::WfcdWorldstate),
+                ("descendia", &snapshot.sources.de_descendia, timed::TimedSourceId::DeWorldstate),
+                ("circuit", &snapshot.sources.de_circuit, timed::TimedSourceId::DeWorldstate),
+                ("bounties", &snapshot.sources.browse_wf_bounties, timed::TimedSourceId::BrowseWfBountyCycle),
+                ("arbitration", &snapshot.sources.browse_wf_arbitration, timed::TimedSourceId::BrowseWfArbitrationSchedule),
+            ] {
+                let failed_here = failed_source == Some(source);
+                let expected_error = failed_here.then(|| format!("{source} down"));
+                prop_assert_eq!(status.source, expected_source, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} source ID; failed={:?})", source, failed_source);
+                prop_assert_eq!(
+                    status.freshness,
+                    if failed_here { timed::TimedFreshness::Stale } else { timed::TimedFreshness::Fresh },
+                    "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} freshness; failed={:?})",
+                    source,
+                    failed_source,
+                );
+                prop_assert_eq!(status.error.as_deref(), expected_error.as_deref(), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} error; failed={:?})", source, failed_source);
+                prop_assert_eq!(status.last_attempt, Some(now), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} last_attempt; failed={:?})", source, failed_source);
+                prop_assert_eq!(
+                    status.last_success,
+                    Some(if failed_here { now - Duration::minutes(5) } else { now }),
+                    "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} last_success; failed={:?})",
+                    source,
+                    failed_source,
+                );
+                prop_assert_eq!(
+                    status.valid_until,
+                    Some(if failed_here { lkg_expiry } else { replacement_expiry }),
+                    "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する ({} valid_until; failed={:?})",
+                    source,
+                    failed_source,
+                );
+            }
+            prop_assert_eq!(snapshot.last_poll, Some(now), "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (snapshot poll時刻; failed={:?})", failed_source);
+        }
+
+        // validなdynamic payloadのstatic join失敗と、dynamic payload自体の失敗を分離する。
+        let bounty_static_join_error: Result<Vec<timed::TimedContent>, timed::TimedSourceError> =
+            Err(timed::TimedSourceError::failed("bounty join failed"));
+        let arbitration_ok: Result<Vec<timed::TimedContent>, timed::TimedSourceError> = Ok(vec![]);
+        let hints = timed::static_asset_refresh_hints(
+            true,
+            &bounty_static_join_error,
+            &arbitration_ok,
+        );
+        prop_assert!(hints.bounties, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (valid Bounty payloadのstatic join失敗でBounty asset refreshを要求しない)");
+        prop_assert!(!hints.arbitration, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Bounty join失敗がArbitration asset refreshへ伝播した)");
+
+        let bounty_dynamic_payload_error: Result<Vec<timed::TimedContent>, timed::TimedSourceError> =
+            Err(timed::TimedSourceError::failed("malformed bounty payload"));
+        let hints = timed::static_asset_refresh_hints(
+            false,
+            &bounty_dynamic_payload_error,
+            &arbitration_ok,
+        );
+        prop_assert!(!hints.bounties, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Bounty dynamic payload失敗でstatic cacheをinvalidateした)");
+        prop_assert!(!hints.arbitration, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Bounty dynamic payload失敗がArbitration asset refreshへ伝播した)");
+
+        let bounty_ok: Result<Vec<timed::TimedContent>, timed::TimedSourceError> = Ok(vec![]);
+        let arbitration_out_of_range: Result<Vec<timed::TimedContent>, timed::TimedSourceError> =
+            Err(timed::TimedSourceError::out_of_range("schedule ended"));
+        let hints = timed::static_asset_refresh_hints(
+            false,
+            &bounty_ok,
+            &arbitration_out_of_range,
+        );
+        prop_assert!(!hints.bounties, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Arbitration範囲外がBounty asset refreshへ伝播した)");
+        prop_assert!(hints.arbitration, "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (Arbitration範囲外でArbitration asset refreshを要求しない)");
+
+        let join_retry_delays = (1..=5)
+            .map(timed::static_join_retry_delay_secs)
+            .collect::<Vec<_>>();
+        prop_assert_eq!(
+            join_retry_delays,
+            vec![60, 300, 1_800, 7_200, 7_200],
+            "SPEC SRC-001 違反: WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する (join不整合の再取得backoffが1分/5分/30分/2時間上限でない)",
+        );
+    }
+
+    /// BNT-001: browse.wf Oracle bounty-cycleはexpiryが変換可能なミリ秒時刻で、同一の取得後nowより厳密に未来の場合だけfreshとする。expiry欠落・変換不能・now以下の期限切れpayloadは成功扱いせず、last-known-good Bountyを上書きしない
+    #[test]
+    fn bnt_001(expiry_delta_ms in -86_400_000i64..86_400_001) {
+        let now = base_now();
+        let expiry_ms = now.timestamp_millis() + expiry_delta_ms;
+        let body = format!(
+            r#"{{"expiry":{expiry_ms},"rot":"A","vaultRot":"B","zarimanFaction":"FC_GRINEER","bounties":{{"ZarimanSyndicate":[{{"node":"Node","challenge":"Challenge"}}],"EntratiLabSyndicate":[{{"node":"Node","challenge":"Challenge"}}],"HexSyndicate":[{{"node":"Node","challenge":"Challenge"}}]}}}}"#,
+        );
+        let parsed = timed::parse_bounty_cycle_json(&body, now);
+        prop_assert_eq!(parsed.is_ok(), expiry_delta_ms > 0, "SPEC BNT-001 違反: browse.wf Oracle bounty-cycleはexpiryが変換可能なミリ秒時刻で、同一の取得後nowより厳密に未来の場合だけfreshとする。expiry欠落・変換不能・now以下の期限切れpayloadは成功扱いせず、last-known-good Bountyを上書きしない (expiry境界)");
+
+        for invalid in vec![
+            r#"{"rot":"A","vaultRot":"B","zarimanFaction":"FC_GRINEER","bounties":{}}"#.to_string(),
+            r#"{"expiry":"not-ms","rot":"A","vaultRot":"B","zarimanFaction":"FC_GRINEER","bounties":{}}"#.to_string(),
+            format!(r#"{{"expiry":{},"rot":"A","vaultRot":"B","zarimanFaction":"FC_GRINEER","bounties":{{}}}}"#, now.timestamp_millis()),
+        ] {
+            prop_assert!(timed::parse_bounty_cycle_json(&invalid, now).is_err(), "SPEC BNT-001 違反: browse.wf Oracle bounty-cycleはexpiryが変換可能なミリ秒時刻で、同一の取得後nowより厳密に未来の場合だけfreshとする。expiry欠落・変換不能・now以下の期限切れpayloadは成功扱いせず、last-known-good Bountyを上書きしない (不正/期限切れexpiryを受理した)");
+        }
+
+        let mut cards = vec![mk_timed_card("lkg", Some(now + Duration::hours(1)))];
+        let mut status = mk_timed_status(timed::TimedSourceId::BrowseWfBountyCycle);
+        let update = parsed.map(|_| vec![mk_timed_card("new", Some(now + Duration::hours(2)))]);
+        timed::apply_timed_source_result(&mut cards, &mut status, now, update);
+        if expiry_delta_ms > 0 {
+            prop_assert_eq!(cards[0].id.as_str(), "new", "SPEC BNT-001 違反: browse.wf Oracle bounty-cycleはexpiryが変換可能なミリ秒時刻で、同一の取得後nowより厳密に未来の場合だけfreshとする。expiry欠落・変換不能・now以下の期限切れpayloadは成功扱いせず、last-known-good Bountyを上書きしない (fresh payloadで更新しない)");
+        } else {
+            prop_assert_eq!(cards[0].id.as_str(), "lkg", "SPEC BNT-001 違反: browse.wf Oracle bounty-cycleはexpiryが変換可能なミリ秒時刻で、同一の取得後nowより厳密に未来の場合だけfreshとする。expiry欠落・変換不能・now以下の期限切れpayloadは成功扱いせず、last-known-good Bountyを上書きしない (stale payloadがLKGを上書きした)");
+            prop_assert_eq!(status.freshness, timed::TimedFreshness::Stale, "SPEC BNT-001 違反: browse.wf Oracle bounty-cycleはexpiryが変換可能なミリ秒時刻で、同一の取得後nowより厳密に未来の場合だけfreshとする。expiry欠落・変換不能・now以下の期限切れpayloadは成功扱いせず、last-known-good Bountyを上書きしない (stale payloadのhealth)");
+        }
+    }
+
     /// NTY-001: 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない
     #[test]
     fn nty_001(
@@ -1298,6 +1652,684 @@ fn cfg_005() {
         projection,
         "SPEC CFG-005 違反: AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない (locale/mute変更でnotification projectionが変化した)"
     );
+}
+
+/// TMD-001: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない
+#[test]
+fn tmd_001() {
+    let mut snapshot = timed::TimedContentSnapshot::default();
+
+    let mut arbitration = mk_timed_card("arbitration", Some(base_now() + Duration::hours(1)));
+    arbitration.kind = "arbitration".to_string();
+    arbitration.temporal_status = timed::TimedTemporalStatus::Active;
+    arbitration.provenance = timed::TimedProvenance {
+        kind: timed::TimedSourceKind::CommunitySchedule,
+        contributors: vec![
+            timed::TimedSourceId::BrowseWfArbitrationSchedule,
+            timed::TimedSourceId::BrowseWfRegions,
+        ],
+    };
+    arbitration.source_id = timed::TimedSourceId::BrowseWfArbitrationSchedule;
+
+    let mut circuit = mk_timed_card("circuit", Some(base_now() + Duration::days(1)));
+    circuit.kind = "circuit".to_string();
+    circuit.temporal_status = timed::TimedTemporalStatus::Upcoming;
+    circuit.provenance = timed::TimedProvenance {
+        kind: timed::TimedSourceKind::OfficialLive,
+        contributors: vec![timed::TimedSourceId::DeWorldstate],
+    };
+    circuit.source_id = timed::TimedSourceId::DeWorldstate;
+
+    let mut bounty = mk_timed_card("bounty", Some(base_now() + Duration::hours(2)));
+    bounty.kind = "bounty".to_string();
+    bounty.provenance = timed::TimedProvenance {
+        kind: timed::TimedSourceKind::CommunityLive,
+        contributors: vec![timed::TimedSourceId::BrowseWfBountyCycle],
+    };
+    bounty.source_id = timed::TimedSourceId::BrowseWfBountyCycle;
+
+    snapshot.arbitration = vec![arbitration];
+    snapshot.circuit = vec![circuit];
+    snapshot.bounties = vec![bounty];
+    snapshot.sources.wfcd.freshness = timed::TimedFreshness::Fresh;
+    snapshot.sources.de_descendia.freshness = timed::TimedFreshness::Stale;
+    snapshot.sources.de_circuit.freshness = timed::TimedFreshness::OutOfRange;
+    snapshot.sources.browse_wf_bounties.freshness = timed::TimedFreshness::Unavailable;
+    snapshot.last_poll = Some(base_now());
+
+    let value = serde_json::to_value(&snapshot).expect("TimedContentSnapshotをserializeできること");
+    assert_eq!(value["arbitration"][0]["temporalStatus"], "active", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (active wire)");
+    assert_eq!(value["circuit"][0]["temporalStatus"], "upcoming", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (upcoming wire)");
+    assert_eq!(value["arbitration"][0]["provenance"]["kind"], "community-schedule", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (schedule provenance)");
+    assert_eq!(value["bounties"][0]["provenance"]["kind"], "community-live", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (community live provenance)");
+    assert_eq!(value["circuit"][0]["provenance"]["kind"], "official-live", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (official provenance)");
+    assert_eq!(
+        value["arbitration"][0]["provenance"]["contributors"],
+        serde_json::json!(["browse-wf-arbitration-schedule", "browse-wf-regions"]),
+        "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (物理contributor ID群)",
+    );
+    assert_eq!(value["sources"]["wfcd"]["freshness"], "fresh", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (fresh wire)");
+    assert_eq!(value["sources"]["deDescendia"]["freshness"], "stale", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (stale wire)");
+    assert_eq!(value["sources"]["deCircuit"]["freshness"], "out-of-range", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (out-of-range wire)");
+    assert_eq!(value["sources"]["browseWfBounties"]["freshness"], "unavailable", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (unavailable wire)");
+    assert!(value.get("areaMissions").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (camelCase areaMissions)");
+    assert!(value.get("lastPoll").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (camelCase lastPoll)");
+    let encoded = serde_json::to_string(&value).unwrap();
+    assert!(!encoded.contains("availability"), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (旧synthetic availabilityを残した)");
+    assert!(!encoded.contains("netracells"), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない (取得不能netracells fieldを残した)");
+}
+
+/// TMD-002: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する
+#[test]
+fn tmd_002() {
+    let now = base_now();
+    let schedule = format!(
+        "{},ClanNode7\n{},ClanNode8\n",
+        now.timestamp(),
+        (now + Duration::hours(1)).timestamp(),
+    );
+    let regions = serde_json::json!({
+        "ClanNode7": {
+            "name": "/node/Cholistan",
+            "systemName": "/system/Europa",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION",
+            "minEnemyLevel": 23,
+            "maxEnemyLevel": 33,
+            "darkSectorData": {
+                "resourceBonus": 0.25,
+                "xpBonus": 0.18,
+                "weaponXpBonusFor": "Melee",
+                "weaponXpBonusVal": 0.12
+            }
+        },
+        "ClanNode8": {
+            "name": "/node/Cholistan",
+            "systemName": "/system/Europa",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION",
+            "minEnemyLevel": 23,
+            "maxEnemyLevel": 33
+        }
+    });
+    let challenges = serde_json::json!({
+        "/challenge/kill": {
+            "name": "/challenge/name",
+            "description": "/challenge/description",
+            "requiredCount": 10
+        }
+    });
+    let dictionary = serde_json::json!({
+        "/node/Cholistan": "Cholistan",
+        "/system/Europa": "Europa",
+        "/mission/Excavation": "EXCAVATION",
+        "/challenge/name": "Operator",
+        "/challenge/description": "Kill |COUNT| enemies",
+        "/faction/infested": "INFESTED"
+    });
+    let factions = serde_json::json!({
+        "FC_INFESTATION": { "index": 2, "name": "/faction/infested" }
+    });
+    let assets = timed::parse_community_assets(
+        &schedule,
+        &regions.to_string(),
+        &challenges.to_string(),
+        &dictionary.to_string(),
+        &factions.to_string(),
+    )
+    .expect("Public Export fixtureを結合できること");
+    let card = timed::arbitration_card(&assets, now + Duration::seconds(1))
+        .expect("対象時刻の仲裁cardを生成できること");
+
+    assert_eq!(card.activation, Some(now), "SPEC TMD-002 違反: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する (activation)");
+    assert_eq!(card.expiry, Some(now + Duration::hours(1)), "SPEC TMD-002 違反: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する (1時間expiry)");
+    assert_eq!(card.temporal_status, timed::TimedTemporalStatus::Active, "SPEC TMD-002 違反: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する (active)");
+    assert_eq!(card.provenance.kind, timed::TimedSourceKind::CommunitySchedule, "SPEC TMD-002 違反: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する (schedule provenance)");
+    assert_eq!(card.source_id, timed::TimedSourceId::BrowseWfArbitrationSchedule, "SPEC TMD-002 違反: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する (source ID)");
+    assert_eq!(card.source_name, "browse.wf", "SPEC TMD-002 違反: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する (source credit)");
+    assert!(card.source_url.as_deref().is_some_and(|url| url.contains("browse.wf")), "SPEC TMD-002 違反: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する (source URL)");
+    assert_eq!(card.stages.len(), 1, "SPEC TMD-002 違反: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する (stage数)");
+    assert_eq!(card.stages[0].title, "Excavation", "SPEC TMD-002 違反: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する (mission)");
+    assert_eq!(card.stages[0].node.as_deref(), Some("Cholistan (Europa)"), "SPEC TMD-002 違反: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する (node/惑星)");
+    assert_eq!(card.stages[0].detail.as_deref(), Some("Infested"), "SPEC TMD-002 違反: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する (faction)");
+    assert_eq!(card.stages[0].enemy_levels, vec![23, 33], "SPEC TMD-002 違反: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する (enemy level)");
+    for (key, expected) in [
+        ("resourceBonusPercent", "25"),
+        ("xpBonusPercent", "18"),
+        ("weaponXpBonusFor", "Melee"),
+        ("weaponXpBonusPercent", "12"),
+    ] {
+        assert!(
+            card.metadata.iter().any(|item| item.key == key && item.value == expected),
+            "SPEC TMD-002 違反: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する (Dark Sector {key}={expected})",
+        );
+    }
+}
+
+/// TMD-003: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない
+#[test]
+fn tmd_003() {
+    let now = base_now();
+    let schedule = format!(
+        "{},ClanNode7\n{},ClanNode8\n",
+        now.timestamp(),
+        (now + Duration::hours(1)).timestamp(),
+    );
+    let regions = serde_json::json!({
+        "ClanNode7": {
+            "name": "/node/Cholistan",
+            "systemName": "/system/Europa",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION",
+            "minEnemyLevel": 23,
+            "maxEnemyLevel": 33
+        },
+        "ClanNode8": {
+            "name": "/node/Cholistan",
+            "systemName": "/system/Europa",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION",
+            "minEnemyLevel": 23,
+            "maxEnemyLevel": 33
+        }
+    });
+    let challenges = serde_json::json!({
+        "/challenge/kill": {
+            "name": "/challenge/name",
+            "description": "/challenge/description",
+            "requiredCount": 10
+        }
+    });
+    let dictionary = serde_json::json!({
+        "/node/Cholistan": "Cholistan",
+        "/system/Europa": "Europa",
+        "/mission/Excavation": "EXCAVATION",
+        "/challenge/name": "Operator",
+        "/challenge/description": "Kill |COUNT| enemies as Operator",
+        "/faction/infested": "INFESTED"
+    });
+    let factions = serde_json::json!({
+        "FC_INFESTATION": { "index": 2, "name": "/faction/infested" }
+    });
+    let assets = timed::parse_community_assets(
+        &schedule,
+        &regions.to_string(),
+        &challenges.to_string(),
+        &dictionary.to_string(),
+        &factions.to_string(),
+    )
+    .expect("Public Export fixtureを結合できること");
+    let expiry = now + Duration::hours(1);
+    let bounty = serde_json::json!({
+        "expiry": expiry.timestamp_millis(),
+        "rot": "B",
+        "vaultRot": "C",
+        "zarimanFaction": "FC_INFESTATION",
+        "bounties": {
+            "ZarimanSyndicate": [{"node":"ClanNode7","challenge":"/challenge/kill"}],
+            "EntratiLabSyndicate": [{"node":"ClanNode7","challenge":"/challenge/kill"}],
+            "HexSyndicate": [{
+                "node":"ClanNode7",
+                "challenge":"/challenge/kill",
+                "ally":"/Lotus/Types/ArthurAllyAgent"
+            }]
+        }
+    });
+    let cards = timed::parse_bounty_cards(&bounty.to_string(), now, &assets)
+        .expect("Oracle fixtureを3 cardへ変換できること");
+    assert_eq!(cards.len(), 3, "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (3 syndicateを分離しない)");
+    assert_eq!(
+        cards.iter().map(|card| card.variant.as_deref()).collect::<Vec<_>>(),
+        vec![Some("holdfasts"), Some("cavia"), Some("hex")],
+        "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (variant順)",
+    );
+    for card in &cards {
+        assert_eq!(card.expiry, Some(expiry), "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (expiry)");
+        assert_eq!(card.provenance.kind, timed::TimedSourceKind::CommunityLive, "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (Oracle provenance)");
+        assert_eq!(card.source_id, timed::TimedSourceId::BrowseWfBountyCycle, "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (Oracle source)");
+        for (key, expected) in [
+            ("rotation", "B"),
+            ("vaultRotation", "C"),
+            ("zarimanFaction", "Infested"),
+        ] {
+            assert!(card.metadata.iter().any(|item| item.key == key && item.value == expected), "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない ({key})");
+        }
+        let stage = &card.stages[0];
+        assert_eq!(stage.title, "Cholistan", "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (node)");
+        assert_eq!(stage.node.as_deref(), Some("Excavation · Europa"), "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (mission/system)");
+        assert_eq!(stage.detail.as_deref(), Some("Operator — Kill 10 enemies as Operator"), "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (challenge)");
+        assert!(stage.enemy_levels.is_empty() && stage.standing_stages.is_empty(), "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (Oracleにないlevel/standingを捏造した)");
+    }
+    assert_eq!(
+        cards[2].stages[0].ally.as_deref(),
+        Some("/Lotus/Types/ArthurAllyAgent"),
+        "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (Hex ally raw identifier)",
+    );
+
+    for tag in ["ZarimanSyndicate", "EntratiLabSyndicate", "HexSyndicate"] {
+        let mut missing = bounty.clone();
+        missing["bounties"].as_object_mut().unwrap().remove(tag);
+        assert!(timed::parse_bounty_cards(&missing.to_string(), now, &assets).is_err(), "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (必須tag {tag}欠落)");
+    }
+    for (field, bad) in [("node", ""), ("challenge", "")] {
+        let mut missing = bounty.clone();
+        missing["bounties"]["HexSyndicate"][0][field] = serde_json::json!(bad);
+        assert!(timed::parse_bounty_cards(&missing.to_string(), now, &assets).is_err(), "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない ({field}欠落)");
+    }
+    assert!(
+        timed::parse_bounty_cards(
+            &serde_json::json!({
+                "expiry": expiry.timestamp_millis(),
+                "rot": "B",
+                "vaultRot": "C",
+                "zarimanFaction": "FC_INFESTATION"
+            }).to_string(),
+            now,
+            &assets,
+        ).is_err(),
+        "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (bounties root欠落)",
+    );
+
+    let raw_dictionary = serde_json::json!({"unrelated":"value"});
+    let raw_assets = timed::parse_community_assets(
+        &schedule,
+        &regions.to_string(),
+        &challenges.to_string(),
+        &raw_dictionary.to_string(),
+        &factions.to_string(),
+    )
+    .expect("未知identifierを含むfixture自体は有効であること");
+    let raw_cards = timed::parse_bounty_cards(&bounty.to_string(), now, &raw_assets)
+        .expect("未知identifierはraw fallbackでcard化すること");
+    for card in &raw_cards {
+        let stage = &card.stages[0];
+        assert_eq!(stage.title, "/node/Cholistan", "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (未知node keyを改変した)");
+        assert_eq!(
+            stage.node.as_deref(),
+            Some("/mission/Excavation · /system/Europa"),
+            "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (未知mission/system keyを改変した)",
+        );
+        assert_eq!(
+            stage.detail.as_deref(),
+            Some("/challenge/name — /challenge/description"),
+            "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (未知challenge keyを改変した)",
+        );
+        assert!(stage.modifiers.iter().any(|value| value == "/faction/infested"), "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (未知faction keyを改変した)");
+        assert!(card.metadata.iter().any(|item| item.key == "zarimanFaction" && item.value == "/faction/infested"), "SPEC TMD-003 違反: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない (未知zarimanFaction keyを改変した)");
+    }
+}
+
+/// TMD-004: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない
+#[test]
+fn tmd_004() {
+    let now = base_now();
+    let activation = now - Duration::hours(1);
+    let expiry = now + Duration::days(6);
+    let schedule_entry = |activation: DateTime<Utc>, expiry: DateTime<Utc>| {
+        serde_json::json!({
+            "Activation": {"$date":{"$numberLong":activation.timestamp_millis().to_string()}},
+            "Expiry": {"$date":{"$numberLong":expiry.timestamp_millis().to_string()}},
+            "CategoryChoices": [
+                {"Category":"EXC_NORMAL","Choices":["Ash","Mag","Volt"]},
+                {"Category":"EXC_HARD","Choices":["Braton","Lato","Skana","Paris","Kunai"]}
+            ]
+        })
+    };
+    let fixture = serde_json::json!({
+        "EndlessXpSchedule": [schedule_entry(activation, expiry)]
+    });
+    let cards = timed::parse_circuit_json(&fixture.to_string(), now)
+        .expect("DE Circuit fixtureをparseできること");
+    assert_eq!(cards.len(), 1, "SPEC TMD-004 違反: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない (1 scheduleを複数cardへ分割した)");
+    let card = &cards[0];
+    assert_eq!(card.activation, Some(activation), "SPEC TMD-004 違反: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない (activation)");
+    assert_eq!(card.expiry, Some(expiry), "SPEC TMD-004 違反: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない (expiry)");
+    assert_eq!(card.temporal_status, timed::TimedTemporalStatus::Active, "SPEC TMD-004 違反: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない (active)");
+    assert_eq!(card.kind, "circuit", "SPEC TMD-004 違反: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない (kind)");
+    assert_eq!(card.variant, None, "SPEC TMD-004 違反: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない (variant)");
+    assert_eq!(card.provenance.kind, timed::TimedSourceKind::OfficialLive, "SPEC TMD-004 違反: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない (official source)");
+    assert_eq!(card.provenance.contributors, vec![timed::TimedSourceId::DeWorldstate], "SPEC TMD-004 違反: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない (DE contributor)");
+    assert_eq!(card.stages.len(), 2, "SPEC TMD-004 違反: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない (Normal/Hard stage)");
+    assert_eq!(card.stages[0].title, "Normal Circuit", "SPEC TMD-004 違反: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない (Normal stage title)");
+    assert_eq!(card.stages[1].title, "Steel Path Circuit", "SPEC TMD-004 違反: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない (Hard stage title)");
+    assert_eq!(card.stages[0].choices, vec!["Ash", "Mag", "Volt"], "SPEC TMD-004 違反: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない (Normal 3 frame)");
+    assert_eq!(card.stages[1].choices, vec!["Braton", "Lato", "Skana", "Paris", "Kunai"], "SPEC TMD-004 違反: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない (Hard 5 weapon)");
+
+    for (case, invalid) in [
+        ("empty schedule", serde_json::json!({"EndlessXpSchedule": []})),
+        (
+            "no active entry",
+            serde_json::json!({
+                "EndlessXpSchedule": [
+                    schedule_entry(now - Duration::days(2), now - Duration::days(1)),
+                    schedule_entry(now + Duration::days(1), now + Duration::days(2))
+                ]
+            }),
+        ),
+        (
+            "multiple active entries",
+            serde_json::json!({
+                "EndlessXpSchedule": [
+                    schedule_entry(now - Duration::hours(2), now + Duration::days(1)),
+                    schedule_entry(now - Duration::hours(1), now + Duration::days(2))
+                ]
+            }),
+        ),
+    ] {
+        assert!(
+            timed::parse_circuit_json(&invalid.to_string(), now).is_err(),
+            "SPEC TMD-004 違反: DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない (不正Circuit {case}を空成功・先頭選択した)",
+        );
+    }
+}
+
+/// TMD-005: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する
+#[test]
+fn tmd_005() {
+    let now = base_now();
+    let mission_activation = now - Duration::hours(1);
+    let activation = mission_activation.to_rfc3339();
+    let mission_expiry = (now + Duration::days(6)).to_rfc3339();
+    let first_job_expiry = now + Duration::hours(2);
+    let second_job_expiry = now + Duration::hours(4);
+    let expired_job_expiry = now - Duration::minutes(30);
+    let area_job = |id: &str, title: &str, expiry: DateTime<Utc>, count: u32| {
+        serde_json::json!({
+            "id": id,
+            "expiry": expiry.to_rfc3339(),
+            "type": title,
+            "enemyLevels": [5, 15],
+            "standingStages": [400, 600, 1000],
+            "minMR": 1,
+            "locationTag": "Plains of Eidolon",
+            "timeBound": "Day",
+            "rewardPool": ["Lith Relic", "Endo"],
+            "rewardPoolDrops": [{
+                "item": "Endo",
+                "rarity": "Common",
+                "chance": 25.5,
+                "count": count
+            }],
+            "uniqueName": format!("Bounty {id}"),
+            "isVault": false
+        })
+    };
+    let wfcd_fixture = serde_json::json!({
+        "sortie": null,
+        "archonHunt": null,
+        "syndicateMissions": [{
+            "id": "ostrons",
+            "activation": activation,
+            "expiry": mission_expiry,
+            "syndicate": "Ostrons",
+            "syndicateKey": "",
+            "nodes": ["Ares (Mars)", "Spear (Mars)"],
+            "jobs": [
+                area_job("job-a1", "Capture", first_job_expiry, 100),
+                area_job("job-a2", "Rescue", first_job_expiry, 200),
+                area_job("job-b1", "Exterminate", second_job_expiry, 300),
+                area_job("job-expired", "Expired Job", expired_job_expiry, 999)
+            ]
+        }],
+        "archimedeas": [{
+            "id": "deep-current",
+            "activation": activation,
+            "expiry": mission_expiry,
+            "type": "Deep Archimedea",
+            "typeKey": "CT_LAB",
+            "personalModifiers": [{
+                "key": "gear-embargo",
+                "name": "Gear Embargo",
+                "description": "Gear items cannot be used."
+            }],
+            "missions": [{
+                "faction": "The Murmur",
+                "factionKey": "",
+                "missionType": "Mirror Defense",
+                "missionTypeKey": "",
+                "deviation": {
+                    "key": "energy-drain",
+                    "name": "Energy Drain",
+                    "description": "Energy drains over time."
+                },
+                "risks": [
+                    {
+                        "key": "standard-risk",
+                        "name": "Standard Risk",
+                        "description": "Standard description.",
+                        "isHard": false
+                    },
+                    {
+                        "key": "elite-risk",
+                        "name": "Elite Risk",
+                        "description": "Elite description.",
+                        "isHard": true
+                    }
+                ]
+            }]
+        }]
+    });
+    let wfcd = timed::parse_wfcd_json(&wfcd_fixture.to_string(), now)
+        .expect("WFCD rich fixtureをparseできること");
+    assert_eq!(wfcd.syndicates.len(), 1, "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Syndicate card欠落)");
+    assert_eq!(wfcd.syndicates[0].stages.len(), 2, "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Syndicate node stages欠落)");
+    assert_eq!(wfcd.syndicates[0].stages[0].node.as_deref(), Some("Ares (Mars)"), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Syndicate node保持)");
+    assert_eq!(wfcd.area_missions.len(), 2, "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (job expiryごとにArea cardを分離しない)");
+    let first_group = wfcd
+        .area_missions
+        .iter()
+        .find(|card| card.expiry == Some(first_job_expiry))
+        .expect("first job expiry group");
+    let second_group = wfcd
+        .area_missions
+        .iter()
+        .find(|card| card.expiry == Some(second_job_expiry))
+        .expect("second job expiry group");
+    assert_eq!(first_group.activation, Some(mission_activation), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (mission activationをgroup cardへ保持しない)");
+    assert_eq!(second_group.activation, Some(mission_activation), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (別groupのmission activation)");
+    assert_eq!(first_group.stages.len(), 2, "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (同じjob expiryを同一cardへgroupしない)");
+    assert_eq!(second_group.stages.len(), 1, "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (別job expiryを混在させた)");
+    assert!(wfcd.area_missions.iter().flat_map(|card| &card.stages).all(|stage| stage.title != "Expired Job"), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (期限切れjobを残した)");
+    let area_stage = first_group
+        .stages
+        .iter()
+        .find(|stage| stage.title == "Capture")
+        .expect("Capture area stage");
+    assert_eq!(area_stage.reward_drops.len(), 1, "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (reward drop欠落)");
+    assert_eq!(area_stage.reward_drops[0].item, "Endo", "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (reward item)");
+    assert_eq!(area_stage.reward_drops[0].rarity, "Common", "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (reward rarity)");
+    assert_eq!(area_stage.reward_drops[0].chance_percent, 25.5, "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (reward chance)");
+    assert_eq!(area_stage.reward_drops[0].count, 100, "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (reward count)");
+    assert_eq!(wfcd.archimedea.len(), 1, "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Archimedea)");
+    assert_eq!(wfcd.archimedea[0].personal_modifiers[0].description, "Gear items cannot be used.", "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (personal condition description)");
+    let conditions = &wfcd.archimedea[0].stages[0].conditions;
+    assert!(conditions.iter().any(|item| item.description == "Energy drains over time." && !item.elite_only), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (deviation description)");
+    assert!(conditions.iter().any(|item| item.description == "Standard description." && !item.elite_only), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (standard risk)");
+    assert!(conditions.iter().any(|item| item.description == "Elite description." && item.elite_only), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (elite risk)");
+
+    // Sortie/Archonで使用しない片側専用fieldは、集約sourceが省略しても正当なpayloadとして扱う。
+    let branch_specific_fixture = serde_json::json!({
+        "sortie": {
+            "id": "sortie-current",
+            "activation": activation,
+            "expiry": mission_expiry,
+            "rewardPool": "Sortie Rewards",
+            "boss": "Lephantis",
+            "faction": "Infestation",
+            "factionKey": "Infestation",
+            "variants": [{
+                "missionType": "Survival",
+                "missionTypeKey": "Survival",
+                "modifier": "Energy Reduction",
+                "modifierDescription": "Low energy",
+                "node": "Nabuk (Kuva Fortress)",
+                "nodeKey": "Nabuk (Kuva Fortress)"
+            }]
+        },
+        "archonHunt": {
+            "id": "archon-current",
+            "activation": activation,
+            "expiry": mission_expiry,
+            "boss": "Archon Nira",
+            "faction": "Narmer",
+            "factionKey": "Narmer",
+            "missions": [{
+                "node": "Metis (Jupiter)",
+                "nodeKey": "Metis (Jupiter)",
+                "type": "Mobile Defense",
+                "typeKey": "Mobile Defense"
+            }]
+        },
+        "syndicateMissions": [],
+        "archimedeas": []
+    });
+    let branch_specific = timed::parse_wfcd_json(&branch_specific_fixture.to_string(), now)
+        .expect("Sortie/Archonの未使用field欠落を許容すること");
+    let sortie = &branch_specific.sortie[0];
+    assert_eq!(sortie.kind, "sortie", "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Sortie kind)");
+    assert_eq!(sortie.title, "Sortie", "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Sortie title)");
+    assert_eq!(sortie.subtitle.as_deref(), Some("Lephantis · Infestation · Sortie Rewards"), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Sortie subtitle)");
+    assert_eq!(sortie.stages.len(), 1, "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Sortie variants欠落)");
+    assert_eq!(sortie.stages[0].title, "Survival", "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Sortie stage title)");
+    assert_eq!(sortie.stages[0].node.as_deref(), Some("Nabuk (Kuva Fortress)"), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Sortie node)");
+    assert_eq!(sortie.stages[0].detail.as_deref(), Some("Low energy"), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Sortie modifier description)");
+    assert_eq!(sortie.stages[0].modifiers, vec!["Energy Reduction"], "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Sortie modifier)");
+
+    let archon = &branch_specific.archon[0];
+    assert_eq!(archon.kind, "archon", "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Archon kind)");
+    assert_eq!(archon.title, "Archon Hunt", "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Archon title)");
+    assert_eq!(archon.subtitle.as_deref(), Some("Archon Nira · Narmer"), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Archon faction subtitle)");
+    assert_eq!(archon.stages.len(), 1, "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Archon missions欠落)");
+    assert_eq!(archon.stages[0].title, "Mobile Defense", "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Archon stage title)");
+    assert_eq!(archon.stages[0].node.as_deref(), Some("Metis (Jupiter)"), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Archon node)");
+    let mut missing_sortie_reward = branch_specific_fixture.clone();
+    missing_sortie_reward["sortie"].as_object_mut().unwrap().remove("rewardPool");
+    assert!(timed::parse_wfcd_json(&missing_sortie_reward.to_string(), now).is_err(), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (使用するSortie rewardPool欠落を受理した)");
+    let mut missing_sortie_stages = branch_specific_fixture.clone();
+    missing_sortie_stages["sortie"].as_object_mut().unwrap().remove("variants");
+    assert!(timed::parse_wfcd_json(&missing_sortie_stages.to_string(), now).is_err(), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (使用するSortie variants欠落を受理した)");
+    let mut missing_archon_stages = branch_specific_fixture.clone();
+    missing_archon_stages["archonHunt"].as_object_mut().unwrap().remove("missions");
+    assert!(timed::parse_wfcd_json(&missing_archon_stages.to_string(), now).is_err(), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (使用するArchon missions欠落を受理した)");
+
+    // 一部に有効entryがあっても、取得中entryの必須timestamp/intervalが壊れたpayloadは全体を失敗させる。
+    let mut bad_mission_timestamp = wfcd_fixture.clone();
+    bad_mission_timestamp["syndicateMissions"][0]["activation"] = serde_json::json!("not-rfc3339");
+    assert!(timed::parse_wfcd_json(&bad_mission_timestamp.to_string(), now).is_err(), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (不正mission activationを部分freshにした)");
+    let mut bad_job_timestamp = wfcd_fixture.clone();
+    bad_job_timestamp["syndicateMissions"][0]["jobs"][0]["expiry"] = serde_json::json!("not-rfc3339");
+    assert!(timed::parse_wfcd_json(&bad_job_timestamp.to_string(), now).is_err(), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (不正job expiryを部分freshにした)");
+    let mut bad_archimedea_timestamp = wfcd_fixture.clone();
+    bad_archimedea_timestamp["archimedeas"][0]["expiry"] = serde_json::json!("not-rfc3339");
+    assert!(timed::parse_wfcd_json(&bad_archimedea_timestamp.to_string(), now).is_err(), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (不正Archimedea expiryを部分freshにした)");
+    let mut inverted_job_interval = wfcd_fixture.clone();
+    inverted_job_interval["syndicateMissions"][0]["jobs"][0]["expiry"] =
+        serde_json::json!(mission_activation.to_rfc3339());
+    assert!(timed::parse_wfcd_json(&inverted_job_interval.to_string(), now).is_err(), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (job expiry<=mission activationを受理した)");
+    for field in ["item", "rarity", "chance", "count"] {
+        let mut missing_drop_field = wfcd_fixture.clone();
+        missing_drop_field["syndicateMissions"][0]["jobs"][0]["rewardPoolDrops"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        assert!(
+            timed::parse_wfcd_json(&missing_drop_field.to_string(), now).is_err(),
+            "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (reward drop必須field {field}欠落を部分freshにした)",
+        );
+    }
+
+    let descent = |activation: DateTime<Utc>, expiry: DateTime<Utc>, seed: u64| {
+        let challenges = (1u32..=21)
+            .map(|index| serde_json::json!({
+                "Index": index,
+                "Type": format!("DT_FLOOR_{index}"),
+                "Challenge": format!("Challenge{index}"),
+                "Level": format!("/Lotus/Levels/Floor{index}.level"),
+                "Specs": [format!("Spec {index}")],
+                "Auras": [format!("Aura {index}")]
+            }))
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "Activation": {"$date":{"$numberLong":activation.timestamp_millis().to_string()}},
+            "Expiry": {"$date":{"$numberLong":expiry.timestamp_millis().to_string()}},
+            "RandSeed": seed,
+            "Challenges": challenges
+        })
+    };
+    let current_descent = descent(now - Duration::days(1), now + Duration::weeks(1), 1);
+    let mut descents = vec![descent(
+        now - Duration::weeks(2),
+        now - Duration::weeks(1),
+        0,
+    )];
+    descents.push(current_descent.clone());
+    for week in 1i64..=5 {
+        descents.push(descent(
+            now + Duration::weeks(week),
+            now + Duration::weeks(week + 1),
+            (week + 1) as u64,
+        ));
+    }
+    let de_fixture = serde_json::json!({"Descents": descents});
+    let cards = timed::parse_descents_json(&de_fixture.to_string(), now)
+        .expect("DE Descents rich fixtureをparseできること");
+    assert_eq!(cards.len(), 6, "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (expired除外/current 1週+future 5週)");
+    assert_eq!(cards[0].temporal_status, timed::TimedTemporalStatus::Active, "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (current active)");
+    assert!(cards[1..].iter().all(|card| card.temporal_status == timed::TimedTemporalStatus::Upcoming), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (future upcoming)");
+    assert!(cards.windows(2).all(|pair| pair[0].activation < pair[1].activation), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (activation順)");
+    assert!(cards.iter().all(|card| card.stages.len() == 21), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (各週21 stage)");
+    assert!(cards.iter().flat_map(|card| &card.stages).all(|stage| {
+        stage.specs.len() == 1 && stage.auras.len() == 1
+    }), "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (Specs/Auras欠落)");
+
+    for (case, invalid_fixture) in [
+        ("empty Descents", serde_json::json!({"Descents": []})),
+        (
+            "all expired Descents",
+            serde_json::json!({
+                "Descents": [descent(
+                    now - Duration::weeks(2),
+                    now - Duration::weeks(1),
+                    99,
+                )]
+            }),
+        ),
+    ] {
+        assert!(
+            timed::parse_descents_json(&invalid_fixture.to_string(), now).is_err(),
+            "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する ({case}を空成功した)",
+        );
+    }
+
+    let mut equal_interval = current_descent.clone();
+    equal_interval["Activation"] = equal_interval["Expiry"].clone();
+    let mut inverted_interval = current_descent.clone();
+    inverted_interval["Activation"]["$date"]["$numberLong"] =
+        serde_json::json!((now + Duration::days(2)).timestamp_millis().to_string());
+    inverted_interval["Expiry"]["$date"]["$numberLong"] =
+        serde_json::json!((now + Duration::days(1)).timestamp_millis().to_string());
+    let mut empty_challenges = current_descent.clone();
+    empty_challenges["Challenges"] = serde_json::json!([]);
+    let mut duplicate_index = current_descent.clone();
+    duplicate_index["Challenges"][1]["Index"] = duplicate_index["Challenges"][0]["Index"].clone();
+    let mut missing_specs = current_descent.clone();
+    missing_specs["Challenges"][0].as_object_mut().unwrap().remove("Specs");
+    let mut missing_auras = current_descent;
+    missing_auras["Challenges"][0].as_object_mut().unwrap().remove("Auras");
+    for (case, invalid) in [
+        ("activation==expiry", equal_interval),
+        ("activation>expiry", inverted_interval),
+        ("empty Challenges", empty_challenges),
+        ("duplicate Index", duplicate_index),
+        ("missing Specs", missing_specs),
+        ("missing Auras", missing_auras),
+    ] {
+        let invalid_fixture = serde_json::json!({"Descents": [invalid]});
+        assert!(
+            timed::parse_descents_json(&invalid_fixture.to_string(), now).is_err(),
+            "SPEC TMD-005 違反: 既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する (不正Descents {case}を部分受理した)",
+        );
+    }
 }
 
 /// NTF-001: 通知テストは全選択先の要求受付時だけ成功し、desktopを表示済み・配信済みとは扱わない。1件でも失敗すれば失敗先・理由・要求受付済みの部分成功先を保持して失敗し、通知先なしも失敗する

@@ -1,33 +1,213 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
+use reqwest::header::CACHE_CONTROL;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 
 use crate::poller::PollerState;
 
+mod browse_wf;
+mod de;
+mod wfcd;
+
+use browse_wf::{
+    arbitration_card_from_assets, bounty_cards_from_cycle, parse_arbitration_assets,
+    parse_bounty_assets, parse_shared_community_assets, ArbitrationAssets, BountyAssets,
+};
+
+pub use browse_wf::{
+    arbitration_card, arbitration_slot_at, parse_arbitration_schedule, parse_bounty_cards,
+    parse_bounty_cycle_json, parse_community_assets, ArbitrationSchedule, ArbitrationSlot,
+    CommunityAssets,
+};
+pub use de::{parse_circuit_json, parse_descents_json};
+pub use wfcd::{parse_wfcd_json, WfcdTimedContent};
+
 pub const WFCD_WORLDSTATE_URL: &str = "https://api.warframestat.us/pc";
 pub const DE_WORLDSTATE_URL: &str = "https://api.warframe.com/cdn/worldState.php";
+pub const BROWSE_WF_BOUNTY_URL: &str = "https://oracle.browse.wf/bounty-cycle";
+pub const BROWSE_WF_ARBITRATION_URL: &str = "https://browse.wf/arbys.txt";
+pub const BROWSE_WF_REGIONS_URL: &str =
+    "https://browse.wf/warframe-public-export-plus/ExportRegions.json";
+pub const BROWSE_WF_CHALLENGES_URL: &str =
+    "https://browse.wf/warframe-public-export-plus/ExportChallenges.json";
+pub const BROWSE_WF_DICTIONARY_URL: &str =
+    "https://browse.wf/warframe-public-export-plus/dict.en.json";
+pub const BROWSE_WF_FACTIONS_URL: &str =
+    "https://browse.wf/warframe-public-export-plus/ExportFactions.json";
 pub const TIMED_POLL_SECS: u64 = 300;
 
+const WORLDSTATE_BODY_LIMIT: usize = 8 * 1024 * 1024;
+const SCHEDULE_BODY_LIMIT: usize = 2 * 1024 * 1024;
+const EXPORT_BODY_LIMIT: usize = 8 * 1024 * 1024;
+const STATIC_REFRESH_HOURS: i64 = 24;
+const STATIC_RETRY_SECS: i64 = 60;
+const STATIC_JOIN_RETRY_SCHEDULE_SECS: [u64; 4] = [60, 300, 1_800, 7_200];
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum TimedAvailability {
-    Available,
+#[serde(rename_all = "kebab-case")]
+pub enum TimedTemporalStatus {
+    Active,
+    Upcoming,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TimedSourceKind {
+    OfficialLive,
+    CommunityLive,
+    CommunitySchedule,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TimedSourceId {
+    WfcdWorldstate,
+    DeWorldstate,
+    BrowseWfArbitrationSchedule,
+    BrowseWfBountyCycle,
+    BrowseWfRegions,
+    BrowseWfChallenges,
+    BrowseWfDictionaryEn,
+    BrowseWfFactions,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TimedFreshness {
+    Fresh,
+    Stale,
+    OutOfRange,
     Unavailable,
-    Synthetic,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimedProvenance {
+    pub kind: TimedSourceKind,
+    pub contributors: Vec<TimedSourceId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimedSourceStatus {
+    pub source: TimedSourceId,
+    pub freshness: TimedFreshness,
+    pub last_attempt: Option<DateTime<Utc>>,
+    pub last_success: Option<DateTime<Utc>>,
+    pub valid_until: Option<DateTime<Utc>>,
+    pub error: Option<String>,
+}
+
+impl TimedSourceStatus {
+    pub fn new(source: TimedSourceId) -> Self {
+        Self {
+            source,
+            freshness: TimedFreshness::Unavailable,
+            last_attempt: None,
+            last_success: None,
+            valid_until: None,
+            error: None,
+        }
+    }
+
+    fn fresh(&mut self, now: DateTime<Utc>, valid_until: Option<DateTime<Utc>>) {
+        self.freshness = TimedFreshness::Fresh;
+        self.last_attempt = Some(now);
+        self.last_success = Some(now);
+        self.valid_until = valid_until;
+        self.error = None;
+    }
+
+    fn failed(&mut self, now: DateTime<Utc>, error: String, has_lkg: bool) {
+        self.freshness = if has_lkg {
+            TimedFreshness::Stale
+        } else {
+            TimedFreshness::Unavailable
+        };
+        self.last_attempt = Some(now);
+        self.error = Some(error);
+    }
+
+    fn out_of_range(&mut self, now: DateTime<Utc>, error: String) {
+        self.freshness = TimedFreshness::OutOfRange;
+        self.last_attempt = Some(now);
+        self.valid_until = None;
+        self.error = Some(error);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimedSourceStatuses {
+    pub wfcd: TimedSourceStatus,
+    pub de_descendia: TimedSourceStatus,
+    pub de_circuit: TimedSourceStatus,
+    pub browse_wf_bounties: TimedSourceStatus,
+    pub browse_wf_arbitration: TimedSourceStatus,
+}
+
+impl Default for TimedSourceStatuses {
+    fn default() -> Self {
+        Self {
+            wfcd: TimedSourceStatus::new(TimedSourceId::WfcdWorldstate),
+            de_descendia: TimedSourceStatus::new(TimedSourceId::DeWorldstate),
+            de_circuit: TimedSourceStatus::new(TimedSourceId::DeWorldstate),
+            browse_wf_bounties: TimedSourceStatus::new(TimedSourceId::BrowseWfBountyCycle),
+            browse_wf_arbitration: TimedSourceStatus::new(
+                TimedSourceId::BrowseWfArbitrationSchedule,
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TimedConditionKind {
+    Personal,
+    Deviation,
+    Risk,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimedCondition {
+    pub key: String,
+    pub name: String,
+    pub description: String,
+    pub kind: TimedConditionKind,
+    pub elite_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimedRewardDrop {
+    pub item: String,
+    pub rarity: String,
+    pub chance_percent: f64,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimedMetadata {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TimedStage {
     pub order: u32,
     pub title: String,
     pub node: Option<String>,
     pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modifiers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<TimedCondition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enemy_levels: Vec<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -36,9 +216,44 @@ pub struct TimedStage {
     pub min_mr: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_bound: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reward_pool: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reward_drops: Vec<TimedRewardDrop>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub specs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auras: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ally: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl TimedStage {
+    pub(crate) fn new(order: u32, title: String) -> Self {
+        Self {
+            order,
+            title,
+            node: None,
+            detail: None,
+            modifiers: vec![],
+            conditions: vec![],
+            enemy_levels: vec![],
+            standing_stages: vec![],
+            min_mr: None,
+            time_bound: None,
+            reward_pool: vec![],
+            reward_drops: vec![],
+            specs: vec![],
+            auras: vec![],
+            choices: vec![],
+            ally: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TimedContent {
     pub id: String,
@@ -48,889 +263,933 @@ pub struct TimedContent {
     pub subtitle: Option<String>,
     pub activation: Option<DateTime<Utc>>,
     pub expiry: Option<DateTime<Utc>>,
-    pub availability: TimedAvailability,
+    pub temporal_status: TimedTemporalStatus,
+    pub provenance: TimedProvenance,
+    pub source_id: TimedSourceId,
+    pub source_name: String,
+    pub source_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub metadata: Vec<TimedMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub personal_modifiers: Vec<TimedCondition>,
     pub stages: Vec<TimedStage>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TimedContentSnapshot {
+    pub arbitration: Vec<TimedContent>,
     pub sortie: Vec<TimedContent>,
     pub archon: Vec<TimedContent>,
     pub syndicates: Vec<TimedContent>,
     pub area_missions: Vec<TimedContent>,
+    pub bounties: Vec<TimedContent>,
+    pub circuit: Vec<TimedContent>,
     pub archimedea: Vec<TimedContent>,
     pub descendia: Vec<TimedContent>,
-    pub wfcd_ok: bool,
-    pub wfcd_error: Option<String>,
-    pub descents_ok: bool,
-    pub descents_error: Option<String>,
+    pub sources: TimedSourceStatuses,
     pub last_poll: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TimedSourceError {
+    Failed(String),
+    OutOfRange(String),
+}
+
+impl TimedSourceError {
+    pub fn failed(message: impl Into<String>) -> Self {
+        Self::Failed(message.into())
+    }
+
+    pub fn out_of_range(message: impl Into<String>) -> Self {
+        Self::OutOfRange(message.into())
+    }
+}
+
+impl std::fmt::Display for TimedSourceError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Failed(message) | Self::OutOfRange(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for TimedSourceError {}
+
+pub fn retain_unexpired(cards: &mut Vec<TimedContent>, now: DateTime<Utc>) {
+    cards.retain(|card| card.expiry.is_some_and(|expiry| expiry > now));
+}
+
+fn max_expiry(cards: &[TimedContent]) -> Option<DateTime<Utc>> {
+    cards.iter().filter_map(|card| card.expiry).max()
+}
+
+pub fn apply_timed_source_result(
+    cards: &mut Vec<TimedContent>,
+    status: &mut TimedSourceStatus,
+    now: DateTime<Utc>,
+    result: Result<Vec<TimedContent>, TimedSourceError>,
+) {
+    apply_timed_source_result_with_asset_error(cards, status, now, result, None);
+}
+
+fn apply_timed_source_result_with_asset_error(
+    cards: &mut Vec<TimedContent>,
+    status: &mut TimedSourceStatus,
+    now: DateTime<Utc>,
+    result: Result<Vec<TimedContent>, TimedSourceError>,
+    asset_error: Option<String>,
+) {
+    match result {
+        Ok(mut next) => {
+            retain_unexpired(&mut next, now);
+            let valid_until = max_expiry(&next);
+            *cards = next;
+            if let Some(error) = asset_error {
+                // The current card was derived successfully from a validated
+                // cache, but the physical contributor could not be refreshed.
+                // Keep the derived value while preserving last_success.
+                status.failed(now, error, !cards.is_empty());
+                status.valid_until = valid_until;
+            } else {
+                status.fresh(now, valid_until);
+            }
+        }
+        Err(TimedSourceError::Failed(error)) => {
+            retain_unexpired(cards, now);
+            let error = match asset_error {
+                Some(asset_error) => format!("{error}; static assets: {asset_error}"),
+                None => error,
+            };
+            status.failed(now, error, !cards.is_empty());
+            status.valid_until = max_expiry(cards);
+        }
+        Err(TimedSourceError::OutOfRange(error)) => {
+            cards.clear();
+            status.out_of_range(now, error);
+        }
+    }
+}
+
+pub struct TimedPollResults {
+    pub wfcd: Result<WfcdTimedContent, TimedSourceError>,
+    pub descendia: Result<Vec<TimedContent>, TimedSourceError>,
+    pub circuit: Result<Vec<TimedContent>, TimedSourceError>,
+    pub bounties: Result<Vec<TimedContent>, TimedSourceError>,
+    pub arbitration: Result<Vec<TimedContent>, TimedSourceError>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct WfcdTimedContent {
-    sortie: Vec<TimedContent>,
-    archon: Vec<TimedContent>,
-    syndicates: Vec<TimedContent>,
-    area_missions: Vec<TimedContent>,
-    archimedea: Vec<TimedContent>,
+struct TimedAssetHealth {
+    bounties_error: Option<String>,
+    arbitration_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TimedAssetRefreshHints {
+    pub bounties: bool,
+    pub arbitration: bool,
+}
+
+pub fn static_asset_refresh_hints(
+    bounty_static_join_failed: bool,
+    bounties: &Result<Vec<TimedContent>, TimedSourceError>,
+    arbitration: &Result<Vec<TimedContent>, TimedSourceError>,
+) -> TimedAssetRefreshHints {
+    TimedAssetRefreshHints {
+        // HTTP/JSON/expiry/required-field failures say nothing about the
+        // static join data. Only a failure after a valid dynamic payload has
+        // reached the join may mean that its identifiers are newer than our
+        // validated Export cache.
+        bounties: bounty_static_join_failed && bounties.is_err(),
+        // Arbitration has no dynamic body: Failed and OutOfRange both warrant
+        // an early schedule/Public Export refresh.
+        arbitration: arbitration.is_err(),
+    }
+}
+
+pub fn static_join_retry_delay_secs(consecutive_failures: u32) -> u64 {
+    let index = usize::try_from(consecutive_failures.saturating_sub(1))
+        .unwrap_or(usize::MAX)
+        .min(STATIC_JOIN_RETRY_SCHEDULE_SECS.len() - 1);
+    STATIC_JOIN_RETRY_SCHEDULE_SECS[index]
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct TimedAssetDerivationFeedback {
+    refresh_hints: TimedAssetRefreshHints,
+    bounties_join_succeeded: bool,
+    arbitration_succeeded: bool,
 }
 
 impl TimedContentSnapshot {
-    fn apply_poll(
+    pub fn apply_poll(&mut self, now: DateTime<Utc>, results: TimedPollResults) {
+        self.apply_poll_with_asset_health(now, results, TimedAssetHealth::default());
+    }
+
+    fn apply_poll_with_asset_health(
         &mut self,
         now: DateTime<Utc>,
-        wfcd: Result<WfcdTimedContent, String>,
-        descents: Result<Vec<TimedContent>, String>,
+        results: TimedPollResults,
+        asset_health: TimedAssetHealth,
     ) {
-        match wfcd {
-            Ok(content) => {
-                self.sortie = content.sortie;
-                self.archon = content.archon;
-                self.syndicates = content.syndicates;
-                self.area_missions = content.area_missions;
-                self.archimedea = content.archimedea;
-                self.wfcd_ok = true;
-                self.wfcd_error = None;
-            }
-            Err(error) => {
-                // Source failure must not erase the last valid cards.
-                self.wfcd_ok = false;
-                self.wfcd_error = Some(error);
-            }
-        }
-
-        match descents {
-            Ok(content) => {
-                self.descendia = content;
-                self.descents_ok = true;
-                self.descents_error = None;
-            }
-            Err(error) => {
-                // DE source is independent from WFCD; retain its last valid cards.
-                self.descents_ok = false;
-                self.descents_error = Some(error);
-            }
-        }
-
+        self.apply_wfcd(now, results.wfcd);
+        apply_timed_source_result(
+            &mut self.descendia,
+            &mut self.sources.de_descendia,
+            now,
+            results.descendia,
+        );
+        apply_timed_source_result(
+            &mut self.circuit,
+            &mut self.sources.de_circuit,
+            now,
+            results.circuit,
+        );
+        apply_timed_source_result_with_asset_error(
+            &mut self.bounties,
+            &mut self.sources.browse_wf_bounties,
+            now,
+            results.bounties,
+            asset_health.bounties_error,
+        );
+        apply_timed_source_result_with_asset_error(
+            &mut self.arbitration,
+            &mut self.sources.browse_wf_arbitration,
+            now,
+            results.arbitration,
+            asset_health.arbitration_error,
+        );
         self.last_poll = Some(now);
     }
-}
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawWfcdWorldstate {
-    sortie: Option<RawSortie>,
-    archon_hunt: Option<RawSortie>,
-    syndicate_missions: Vec<RawSyndicateMission>,
-    archimedeas: Vec<RawArchimedea>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct RawSortie {
-    id: String,
-    activation: String,
-    expiry: String,
-    reward_pool: String,
-    variants: Vec<RawSortieVariant>,
-    missions: Vec<RawMission>,
-    boss: String,
-    faction: String,
-    faction_key: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct RawSortieVariant {
-    mission_type: String,
-    mission_type_key: String,
-    modifier: String,
-    modifier_description: String,
-    node: String,
-    node_key: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct RawMission {
-    node: String,
-    node_key: String,
-    r#type: String,
-    type_key: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct RawSyndicateMission {
-    id: String,
-    activation: String,
-    expiry: String,
-    syndicate: String,
-    syndicate_key: String,
-    nodes: Vec<String>,
-    jobs: Vec<RawSyndicateJob>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct RawSyndicateJob {
-    id: String,
-    r#type: Option<String>,
-    enemy_levels: Vec<u32>,
-    standing_stages: Vec<u32>,
-    #[serde(rename = "minMR")]
-    min_mr: u32,
-    location_tag: Option<String>,
-    time_bound: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct RawArchimedea {
-    id: String,
-    activation: String,
-    expiry: String,
-    r#type: String,
-    type_key: String,
-    missions: Vec<RawArchimedeaMission>,
-    personal_modifiers: Vec<RawCondition>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct RawArchimedeaMission {
-    faction: String,
-    faction_key: String,
-    mission_type: String,
-    mission_type_key: String,
-    deviation: Option<RawCondition>,
-    risks: Vec<RawRisk>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct RawCondition {
-    key: String,
-    name: String,
-    description: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct RawRisk {
-    key: String,
-    name: String,
-    description: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawDeWorldstate {
-    #[serde(rename = "Descents")]
-    descents: Vec<RawDescent>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawDescent {
-    #[serde(rename = "Activation")]
-    activation: Value,
-    #[serde(rename = "Expiry")]
-    expiry: Value,
-    #[serde(rename = "RandSeed")]
-    rand_seed: u64,
-    #[serde(rename = "Challenges")]
-    challenges: Vec<RawDescentChallenge>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawDescentChallenge {
-    #[serde(rename = "Index")]
-    index: u32,
-    #[serde(rename = "Type")]
-    challenge_type: String,
-    #[serde(rename = "Challenge")]
-    challenge: String,
-    #[serde(rename = "Level")]
-    level: String,
-}
-
-fn parse_iso(value: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(value)
-        .ok()
-        .map(|date| date.with_timezone(&Utc))
-}
-
-fn active_window(
-    activation: Option<DateTime<Utc>>,
-    expiry: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> bool {
-    activation.is_some_and(|start| start <= now) && expiry.is_some_and(|end| now < end)
-}
-
-fn display_value(value: &str, key: &str, fallback: &str) -> String {
-    if !value.trim().is_empty() {
-        value.to_string()
-    } else if !key.trim().is_empty() {
-        key.to_string()
-    } else {
-        fallback.to_string()
-    }
-}
-
-fn joined_nonempty(values: impl IntoIterator<Item = String>) -> Option<String> {
-    let values: Vec<_> = values
-        .into_iter()
-        .filter(|value| !value.trim().is_empty())
-        .collect();
-    (!values.is_empty()).then(|| values.join(" · "))
-}
-
-fn sortie_card(raw: RawSortie, now: DateTime<Utc>, archon: bool) -> Option<TimedContent> {
-    let activation = parse_iso(&raw.activation);
-    let expiry = parse_iso(&raw.expiry);
-    if !active_window(activation, expiry, now) {
-        return None;
-    }
-
-    let stages = if archon {
-        raw.missions
-            .into_iter()
-            .enumerate()
-            .map(|(index, mission)| TimedStage {
-                order: index as u32 + 1,
-                title: display_value(&mission.r#type, &mission.type_key, ""),
-                node: Some(display_value(&mission.node, &mission.node_key, "")),
-                detail: None,
-                modifiers: vec![],
-                enemy_levels: vec![],
-                standing_stages: vec![],
-                min_mr: None,
-                time_bound: None,
-            })
-            .collect()
-    } else {
-        raw.variants
-            .into_iter()
-            .enumerate()
-            .map(|(index, mission)| TimedStage {
-                order: index as u32 + 1,
-                title: display_value(&mission.mission_type, &mission.mission_type_key, ""),
-                node: Some(display_value(&mission.node, &mission.node_key, "")),
-                detail: (!mission.modifier_description.is_empty())
-                    .then_some(mission.modifier_description),
-                modifiers: (!mission.modifier.is_empty())
-                    .then_some(mission.modifier)
-                    .into_iter()
-                    .collect(),
-                enemy_levels: vec![],
-                standing_stages: vec![],
-                min_mr: None,
-                time_bound: None,
-            })
-            .collect()
-    };
-
-    let faction = display_value(&raw.faction, &raw.faction_key, "");
-    let subtitle = joined_nonempty([raw.boss, faction, raw.reward_pool]);
-    Some(TimedContent {
-        id: if raw.id.is_empty() {
-            format!(
-                "{}:{}",
-                if archon { "archon" } else { "sortie" },
-                activation
-                    .expect("active window has activation")
-                    .timestamp()
-            )
-        } else {
-            raw.id
-        },
-        kind: if archon { "archon" } else { "sortie" }.to_string(),
-        variant: None,
-        title: if archon {
-            "Archon Hunt".to_string()
-        } else {
-            "Sortie".to_string()
-        },
-        subtitle,
-        activation,
-        expiry,
-        availability: TimedAvailability::Available,
-        stages,
-    })
-}
-
-fn syndicate_cards(
-    missions: Vec<RawSyndicateMission>,
-    now: DateTime<Utc>,
-) -> (Vec<TimedContent>, Vec<TimedContent>) {
-    let mut syndicates = vec![];
-    let mut area_missions = vec![];
-
-    for mission in missions {
-        let activation = parse_iso(&mission.activation);
-        let expiry = parse_iso(&mission.expiry);
-        if !active_window(activation, expiry, now) {
-            continue;
-        }
-        let title = display_value(&mission.syndicate, &mission.syndicate_key, "Syndicate");
-        let base_id = if mission.id.is_empty() {
-            format!(
-                "syndicate:{}:{}",
-                title.to_lowercase().replace(' ', "-"),
-                activation
-                    .expect("active window has activation")
-                    .timestamp()
-            )
-        } else {
-            mission.id
-        };
-
-        if !mission.nodes.is_empty() {
-            let stages = mission
-                .nodes
-                .into_iter()
-                .enumerate()
-                .map(|(index, node)| TimedStage {
-                    order: index as u32 + 1,
-                    // The endpoint does not expose a per-node mission type.
-                    title: String::new(),
-                    node: Some(node),
-                    detail: None,
-                    modifiers: vec![],
-                    enemy_levels: vec![],
-                    standing_stages: vec![],
-                    min_mr: None,
-                    time_bound: None,
-                })
-                .collect::<Vec<_>>();
-            syndicates.push(TimedContent {
-                id: format!("{base_id}:syndicate"),
-                kind: "syndicate".to_string(),
-                variant: None,
-                title: title.clone(),
-                subtitle: None,
-                activation,
-                expiry,
-                availability: TimedAvailability::Available,
-                stages,
-            });
-        }
-
-        if !mission.jobs.is_empty() {
-            let stages = mission
-                .jobs
-                .into_iter()
-                .enumerate()
-                .map(|(index, job)| area_stage(index, job))
-                .collect::<Vec<_>>();
-            area_missions.push(TimedContent {
-                id: format!("{base_id}:area"),
-                kind: "area-mission".to_string(),
-                variant: None,
-                title,
-                subtitle: None,
-                activation,
-                expiry,
-                availability: TimedAvailability::Available,
-                stages,
-            });
-        }
-    }
-
-    syndicates.sort_by(|a, b| a.title.cmp(&b.title));
-    area_missions.sort_by(|a, b| a.title.cmp(&b.title));
-    (syndicates, area_missions)
-}
-
-fn area_stage(index: usize, job: RawSyndicateJob) -> TimedStage {
-    // 数値は構造化したまま渡し、Level/Standing等のlabelはfrontend catalogで付ける。
-    TimedStage {
-        order: index as u32 + 1,
-        title: job.r#type.unwrap_or_default(),
-        node: job.location_tag.filter(|value| !value.is_empty()),
-        detail: None,
-        modifiers: vec![],
-        enemy_levels: job.enemy_levels,
-        standing_stages: job.standing_stages,
-        min_mr: (job.min_mr > 0).then_some(job.min_mr),
-        time_bound: job.time_bound.filter(|value| !value.is_empty()),
-    }
-}
-
-fn archimedea_variant(raw: &RawArchimedea) -> (Option<String>, String) {
-    let source = if raw.type_key.is_empty() {
-        &raw.r#type
-    } else {
-        &raw.type_key
-    };
-    let compact: String = source
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(char::to_uppercase)
-        .collect();
-    match compact.as_str() {
-        "CTLAB" => (Some("deep".to_string()), "Deep Archimedea".to_string()),
-        "CTHEX" => (
-            Some("temporal".to_string()),
-            "Temporal Archimedea".to_string(),
-        ),
-        _ => (
-            (!compact.is_empty()).then(|| compact.to_lowercase()),
-            display_value(&raw.r#type, &raw.type_key, "Archimedea"),
-        ),
-    }
-}
-
-fn archimedea_cards(raw: Vec<RawArchimedea>, now: DateTime<Utc>) -> Vec<TimedContent> {
-    raw.into_iter()
-        .filter_map(|item| {
-            let activation = parse_iso(&item.activation);
-            let expiry = parse_iso(&item.expiry);
-            if !active_window(activation, expiry, now) {
-                return None;
+    fn apply_wfcd(
+        &mut self,
+        now: DateTime<Utc>,
+        result: Result<WfcdTimedContent, TimedSourceError>,
+    ) {
+        match result {
+            Ok(mut next) => {
+                for cards in [
+                    &mut next.sortie,
+                    &mut next.archon,
+                    &mut next.syndicates,
+                    &mut next.area_missions,
+                    &mut next.archimedea,
+                ] {
+                    retain_unexpired(cards, now);
+                }
+                let valid_until = next.all_cards().filter_map(|card| card.expiry).max();
+                self.sortie = next.sortie;
+                self.archon = next.archon;
+                self.syndicates = next.syndicates;
+                self.area_missions = next.area_missions;
+                self.archimedea = next.archimedea;
+                self.sources.wfcd.fresh(now, valid_until);
             }
-            let (variant, title) = archimedea_variant(&item);
-            let personal = item
-                .personal_modifiers
-                .iter()
-                .map(condition_name)
-                .filter(|name| !name.is_empty())
-                .collect::<Vec<_>>();
-            let stages = item
-                .missions
+            Err(TimedSourceError::Failed(error)) => {
+                for cards in [
+                    &mut self.sortie,
+                    &mut self.archon,
+                    &mut self.syndicates,
+                    &mut self.area_missions,
+                    &mut self.archimedea,
+                ] {
+                    retain_unexpired(cards, now);
+                }
+                let valid_until = [
+                    &self.sortie,
+                    &self.archon,
+                    &self.syndicates,
+                    &self.area_missions,
+                    &self.archimedea,
+                ]
                 .into_iter()
-                .enumerate()
-                .map(|(index, mission)| {
-                    let mut modifiers = vec![];
-                    if let Some(deviation) = mission.deviation.as_ref() {
-                        let name = condition_name(deviation);
-                        if !name.is_empty() {
-                            modifiers.push(name);
-                        }
-                    }
-                    modifiers.extend(mission.risks.iter().filter_map(|risk| {
-                        let name = if !risk.name.is_empty() {
-                            risk.name.clone()
-                        } else {
-                            risk.key.clone()
-                        };
-                        (!name.is_empty()).then_some(name)
-                    }));
-                    TimedStage {
-                        order: index as u32 + 1,
-                        title: display_value(&mission.mission_type, &mission.mission_type_key, ""),
-                        node: None,
-                        detail: Some(display_value(&mission.faction, &mission.faction_key, "")),
-                        modifiers,
-                        enemy_levels: vec![],
-                        standing_stages: vec![],
-                        min_mr: None,
-                        time_bound: None,
-                    }
-                })
-                .collect::<Vec<_>>();
-            let subtitle = joined_nonempty(personal);
-            let fallback_id = format!(
-                "archimedea:{}:{}",
-                variant.as_deref().unwrap_or("unknown"),
-                activation
-                    .expect("active window has activation")
-                    .timestamp()
-            );
-            Some(TimedContent {
-                id: if item.id.is_empty() {
-                    fallback_id
-                } else {
-                    item.id
-                },
-                kind: "archimedea".to_string(),
-                variant,
-                title,
-                subtitle,
-                activation,
-                expiry,
-                availability: TimedAvailability::Available,
-                stages,
-            })
+                .flat_map(|cards| cards.iter())
+                .filter_map(|card| card.expiry)
+                .max();
+                self.sources.wfcd.failed(now, error, valid_until.is_some());
+                self.sources.wfcd.valid_until = valid_until;
+            }
+            Err(TimedSourceError::OutOfRange(error)) => {
+                self.sortie.clear();
+                self.archon.clear();
+                self.syndicates.clear();
+                self.area_missions.clear();
+                self.archimedea.clear();
+                self.sources.wfcd.out_of_range(now, error);
+            }
+        }
+    }
+}
+
+struct CachedAsset<T> {
+    value: Option<T>,
+    last_attempt: Option<DateTime<Utc>>,
+    error: Option<String>,
+    join_refresh_at: Option<DateTime<Utc>>,
+    join_failure_count: u32,
+}
+
+impl<T> Default for CachedAsset<T> {
+    fn default() -> Self {
+        Self {
+            value: None,
+            last_attempt: None,
+            error: None,
+            join_refresh_at: None,
+            join_failure_count: 0,
+        }
+    }
+}
+
+impl<T> CachedAsset<T> {
+    fn refresh_due(&self, now: DateTime<Utc>) -> bool {
+        if self.join_refresh_at.is_some_and(|due| now >= due) {
+            return true;
+        }
+        self.last_attempt.is_none_or(|attempt| {
+            let interval = if self.error.is_some() {
+                Duration::seconds(STATIC_RETRY_SECS)
+            } else {
+                Duration::hours(STATIC_REFRESH_HOURS)
+            };
+            now - attempt >= interval
         })
-        .collect()
-}
-
-fn condition_name(condition: &RawCondition) -> String {
-    if !condition.name.is_empty() {
-        condition.name.clone()
-    } else if !condition.key.is_empty() {
-        condition.key.clone()
-    } else {
-        condition.description.clone()
     }
-}
 
-fn parse_wfcd_json(body: &str, now: DateTime<Utc>) -> Result<WfcdTimedContent, String> {
-    let raw: RawWfcdWorldstate =
-        serde_json::from_str(body).map_err(|error| format!("WFCD JSON: {error}"))?;
-    let (syndicates, area_missions) = syndicate_cards(raw.syndicate_missions, now);
-    Ok(WfcdTimedContent {
-        sortie: raw
-            .sortie
-            .and_then(|item| sortie_card(item, now, false))
-            .into_iter()
-            .collect(),
-        archon: raw
-            .archon_hunt
-            .and_then(|item| sortie_card(item, now, true))
-            .into_iter()
-            .collect(),
-        syndicates,
-        area_missions,
-        archimedea: archimedea_cards(raw.archimedeas, now),
-    })
-}
-
-fn mongo_date(value: &Value) -> Option<DateTime<Utc>> {
-    let millis = value
-        .pointer("/$date/$numberLong")
-        .and_then(Value::as_str)
-        .and_then(|value| value.parse::<i64>().ok())
-        .or_else(|| value.get("$date").and_then(Value::as_i64))?;
-    DateTime::from_timestamp_millis(millis)
-}
-
-fn parse_descents_json(body: &str, now: DateTime<Utc>) -> Result<Vec<TimedContent>, String> {
-    let raw: RawDeWorldstate =
-        serde_json::from_str(body).map_err(|error| format!("DE worldstate JSON: {error}"))?;
-    Ok(raw
-        .descents
-        .into_iter()
-        .filter_map(|mut descent| {
-            let activation = mongo_date(&descent.activation);
-            let expiry = mongo_date(&descent.expiry);
-            if !active_window(activation, expiry, now) {
-                return None;
+    fn apply_refresh(&mut self, now: DateTime<Utc>, result: Result<T, TimedSourceError>) {
+        // A scheduled join-recovery request has now been attempted. Preserve
+        // its failure count until a later derivation actually succeeds.
+        self.join_refresh_at = None;
+        self.last_attempt = Some(now);
+        match result {
+            Ok(value) => {
+                self.value = Some(value);
+                self.error = None;
             }
-            descent.challenges.sort_by_key(|challenge| challenge.index);
-            let stages = descent
-                .challenges
-                .into_iter()
-                .map(|challenge| TimedStage {
-                    order: challenge.index,
-                    title: humanize_identifier(
-                        challenge
-                            .challenge_type
-                            .strip_prefix("DT_")
-                            .unwrap_or(&challenge.challenge_type),
-                    ),
-                    node: level_name(&challenge.level),
-                    detail: (!challenge.challenge.is_empty())
-                        .then(|| humanize_identifier(&challenge.challenge)),
-                    modifiers: vec![],
-                    enemy_levels: vec![],
-                    standing_stages: vec![],
-                    min_mr: None,
-                    time_bound: None,
-                })
-                .collect::<Vec<_>>();
-            Some(TimedContent {
-                id: format!(
-                    "descendia:{}:{}",
-                    activation
-                        .expect("active window has activation")
-                        .timestamp(),
-                    descent.rand_seed
-                ),
-                kind: "descendia".to_string(),
-                variant: None,
-                title: "Descendia".to_string(),
-                subtitle: None,
-                activation,
-                expiry,
-                availability: TimedAvailability::Available,
-                stages,
-            })
-        })
-        .collect())
-}
-
-fn level_name(value: &str) -> Option<String> {
-    let name = value.rsplit('/').next()?.trim_end_matches(".level");
-    (!name.is_empty()).then(|| humanize_identifier(name))
-}
-
-fn humanize_identifier(value: &str) -> String {
-    let characters: Vec<char> = value.chars().collect();
-    let mut words = vec![];
-    let mut current = String::new();
-    for (index, character) in characters.iter().copied().enumerate() {
-        if character == '_' || character == '-' || character.is_whitespace() {
-            if !current.is_empty() {
-                words.push(std::mem::take(&mut current));
+            Err(error) => {
+                // Retain only the previous validated value. The error remains
+                // visible to the logical source until a refresh succeeds.
+                self.error = Some(error.to_string());
             }
-            continue;
         }
-        let previous = index
-            .checked_sub(1)
-            .and_then(|i| characters.get(i))
-            .copied();
-        let next = characters.get(index + 1).copied();
-        let starts_word = character.is_ascii_uppercase()
-            && !current.is_empty()
-            && (previous.is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-                || (previous.is_some_and(|c| c.is_ascii_uppercase())
-                    && next.is_some_and(|c| c.is_ascii_lowercase())));
-        if starts_word {
-            words.push(std::mem::take(&mut current));
-        }
-        current.push(character);
-    }
-    if !current.is_empty() {
-        words.push(current);
     }
 
-    words
-        .into_iter()
-        .map(|word| {
-            let lower = word.to_ascii_lowercase();
-            if lower == "presure" {
-                return "Pressure".to_string();
-            }
-            let mut chars = lower.chars();
-            chars
-                .next()
-                .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    fn record_join_failure(&mut self, now: DateTime<Utc>) {
+        // A physical asset fetch failure already has its own 60-second retry.
+        // Do not consume logical join-backoff steps while that endpoint is
+        // unavailable; resume join recovery after a successful fetch.
+        if self.error.is_some() {
+            return;
+        }
+        // Multiple dynamic polls before the scheduled retry represent one
+        // unresolved incident, not additional backoff steps.
+        if self.join_refresh_at.is_some() {
+            return;
+        }
+        self.join_failure_count = self.join_failure_count.saturating_add(1);
+        let delay = static_join_retry_delay_secs(self.join_failure_count);
+        self.join_refresh_at = now.checked_add_signed(Duration::seconds(delay as i64));
+    }
+
+    fn record_join_success(&mut self) {
+        self.join_refresh_at = None;
+        self.join_failure_count = 0;
+    }
+
+    fn short_retry_delay_secs(&self, now: DateTime<Utc>) -> Option<i64> {
+        let join_retry = self
+            .join_refresh_at
+            .map(|due| (due - now).num_seconds().max(1));
+        let fetch_retry = self.error.as_ref().and(self.last_attempt).map(|attempt| {
+            (attempt + Duration::seconds(STATIC_RETRY_SECS) - now)
+                .num_seconds()
+                .max(1)
+        });
+        join_retry.into_iter().chain(fetch_retry).min()
+    }
 }
 
-async fn fetch_body(client: &reqwest::Client, url: &str) -> Result<String, String> {
-    client
-        .get(url)
+#[derive(Default)]
+struct StaticAssetsCache {
+    arbitration: CachedAsset<ArbitrationAssets>,
+    bounties: CachedAsset<BountyAssets>,
+}
+
+impl StaticAssetsCache {
+    fn refresh_targets(&self, now: DateTime<Utc>) -> TimedAssetRefreshHints {
+        TimedAssetRefreshHints {
+            arbitration: self.arbitration.refresh_due(now),
+            bounties: self.bounties.refresh_due(now),
+        }
+    }
+
+    fn apply_refresh(&mut self, now: DateTime<Utc>, refresh: StaticAssetRefresh) {
+        if let Some(result) = refresh.arbitration {
+            self.arbitration.apply_refresh(now, result);
+        }
+        if let Some(result) = refresh.bounties {
+            self.bounties.apply_refresh(now, result);
+        }
+    }
+
+    fn record_derivation(&mut self, now: DateTime<Utc>, feedback: TimedAssetDerivationFeedback) {
+        if feedback.refresh_hints.arbitration {
+            self.arbitration.record_join_failure(now);
+        } else if feedback.arbitration_succeeded {
+            self.arbitration.record_join_success();
+        }
+        if feedback.refresh_hints.bounties {
+            self.bounties.record_join_failure(now);
+        } else if feedback.bounties_join_succeeded {
+            self.bounties.record_join_success();
+        }
+    }
+
+    fn health(&self) -> TimedAssetHealth {
+        TimedAssetHealth {
+            bounties_error: self.bounties.error.clone(),
+            arbitration_error: self.arbitration.error.clone(),
+        }
+    }
+
+    fn short_retry_delay_secs(&self, now: DateTime<Utc>) -> Option<i64> {
+        self.arbitration
+            .short_retry_delay_secs(now)
+            .into_iter()
+            .chain(self.bounties.short_retry_delay_secs(now))
+            .min()
+    }
+}
+
+struct StaticAssetRefresh {
+    arbitration: Option<Result<ArbitrationAssets, TimedSourceError>>,
+    bounties: Option<Result<BountyAssets, TimedSourceError>>,
+}
+
+async fn fetch_body(
+    client: &reqwest::Client,
+    url: &str,
+    limit: usize,
+    no_cache: bool,
+) -> Result<String, TimedSourceError> {
+    let mut request = client.get(url);
+    if no_cache {
+        request = request.header(CACHE_CONTROL, "no-cache");
+    }
+    let mut response = request
         .send()
         .await
-        .map_err(|error| format!("{url}: {error}"))?
+        .map_err(|error| TimedSourceError::failed(format!("{url}: {error}")))?
         .error_for_status()
-        .map_err(|error| format!("{url}: {error}"))?
-        .text()
+        .map_err(|error| TimedSourceError::failed(format!("{url}: {error}")))?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(TimedSourceError::failed(format!(
+            "{url}: body exceeds {limit} bytes"
+        )));
+    }
+    let mut bytes = Vec::with_capacity(
+        response
+            .content_length()
+            .and_then(|length| usize::try_from(length).ok())
+            .unwrap_or_default()
+            .min(limit),
+    );
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|error| format!("{url}: {error}"))
+        .map_err(|error| TimedSourceError::failed(format!("{url}: {error}")))?
+    {
+        if bytes
+            .len()
+            .checked_add(chunk.len())
+            .is_none_or(|length| length > limit)
+        {
+            return Err(TimedSourceError::failed(format!(
+                "{url}: body exceeds {limit} bytes"
+            )));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    String::from_utf8(bytes).map_err(|error| TimedSourceError::failed(format!("{url}: {error}")))
+}
+
+fn fetched_body(result: &Result<String, TimedSourceError>) -> Result<&str, TimedSourceError> {
+    result.as_deref().map_err(Clone::clone)
+}
+
+#[cfg(test)]
+fn parse_static_asset_bodies(
+    schedule: Result<String, TimedSourceError>,
+    regions: Result<String, TimedSourceError>,
+    challenges: Result<String, TimedSourceError>,
+    dictionary: Result<String, TimedSourceError>,
+    factions: Result<String, TimedSourceError>,
+) -> StaticAssetRefresh {
+    let shared = (|| {
+        parse_shared_community_assets(
+            fetched_body(&regions)?,
+            fetched_body(&dictionary)?,
+            fetched_body(&factions)?,
+        )
+        .map(Arc::new)
+    })();
+
+    let arbitration = match &shared {
+        Ok(shared) => fetched_body(&schedule)
+            .and_then(|body| parse_arbitration_assets(body, Arc::clone(shared))),
+        Err(error) => Err(error.clone()),
+    };
+    let bounties = match &shared {
+        Ok(shared) => {
+            fetched_body(&challenges).and_then(|body| parse_bounty_assets(body, Arc::clone(shared)))
+        }
+        Err(error) => Err(error.clone()),
+    };
+    StaticAssetRefresh {
+        arbitration: Some(arbitration),
+        bounties: Some(bounties),
+    }
+}
+
+async fn fetch_optional_body(
+    client: &reqwest::Client,
+    enabled: bool,
+    url: &str,
+    limit: usize,
+) -> Option<Result<String, TimedSourceError>> {
+    if enabled {
+        Some(fetch_body(client, url, limit, false).await)
+    } else {
+        None
+    }
+}
+
+async fn fetch_static_assets(
+    client: &reqwest::Client,
+    targets: TimedAssetRefreshHints,
+) -> StaticAssetRefresh {
+    let (schedule, regions, challenges, dictionary, factions) = tokio::join!(
+        fetch_optional_body(
+            client,
+            targets.arbitration,
+            BROWSE_WF_ARBITRATION_URL,
+            SCHEDULE_BODY_LIMIT
+        ),
+        fetch_body(client, BROWSE_WF_REGIONS_URL, EXPORT_BODY_LIMIT, false),
+        fetch_optional_body(
+            client,
+            targets.bounties,
+            BROWSE_WF_CHALLENGES_URL,
+            EXPORT_BODY_LIMIT
+        ),
+        fetch_body(client, BROWSE_WF_DICTIONARY_URL, EXPORT_BODY_LIMIT, false),
+        fetch_body(client, BROWSE_WF_FACTIONS_URL, EXPORT_BODY_LIMIT, false),
+    );
+    let shared = (|| {
+        parse_shared_community_assets(
+            fetched_body(&regions)?,
+            fetched_body(&dictionary)?,
+            fetched_body(&factions)?,
+        )
+        .map(Arc::new)
+    })();
+    let arbitration = schedule.map(|schedule| match &shared {
+        Ok(shared) => fetched_body(&schedule)
+            .and_then(|body| parse_arbitration_assets(body, Arc::clone(shared))),
+        Err(error) => Err(error.clone()),
+    });
+    let bounties = challenges.map(|challenges| match &shared {
+        Ok(shared) => {
+            fetched_body(&challenges).and_then(|body| parse_bounty_assets(body, Arc::clone(shared)))
+        }
+        Err(error) => Err(error.clone()),
+    });
+    StaticAssetRefresh {
+        arbitration,
+        bounties,
+    }
 }
 
 async fn poll_sources(
     client: &reqwest::Client,
+    arbitration_assets: Option<&ArbitrationAssets>,
+    bounty_assets: Option<&BountyAssets>,
 ) -> (
     DateTime<Utc>,
-    Result<WfcdTimedContent, String>,
-    Result<Vec<TimedContent>, String>,
+    TimedPollResults,
+    TimedAssetDerivationFeedback,
 ) {
-    let (wfcd, descents) = tokio::join!(
-        fetch_body(client, WFCD_WORLDSTATE_URL),
-        fetch_body(client, DE_WORLDSTATE_URL)
+    let bounty_url = format!("{BROWSE_WF_BOUNTY_URL}?relico={}", Utc::now().timestamp());
+    let (wfcd, de, bounty) = tokio::join!(
+        fetch_body(client, WFCD_WORLDSTATE_URL, WORLDSTATE_BODY_LIMIT, false),
+        fetch_body(client, DE_WORLDSTATE_URL, WORLDSTATE_BODY_LIMIT, false),
+        fetch_body(client, &bounty_url, WORLDSTATE_BODY_LIMIT, true),
     );
-    // 通信が日次/週次境界を跨いでも、取得後の同一instantでactive windowを選ぶ。
     let now = Utc::now();
+    let wfcd = wfcd.and_then(|body| parse_wfcd_json(&body, now));
+    let descendia = match &de {
+        Ok(body) => parse_descents_json(body, now),
+        Err(error) => Err(error.clone()),
+    };
+    let circuit = match &de {
+        Ok(body) => parse_circuit_json(body, now),
+        Err(error) => Err(error.clone()),
+    };
+    let missing_assets = || TimedSourceError::failed("browse.wf static assets unavailable");
+    let (bounties, bounty_static_join_failed, bounties_join_succeeded) = match bounty {
+        Ok(body) => match parse_bounty_cycle_json(&body, now) {
+            Ok(cycle) => match bounty_assets {
+                Some(assets) => {
+                    let result = bounty_cards_from_cycle(cycle, assets);
+                    let join_failed = result.is_err();
+                    (result, join_failed, !join_failed)
+                }
+                None => (Err(missing_assets()), true, false),
+            },
+            Err(error) => (Err(error), false, false),
+        },
+        Err(error) => (Err(error), false, false),
+    };
+    let arbitration = match arbitration_assets {
+        Some(assets) => arbitration_card_from_assets(assets, now).map(|card| vec![card]),
+        None => Err(missing_assets()),
+    };
+    let asset_refresh_hints =
+        static_asset_refresh_hints(bounty_static_join_failed, &bounties, &arbitration);
+    let asset_feedback = TimedAssetDerivationFeedback {
+        refresh_hints: asset_refresh_hints,
+        bounties_join_succeeded,
+        arbitration_succeeded: arbitration.is_ok(),
+    };
     (
         now,
-        wfcd.and_then(|body| parse_wfcd_json(&body, now)),
-        descents.and_then(|body| parse_descents_json(&body, now)),
+        TimedPollResults {
+            wfcd,
+            descendia,
+            circuit,
+            bounties,
+            arbitration,
+        },
+        asset_feedback,
     )
 }
 
-/// Timed-content polling is deliberately independent from the fissure loop:
-/// one source can fail without changing the other source or fissure freshness.
+fn next_poll_delay(
+    snapshot: &TimedContentSnapshot,
+    now: DateTime<Utc>,
+    static_retry_delay_secs: Option<i64>,
+) -> StdDuration {
+    let mut seconds = TIMED_POLL_SECS as i64;
+    for card in [
+        &snapshot.arbitration,
+        &snapshot.sortie,
+        &snapshot.archon,
+        &snapshot.syndicates,
+        &snapshot.area_missions,
+        &snapshot.bounties,
+        &snapshot.circuit,
+        &snapshot.archimedea,
+        &snapshot.descendia,
+    ]
+    .into_iter()
+    .flat_map(|cards| cards.iter())
+    {
+        for boundary in [card.activation, card.expiry].into_iter().flatten() {
+            if boundary > now {
+                seconds = seconds.min((boundary - now).num_seconds().max(1));
+            }
+        }
+    }
+    if snapshot.sources.browse_wf_bounties.last_attempt.is_some()
+        && snapshot.sources.browse_wf_bounties.freshness == TimedFreshness::Unavailable
+    {
+        seconds = seconds.min(STATIC_RETRY_SECS);
+    }
+    if let Some(delay) = static_retry_delay_secs {
+        seconds = seconds.min(delay.max(1));
+    }
+    StdDuration::from_secs(seconds.max(1) as u64)
+}
+
+/// 時限content pollerは亀裂pollerと独立し、source単位でLKGとfreshnessを更新する。
 pub async fn run(app: AppHandle, state: Arc<Mutex<PollerState>>) {
     let client = crate::poller::http_client();
+    let mut cache = StaticAssetsCache::default();
     loop {
-        let (now, wfcd, descents) = poll_sources(&client).await;
+        let before_fetch = Utc::now();
+        let refresh_targets = cache.refresh_targets(before_fetch);
+        if refresh_targets.arbitration || refresh_targets.bounties {
+            let refresh = fetch_static_assets(&client, refresh_targets).await;
+            if let Some(Err(error)) = &refresh.arbitration {
+                let cache_note = if cache.arbitration.value.is_some() {
+                    "; using validated cache"
+                } else {
+                    ""
+                };
+                eprintln!("browse.wf arbitration asset refresh failed{cache_note}: {error}");
+            }
+            if let Some(Err(error)) = &refresh.bounties {
+                let cache_note = if cache.bounties.value.is_some() {
+                    "; using validated cache"
+                } else {
+                    ""
+                };
+                eprintln!("browse.wf bounty asset refresh failed{cache_note}: {error}");
+            }
+            cache.apply_refresh(before_fetch, refresh);
+        }
+
+        let asset_health = cache.health();
+        let (now, results, asset_feedback) = poll_sources(
+            &client,
+            cache.arbitration.value.as_ref(),
+            cache.bounties.value.as_ref(),
+        )
+        .await;
+        cache.record_derivation(now, asset_feedback);
         let snapshot = {
             let mut state = state.lock().expect("poller state");
             state.reset_daily_counters(now.with_timezone(&chrono::Local));
-            state.snapshot.timed_content.apply_poll(now, wfcd, descents);
+            state
+                .snapshot
+                .timed_content
+                .apply_poll_with_asset_health(now, results, asset_health);
             state.bump_revision();
             state.snapshot.clone()
         };
         let _ = app.emit("status", &snapshot);
-        tokio::time::sleep(StdDuration::from_secs(TIMED_POLL_SECS)).await;
+        tokio::time::sleep(next_poll_delay(
+            &snapshot.timed_content,
+            now,
+            cache.short_retry_delay_secs(now),
+        ))
+        .await;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Duration, TimeZone, Utc};
-    use serde_json::json;
+    use chrono::{TimeZone, Utc};
 
     use super::*;
 
     fn now() -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 7, 17, 16, 30, 0).unwrap()
+        Utc.with_ymd_and_hms(2026, 7, 18, 0, 0, 0).unwrap()
     }
 
-    fn card(id: &str) -> TimedContent {
+    fn static_asset_bodies() -> (String, String, String, String, String) {
+        let base = now().timestamp();
+        (
+            format!("{base},ClanNode7\n{},ClanNode7\n", base + 3600),
+            r#"{"ClanNode7":{"name":"/node/Cholistan","systemName":"/system/Europa","missionName":"/mission/Excavation","faction":"FC_INFESTATION","minEnemyLevel":23,"maxEnemyLevel":33}}"#.to_string(),
+            r#"{"/challenge/kill":{"name":"/challenge/name","description":"/challenge/description","requiredCount":10}}"#.to_string(),
+            r#"{"/node/Cholistan":"Cholistan"}"#.to_string(),
+            r#"{"FC_INFESTATION":{"name":"/faction/infested"}}"#.to_string(),
+        )
+    }
+
+    fn card(id: &str, expiry: DateTime<Utc>) -> TimedContent {
         TimedContent {
             id: id.to_string(),
-            kind: "sortie".to_string(),
+            kind: "test".to_string(),
             variant: None,
-            title: "Sortie".to_string(),
+            title: id.to_string(),
             subtitle: None,
             activation: Some(now()),
-            expiry: Some(now() + Duration::hours(1)),
-            availability: TimedAvailability::Available,
+            expiry: Some(expiry),
+            temporal_status: TimedTemporalStatus::Active,
+            provenance: TimedProvenance {
+                kind: TimedSourceKind::CommunitySchedule,
+                contributors: vec![TimedSourceId::BrowseWfArbitrationSchedule],
+            },
+            source_id: TimedSourceId::BrowseWfArbitrationSchedule,
+            source_name: "browse.wf".to_string(),
+            source_url: None,
+            metadata: vec![],
+            personal_modifiers: vec![],
             stages: vec![],
         }
     }
 
     #[test]
-    fn timed_snapshot_serializes_stable_camel_case_shape() {
-        let snapshot = TimedContentSnapshot {
-            area_missions: vec![TimedContent {
-                kind: "area-mission".to_string(),
-                availability: TimedAvailability::Available,
-                stages: vec![TimedStage {
-                    order: 1,
-                    title: "Bounty".to_string(),
-                    node: None,
-                    detail: None,
-                    modifiers: vec![],
-                    enemy_levels: vec![],
-                    standing_stages: vec![],
-                    min_mr: None,
-                    time_bound: None,
-                }],
-                ..card("area-1")
-            }],
-            wfcd_ok: true,
-            last_poll: Some(now()),
-            ..TimedContentSnapshot::default()
-        };
-        let value = serde_json::to_value(snapshot).unwrap();
-        assert!(value.get("areaMissions").is_some());
-        assert!(value.get("area_missions").is_none());
-        assert!(value.get("arbitration").is_none());
-        assert!(value.get("netracells").is_none());
-        assert_eq!(value["wfcdOk"], true);
-        assert_eq!(value["wfcdError"], Value::Null);
-        assert_eq!(value["lastPoll"], "2026-07-17T16:30:00Z");
-        assert_eq!(value["areaMissions"][0]["availability"], "available");
-        assert_eq!(value["areaMissions"][0]["kind"], "area-mission");
-        assert_eq!(value["areaMissions"][0]["stages"][0]["node"], Value::Null);
+    fn schedule_and_challenges_fail_independently_while_shared_failures_affect_both() {
+        let (_, regions, challenges, dictionary, factions) = static_asset_bodies();
+        let schedule_failed = parse_static_asset_bodies(
+            Err(TimedSourceError::failed("schedule down")),
+            Ok(regions),
+            Ok(challenges),
+            Ok(dictionary),
+            Ok(factions),
+        );
+        assert!(schedule_failed.arbitration.as_ref().unwrap().is_err());
+        assert!(schedule_failed.bounties.as_ref().unwrap().is_ok());
 
-        let status = serde_json::to_value(crate::poller::StatusSnapshot::default()).unwrap();
-        assert!(status.get("timedContent").is_some());
-        assert!(status.get("timed_content").is_none());
+        let (schedule, regions, _, dictionary, factions) = static_asset_bodies();
+        let challenges_failed = parse_static_asset_bodies(
+            Ok(schedule),
+            Ok(regions),
+            Err(TimedSourceError::failed("challenges down")),
+            Ok(dictionary),
+            Ok(factions),
+        );
+        assert!(challenges_failed.arbitration.as_ref().unwrap().is_ok());
+        assert!(challenges_failed.bounties.as_ref().unwrap().is_err());
+
+        let (schedule, _, challenges, dictionary, factions) = static_asset_bodies();
+        let shared_failed = parse_static_asset_bodies(
+            Ok(schedule),
+            Err(TimedSourceError::failed("regions down")),
+            Ok(challenges),
+            Ok(dictionary),
+            Ok(factions),
+        );
+        assert!(shared_failed.arbitration.as_ref().unwrap().is_err());
+        assert!(shared_failed.bounties.as_ref().unwrap().is_err());
     }
 
     #[test]
-    fn wfcd_fixture_splits_sources_and_classifies_archimedea() {
-        let fixture = json!({
-            "sortie": {
-                "id": "sortie-1", "activation": "2026-07-17T16:00:00Z",
-                "expiry": "2026-07-18T16:00:00Z", "rewardPool": "Sortie Rewards",
-                "boss": "Lephantis", "faction": "Infestation", "factionKey": "Infestation",
-                "variants": [{"missionType":"Survival", "missionTypeKey":"Survival",
-                    "modifier":"Energy Reduction", "modifierDescription":"Low energy",
-                    "node":"Nabuk (Kuva Fortress)", "nodeKey":"Nabuk (Kuva Fortress)"}]
+    fn failed_refresh_retains_validated_cache_and_retries_after_one_minute() {
+        let mut cache = CachedAsset::default();
+        cache.apply_refresh(now(), Ok(7_u32));
+        let failed_at = now() + Duration::hours(STATIC_REFRESH_HOURS);
+        cache.apply_refresh(failed_at, Err(TimedSourceError::failed("schedule down")));
+
+        assert_eq!(cache.value, Some(7));
+        assert_eq!(cache.error.as_deref(), Some("schedule down"));
+        assert!(!cache.refresh_due(failed_at + Duration::seconds(STATIC_RETRY_SECS - 1)));
+        assert!(cache.refresh_due(failed_at + Duration::seconds(STATIC_RETRY_SECS)));
+    }
+
+    #[test]
+    fn join_refresh_retains_cache_backs_off_and_resets_after_success() {
+        let mut cache = CachedAsset::default();
+        cache.apply_refresh(now(), Ok(7_u32));
+        assert!(!cache.refresh_due(now()));
+
+        cache.record_join_failure(now());
+
+        assert_eq!(cache.value, Some(7));
+        assert_eq!(cache.error, None);
+        assert_eq!(cache.join_failure_count, 1);
+        assert!(!cache.refresh_due(now() + Duration::seconds(59)));
+        assert!(cache.refresh_due(now() + Duration::seconds(60)));
+
+        let first_retry = now() + Duration::seconds(60);
+        cache.apply_refresh(first_retry, Ok(8_u32));
+        cache.record_join_failure(first_retry);
+        assert_eq!(cache.join_failure_count, 2);
+        assert!(!cache.refresh_due(first_retry + Duration::seconds(299)));
+        assert!(cache.refresh_due(first_retry + Duration::seconds(300)));
+
+        cache.record_join_success();
+        assert_eq!(cache.join_failure_count, 0);
+        assert_eq!(cache.join_refresh_at, None);
+    }
+
+    #[test]
+    fn fetch_failures_do_not_consume_join_backoff_steps() {
+        let mut cache = CachedAsset::default();
+        cache.apply_refresh(now(), Ok(7_u32));
+        cache.record_join_failure(now());
+        assert_eq!(cache.join_failure_count, 1);
+
+        let forced_retry = now() + Duration::seconds(60);
+        cache.apply_refresh(
+            forced_retry,
+            Err(TimedSourceError::failed("static endpoint down")),
+        );
+        cache.record_join_failure(forced_retry);
+        assert_eq!(cache.join_failure_count, 1);
+        assert_eq!(cache.join_refresh_at, None);
+        assert_eq!(
+            cache.short_retry_delay_secs(forced_retry),
+            Some(STATIC_RETRY_SECS)
+        );
+
+        let recovered = forced_retry + Duration::seconds(STATIC_RETRY_SECS);
+        cache.apply_refresh(recovered, Ok(8_u32));
+        cache.record_join_failure(recovered);
+        assert_eq!(cache.join_failure_count, 2);
+        assert_eq!(
+            cache.join_refresh_at,
+            Some(recovered + Duration::seconds(300))
+        );
+    }
+
+    #[test]
+    fn selective_static_refresh_does_not_touch_the_other_cache() {
+        let mut cache = StaticAssetsCache::default();
+        cache.arbitration.last_attempt = Some(now());
+        cache.bounties.last_attempt = None;
+
+        let targets = cache.refresh_targets(now());
+        assert!(!targets.arbitration);
+        assert!(targets.bounties);
+
+        cache.apply_refresh(
+            now() + Duration::minutes(1),
+            StaticAssetRefresh {
+                arbitration: None,
+                bounties: Some(Err(TimedSourceError::failed("challenges down"))),
             },
-            "archonHunt": {
-                "id": "archon-1", "activation": "2026-07-13T00:00:00Z",
-                "expiry": "2026-07-20T00:00:00Z", "boss": "Archon Nira",
-                "faction": "Narmer", "factionKey": "Narmer",
-                "missions": [{"node":"Metis (Jupiter)", "nodeKey":"Metis (Jupiter)",
-                    "type":"Mobile Defense", "typeKey":"Mobile Defense"}]
-            },
-            "syndicateMissions": [{
-                "id": "synd-1", "activation": "2026-07-17T16:00:00Z",
-                "expiry": "2026-07-18T16:00:00Z", "syndicate": "Ostrons",
-                "syndicateKey": "Ostrons", "nodes": ["Ares (Mars)"],
-                "jobs": [{"id":"job-1", "type":"Capture", "enemyLevels":[5,15],
-                    "standingStages":[100,200], "minMR":2, "timeBound":"day"}]
-            }],
-            "archimedeas": [
-                {"id":"deep-1", "activation":"2026-07-13T00:00:00Z",
-                    "expiry":"2026-07-20T00:00:00Z", "type":"C T_ L A B",
-                    "typeKey":"C T_ L A B", "missions":[], "personalModifiers":[]},
-                {"id":"temporal-1", "activation":"2026-07-13T00:00:00Z",
-                    "expiry":"2026-07-20T00:00:00Z", "type":"C T_ H E X",
-                    "typeKey":"C T_ H E X", "missions":[], "personalModifiers":[]}
-            ]
-        });
-        let parsed = parse_wfcd_json(&fixture.to_string(), now()).unwrap();
-        assert_eq!(parsed.sortie[0].stages[0].title, "Survival");
-        assert_eq!(
-            parsed.archon[0].stages[0].node.as_deref(),
-            Some("Metis (Jupiter)")
         );
-        assert_eq!(parsed.syndicates.len(), 1);
-        assert_eq!(parsed.area_missions.len(), 1);
-        assert_eq!(parsed.area_missions[0].kind, "area-mission");
-        assert_eq!(parsed.area_missions[0].stages[0].enemy_levels, vec![5, 15]);
-        assert_eq!(
-            parsed.area_missions[0].stages[0].standing_stages,
-            vec![100, 200]
-        );
-        assert_eq!(parsed.area_missions[0].stages[0].min_mr, Some(2));
-        assert_eq!(
-            parsed.area_missions[0].stages[0].time_bound.as_deref(),
-            Some("day")
-        );
-        assert_eq!(parsed.archimedea[0].variant.as_deref(), Some("deep"));
-        assert_eq!(parsed.archimedea[1].variant.as_deref(), Some("temporal"));
+
+        assert_eq!(cache.arbitration.last_attempt, Some(now()));
+        assert_eq!(cache.arbitration.error, None);
+        assert_eq!(cache.bounties.error.as_deref(), Some("challenges down"));
     }
 
     #[test]
-    fn de_fixture_selects_only_active_week_and_keeps_21_readable_challenges() {
-        let challenges = (1..=21)
-            .map(|index| {
-                json!({
-                    "Index": index,
-                    "Type": if index == 1 { "DT_PRESURE_GAUGE" } else { "DT_EXTERMINATE" },
-                    "Challenge": if index == 1 { "RocketsOnly" } else { "JadeGuardian" },
-                    "Level": "/Lotus/Levels/DevilTower/ArenaAvocado.level",
-                    "Specs": [], "Auras": []
-                })
-            })
-            .collect::<Vec<_>>();
-        let fixture = json!({"Descents": [
-            {"Activation":{"$date":{"$numberLong":"1783296000000"}},
-             "Expiry":{"$date":{"$numberLong":"1783900800000"}},
-             "RandSeed":1, "Challenges":[]},
-            {"Activation":{"$date":{"$numberLong":"1783900800000"}},
-             "Expiry":{"$date":{"$numberLong":"1784505600000"}},
-             "RandSeed":2, "Challenges":challenges}
-        ]});
-        let parsed = parse_descents_json(&fixture.to_string(), now()).unwrap();
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].stages.len(), 21);
-        assert_eq!(parsed[0].stages[0].title, "Pressure Gauge");
-        assert_eq!(parsed[0].stages[0].detail.as_deref(), Some("Rockets Only"));
-        assert_eq!(parsed[0].stages[0].node.as_deref(), Some("Arena Avocado"));
-    }
+    fn cached_derivation_replaces_card_but_keeps_source_stale() {
+        let mut cards = vec![card("old", now() + Duration::hours(1))];
+        let mut status = TimedSourceStatus::new(TimedSourceId::BrowseWfArbitrationSchedule);
+        let previous_success = now() - Duration::minutes(5);
+        status.fresh(previous_success, Some(now() + Duration::hours(1)));
 
-    #[test]
-    fn partial_failure_retains_last_valid_source_and_updates_other_source() {
-        let mut snapshot = TimedContentSnapshot {
-            sortie: vec![card("old-sortie")],
-            descendia: vec![card("old-descendia")],
-            wfcd_ok: true,
-            descents_ok: true,
-            ..TimedContentSnapshot::default()
-        };
-        snapshot.apply_poll(
+        apply_timed_source_result_with_asset_error(
+            &mut cards,
+            &mut status,
             now(),
-            Err("WFCD down".to_string()),
-            Ok(vec![card("new-descendia")]),
+            Ok(vec![card("derived", now() + Duration::hours(2))]),
+            Some("schedule refresh failed".to_string()),
         );
-        assert_eq!(snapshot.sortie[0].id, "old-sortie");
-        assert_eq!(snapshot.descendia[0].id, "new-descendia");
-        assert!(!snapshot.wfcd_ok);
-        assert_eq!(snapshot.wfcd_error.as_deref(), Some("WFCD down"));
-        assert!(snapshot.descents_ok);
+
+        assert_eq!(cards[0].id, "derived");
+        assert_eq!(status.freshness, TimedFreshness::Stale);
+        assert_eq!(status.error.as_deref(), Some("schedule refresh failed"));
+        assert_eq!(status.last_success, Some(previous_success));
+        assert_eq!(status.valid_until, Some(now() + Duration::hours(2)));
     }
 
     #[test]
-    fn missing_source_roots_are_schema_errors_not_empty_successes() {
-        assert!(parse_wfcd_json("{}", now()).is_err());
-        assert!(parse_descents_json("{}", now()).is_err());
+    fn no_cache_is_unavailable_and_out_of_range_takes_precedence() {
+        let mut cards = vec![];
+        let mut status = TimedSourceStatus::new(TimedSourceId::BrowseWfArbitrationSchedule);
+        apply_timed_source_result_with_asset_error(
+            &mut cards,
+            &mut status,
+            now(),
+            Err(TimedSourceError::failed("static assets unavailable")),
+            Some("schedule down".to_string()),
+        );
+        assert_eq!(status.freshness, TimedFreshness::Unavailable);
+
+        cards.push(card("cached", now() + Duration::hours(1)));
+        apply_timed_source_result_with_asset_error(
+            &mut cards,
+            &mut status,
+            now(),
+            Err(TimedSourceError::out_of_range("schedule ended")),
+            Some("schedule refresh failed".to_string()),
+        );
+        assert!(cards.is_empty());
+        assert_eq!(status.freshness, TimedFreshness::OutOfRange);
+        assert_eq!(status.error.as_deref(), Some("schedule ended"));
     }
 }

@@ -6,7 +6,7 @@
 import { expect, test } from "@playwright/test";
 import { bootConsole, calls } from "./harness";
 
-// RND-001: パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)。一覧画面のSpaceはパレットを開かずに編集中ルールの表示選択(enabled)をトグルし(action:toggle-rule)、一覧画面の↑/↓はedit focusを前後のルールへ巡回移動し、Ctrl+1..9は対応indexのルールへedit focusを移す(パレット表示中も有効。フォーカス移動は設定を変更しない)。Cmd+1..7はコンテンツタブ専用でルールを変更せず、Cmd+8/9はアプリが奪わない。IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力でき、DESELECT ALL RULES候補は全表示選択を解除して通知参加を変えない(renderer統合)
+// RND-001: パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)。一覧画面のSpaceはパレットを開かずに編集中ルールの表示選択(enabled)をトグルし(action:toggle-rule)、一覧画面の↑/↓はedit focusを前後のルールへ巡回移動し、Ctrl+1..9は対応indexのルールへedit focusを移す(パレット表示中も有効。フォーカス移動は設定を変更しない)。Cmd+1..9は9個のコンテンツタブ専用でルールを変更しない。IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力でき、DESELECT ALL RULES候補は全表示選択を解除して通知参加を変えない(renderer統合)
 test("RND-001 palette keyboard", async ({ page }) => {
   await bootConsole(page);
   // どこでも打鍵で開き、入力を引き継ぐ
@@ -71,6 +71,19 @@ test("RND-001 palette keyboard", async ({ page }) => {
   await page.keyboard.press("Control+1");
   await expect(page.locator("#editing-meta")).toHaveText("R1/2");
   expect(await mutations()).toBe(mutationsBefore);
+  // Cmd+1..9はコンテンツタブ専用で、rule edit focus・設定を変更しない。
+  await page.keyboard.press("Meta+9");
+  await expect(page.locator('#content-tabs [aria-selected="true"]')).toHaveAttribute(
+    "data-tab-id",
+    "descendia",
+  );
+  await expect(page.locator("#editing-meta")).toHaveText("R1/2");
+  expect(await mutations()).toBe(mutationsBefore);
+  await page.keyboard.press("Meta+1");
+  await expect(page.locator('#content-tabs [aria-selected="true"]')).toHaveAttribute(
+    "data-tab-id",
+    "fissures",
+  );
   // IME変換中(composition中)のEnterは候補を適用しない
   await page.keyboard.press("a");
   await expect(page.locator("#palette-overlay")).toBeVisible();
@@ -455,16 +468,18 @@ test("RND-009 serializes rapid new rule and filter apply", async ({ page }) => {
   expect(after[2]).toMatchObject({ enabled: true, notify: false, tiers: ["Axi"] });
 });
 
-// RND-010: コンテンツ領域は公開データから実内容を取得できるfissures/sortie/archon/syndicates/area-missions/archimedea/descendiaの7タブをこの順で持ち、英語表示はFissures/Sortie/Archon Hunt/Syndicates/Area Missions/Archimedea/Descendiaとなる。実内容を取得できないarbitration/netracellsのtabとtabpanelは持たない。active tabと可視tabpanelは常に各1つで、Cmd+1..7は対応タブへ切替、Cmd+8/9はactive tabを変えずアプリが奪わない。Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持する(renderer統合)
+// RND-010: コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。仲裁cardはcommunity schedule・browse.wf出典、将来Descendiaはupcoming、AreaはWFCDとOracleのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)
 test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 620 });
   await bootConsole(page, { locale: "en" });
   const tabs = [
     ["fissures", "Fissures"],
+    ["arbitration", "Arbitration"],
     ["sortie", "Sortie"],
     ["archon", "Archon Hunt"],
     ["syndicates", "Syndicates"],
     ["area-missions", "Area Missions"],
+    ["circuit", "Circuit"],
     ["archimedea", "Archimedea"],
     ["descendia", "Descendia"],
   ] as const;
@@ -477,7 +492,7 @@ test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
     ),
   ).toEqual(tabs.map(([id]) => id));
   await expect(
-    page.locator("#tab-arbitration, #panel-arbitration, #tab-netracells, #panel-netracells"),
+    page.locator("#tab-netracells, #panel-netracells"),
   ).toHaveCount(0);
 
   for (const [id, label] of tabs) {
@@ -518,20 +533,6 @@ test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   await assertActive("fissures");
   await page.keyboard.press("Control+Shift+Tab");
   await assertActive("descendia");
-  // 取得不能タブへ対応していた数字はアプリが奪わず、active tabも変えない。
-  await page.evaluate(() => {
-    document.addEventListener("keydown", (event) => {
-      document.documentElement.dataset.lastShortcutDefaultPrevented = String(
-        event.defaultPrevented,
-      );
-    });
-  });
-  await page.keyboard.press("Meta+8");
-  await assertActive("descendia");
-  await expect(page.locator("html")).toHaveAttribute("data-last-shortcut-default-prevented", "false");
-  await page.keyboard.press("Meta+9");
-  await assertActive("descendia");
-  await expect(page.locator("html")).toHaveAttribute("data-last-shortcut-default-prevented", "false");
 
   // Ctrl+数字はタブではなく従来のrule edit focusだけを変更する。
   await page.keyboard.press("Control+2");
@@ -541,14 +542,65 @@ test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   // ARIA roving focusは矢印/Home/Endでactive tabと共に移動する。
   await page.locator("#tab-fissures").focus();
   await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#tab-sortie")).toBeFocused();
-  await assertActive("sortie");
+  await expect(page.locator("#tab-arbitration")).toBeFocused();
+  await assertActive("arbitration");
   await page.keyboard.press("Home");
   await expect(page.locator("#tab-fissures")).toBeFocused();
   await assertActive("fissures");
   await page.keyboard.press("End");
   await expect(page.locator("#tab-descendia")).toBeFocused();
   await assertActive("descendia");
+
+  // source・時間状態・Area内のsource分離をDOM属性で保持する。
+  await page.keyboard.press("Meta+2");
+  const arbitration = page.locator(
+    '#panel-arbitration .timed-card[data-card-id="arbitration-current"]',
+  );
+  await expect(arbitration).toHaveAttribute("data-temporal-status", "active");
+  await expect(arbitration).toHaveAttribute("data-provenance", "community-schedule");
+  expect(await page.locator("#timed-arbitration").getAttribute("aria-live")).toBeNull();
+  expect(await arbitration.locator(".timed-meta").textContent()).toContain("Starts ");
+  await expect(arbitration.locator(".timed-source-link")).toHaveAttribute(
+    "href",
+    /browse\.wf/,
+  );
+  await expect(
+    page.locator(
+      '#panel-arbitration .timed-source-validity[data-source="browseWfArbitration"]',
+    ),
+  ).toBeVisible();
+
+  await page.keyboard.press("Meta+6");
+  await expect(
+    page.locator('#panel-area-missions .timed-card-group[data-group="worldstate"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('#panel-area-missions .timed-card-group[data-group="bounties"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator(
+      '#panel-area-missions .timed-source-error[data-source="wfcd"][data-freshness="stale"]',
+    ),
+  ).toContainText("wfcd down");
+  await expect(
+    page.locator(
+      '#panel-area-missions .timed-source-error[data-source="browseWfBounties"][data-freshness="unavailable"]',
+    ),
+  ).toContainText("oracle down");
+
+  await page.keyboard.press("Meta+7");
+  const circuit = page.locator('#panel-circuit .timed-card[data-provenance="official-live"]');
+  await expect(circuit).toHaveCount(1);
+  await expect(circuit.locator(".timed-stage")).toHaveCount(2);
+  await expect(circuit.locator(".timed-stage").nth(0)).toContainText(/Excalibur.*Mag.*Volt/s);
+  await expect(circuit.locator(".timed-stage").nth(1)).toContainText(/Braton.*Lato.*Skana.*Paris.*Kunai/s);
+
+  await page.keyboard.press("Meta+9");
+  await expect(page.locator('#panel-descendia .timed-card[data-temporal-status="active"]')).toBeVisible();
+  await expect(
+    page.locator('#panel-descendia details.timed-upcoming[data-card-id="descendia-next"]'),
+  ).toBeVisible();
+  await expect(page.locator("#panel-descendia .timed-progress-note")).toBeVisible();
 });
 
 // RND-011: DELIVERYの通知ミュートUIはON/OFFと開始・終了時刻をAppConfig.notificationMute(enabled/startMinute/endMinute)へ保存し、backend snapshotのnotificationsMuted=trueを独自判定せず状態表示する。設定操作はルール・VIEW・NOTIFYを変えず、TEST DELIVERYはミュート表示中でも実行経路へ進む(renderer統合)
@@ -596,11 +648,19 @@ test("RND-011 notification mute window", async ({ page }) => {
     .toBe(true);
 });
 
-// RND-012: locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、本文・aria-label・placeholderの言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合)
+// RND-012: locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、本文・aria-label・placeholderに加えて仲裁のcommunity schedule表示、Circuitの通常/鋼候補見出し・個人進捗非公開注記の言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合)
 const localeGoldens = {
   ja: {
     text: [
       ["#tab-fissures", "tabs.fissures", "亀裂"],
+      ["#tab-arbitration", "tabs.arbitration", "仲裁"],
+      ["#tab-sortie", "tabs.sortie", "ソーティー"],
+      ["#tab-archon", "tabs.archon", "アルコン討伐戦"],
+      ["#tab-syndicates", "tabs.syndicates", "シンジケート"],
+      ["#tab-area-missions", "tabs.areaMissions", "地位ミッション"],
+      ["#tab-circuit", "tabs.circuit", "サーキット"],
+      ["#tab-archimedea", "tabs.archimedea", "アルキメデア"],
+      ["#tab-descendia", "tabs.descendia", "ディセンディア"],
       ["#filters-tab", "sidebar.filters", "フィルター"],
       ["#delivery-tab", "sidebar.delivery", "通知"],
       ["#test-btn", "delivery.test", "通知をテスト"],
@@ -610,10 +670,21 @@ const localeGoldens = {
     tabsLabel: "時限コンテンツ",
     languageLabel: "表示言語",
     rulePlaceholder: "ルール名 (R1)",
+    arbitrationProvenance: "コミュニティ予測",
+    circuitStages: ["通常サーキット", "鋼の道のりサーキット"],
+    circuitProgress: "公開ワールドステートから今週の候補は取得できますが、個人のサーキット進行度は取得できません。ゲーム内で確認してください。",
   },
   en: {
     text: [
       ["#tab-fissures", "tabs.fissures", "Fissures"],
+      ["#tab-arbitration", "tabs.arbitration", "Arbitration"],
+      ["#tab-sortie", "tabs.sortie", "Sortie"],
+      ["#tab-archon", "tabs.archon", "Archon Hunt"],
+      ["#tab-syndicates", "tabs.syndicates", "Syndicates"],
+      ["#tab-area-missions", "tabs.areaMissions", "Area Missions"],
+      ["#tab-circuit", "tabs.circuit", "Circuit"],
+      ["#tab-archimedea", "tabs.archimedea", "Archimedea"],
+      ["#tab-descendia", "tabs.descendia", "Descendia"],
       ["#filters-tab", "sidebar.filters", "Filters"],
       ["#delivery-tab", "sidebar.delivery", "Delivery"],
       ["#test-btn", "delivery.test", "Test Delivery"],
@@ -623,10 +694,21 @@ const localeGoldens = {
     tabsLabel: "Timed content",
     languageLabel: "Display language",
     rulePlaceholder: "Rule name (R1)",
+    arbitrationProvenance: "Community prediction",
+    circuitStages: ["Normal Circuit", "Steel Path Circuit"],
+    circuitProgress: "The public world-state provides this week's choices, but not your personal Circuit progress. Check it in game.",
   },
   "zh-Hans": {
     text: [
       ["#tab-fissures", "tabs.fissures", "裂隙"],
+      ["#tab-arbitration", "tabs.arbitration", "仲裁"],
+      ["#tab-sortie", "tabs.sortie", "突击"],
+      ["#tab-archon", "tabs.archon", "执刑官猎杀"],
+      ["#tab-syndicates", "tabs.syndicates", "集团"],
+      ["#tab-area-missions", "tabs.areaMissions", "地区任务"],
+      ["#tab-circuit", "tabs.circuit", "无尽回廊"],
+      ["#tab-archimedea", "tabs.archimedea", "科研考察"],
+      ["#tab-descendia", "tabs.descendia", "后裔战场"],
       ["#filters-tab", "sidebar.filters", "筛选"],
       ["#delivery-tab", "sidebar.delivery", "通知"],
       ["#test-btn", "delivery.test", "测试通知"],
@@ -636,6 +718,9 @@ const localeGoldens = {
     tabsLabel: "限时内容",
     languageLabel: "显示语言",
     rulePlaceholder: "规则名称 (R1)",
+    arbitrationProvenance: "社区预测",
+    circuitStages: ["普通无尽回廊", "钢铁之路无尽回廊"],
+    circuitProgress: "公共世界状态可提供本周候选，但无法提供你的个人无尽回廊进度，请在游戏内确认。",
   },
 } as const;
 
@@ -663,6 +748,20 @@ for (const [locale, golden] of Object.entries(localeGoldens)) {
       "rules.namePlaceholder",
     );
     await expect(page.locator("#rulename-input")).toHaveAttribute("placeholder", golden.rulePlaceholder);
+    await expect(
+      page.locator('#panel-arbitration .timed-card[data-provenance="community-schedule"] .timed-provenance-badge'),
+    ).toHaveText(golden.arbitrationProvenance);
+    const circuitStages = page.locator("#panel-circuit .timed-stage-title");
+    await expect(circuitStages).toHaveCount(2);
+    await expect(circuitStages.nth(0)).toHaveText(golden.circuitStages[0]);
+    await expect(circuitStages.nth(1)).toHaveText(golden.circuitStages[1]);
+    await expect(page.locator("#panel-circuit .timed-progress-note")).toHaveAttribute(
+      "data-i18n-key",
+      "timed.circuitProgressUnavailable",
+    );
+    await expect(page.locator("#panel-circuit .timed-progress-note")).toHaveText(
+      golden.circuitProgress,
+    );
     await expect(page.locator("[data-i18n-missing]")).toHaveCount(0);
     expect(await page.locator("body").innerText()).not.toMatch(/\[\[[^\]]+\]\]/);
 

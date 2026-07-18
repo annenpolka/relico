@@ -2,13 +2,14 @@
 
 ## Goal
 
-Warframeの時限コンテンツを一つの常駐コンソールから確認でき、通知をローカル時刻の区間で安全に抑制でき、日本語・英語・簡体字中国語で同じ機能と表示保証を持つ状態にする。
+Warframeの時限コンテンツを、公式ライブ・コミュニティライブ・コミュニティ予測の由来を区別しながら一つの常駐コンソールで確認でき、通知をローカル時刻の区間で安全に抑制でき、日本語・英語・簡体字中国語で同じ機能と表示保証を持つ状態にする。
 
 ## Current Working Contract
 
 - `specs/*.pkl`を挙動の正本とし、生成物を直接編集しない。
-- コンテンツは亀裂、ソーティー、アルコン、シンジケート、エリアミッション、アルキメデア、Descendiaの7タブで扱う。
-- 公開worldstateから実内容を取得できないコンテンツはタブ化せず、対応タブの一時的な取得障害では最後の有効snapshotとエラーを併記する。
+- コンテンツは亀裂、仲裁、ソーティー、アルコン、シンジケート、エリアミッション、Circuit、アルキメデア、Descendiaの9タブで扱う。
+- 公式ライブ値、コミュニティによるライブ整形、コミュニティ予測scheduleをcard上で分離し、各sourceの一時的な取得障害ではそのsourceの最後の有効snapshotとエラーを併記する。
+- 公開sourceから個人状態を取得できないネットセル等は取得タブ化せず、必要になっても明示的なローカルtrackerとして分離する。
 - i18nは同一の依存なしカタログをTSとRustから利用し、意味DOMのgoldenで3言語を検査する。
 
 ## Fit Conditions
@@ -24,7 +25,8 @@ Warframeの時限コンテンツを一つの常駐コンソールから確認で
 - Authority: Human stated and repo evidence. `specs/*.pkl`が仕様正本であり、生成テストと`docs/SPEC.md`は手編集しない。
 - Authority: Human stated. 外部i18n依存を追加せず、日本語・英語・簡体字中国語を提供する。
 - Authority: Repo evidence. フィルタ・通知・dedupの判定をフロントエンドへ複製しない。
-- Authority: Human stated and external source. 取得可能な公開データだけをタブ化し、アルキメデア、Descendiaのプレイヤー固有進捗を公開worldstateから推測しない。
+- Authority: Human stated and external source. 取得可能な公開データだけをタブ化し、ネットセル、アルキメデア、Descendiaのプレイヤー固有進捗を公開worldstateから推測しない。
+- Authority: Human stated and external source. browse.wf由来の仲裁は公式ライブ値と呼ばず、予測scheduleであることと出典を表示する。
 
 ## Preference Gradients
 
@@ -36,41 +38,46 @@ Warframeの時限コンテンツを一つの常駐コンソールから確認で
 ## Judgment Bindings
 
 ### 公開データの境界と部分失敗
-Authority: External source
-Evidence: Observed; WFCD `/pc`、DE `worldState.php`、WFCD parser sourceを2026-07-18に実測
+Authority: Human stated and external source
+Evidence: Stated by user to adopt the re-researched sources; Observed WFCD `/pc`、DE `worldState.php`、browse.wf公開実装と各payloadを2026-07-18に実測
 Working default:
 - WFCD集約から亀裂・ソーティー・アルコン・シンジケート・エリアミッション・アルキメデアを取得する。
-- DescendiaはDE公式worldstateの`Descents`から取得する。
-- 各取得経路は独立に失敗でき、最後の有効snapshotを保持する。
+- DescendiaはDE公式worldstateの`Descents`、Circuitは`EndlessXpSchedule`から取得する。
+- Holdfasts・Cavia・Hexはbrowse.wf Oracleの期限内`bounty-cycle`とPublic Exportを結合し、仲裁はbrowse.wfの連続した有効期間内scheduleとPublic Exportを結合する。
+- WFCD、DE公式、browse.wf Oracle、browse.wf scheduleは独立に失敗でき、source別の最後の有効snapshotを保持する。
+- 動的payloadとvalidated static assetの結合に失敗したsourceだけstatic assetを短期再取得し、他sourceのcacheとLKGは維持する。
+- static join不整合が続く場合は1分→5分→30分→2時間上限で再取得をbackoffし、join成功でresetする。
+- static asset取得障害は60秒retryへ分離し、その間はjoin backoff段を消費しない。
 Why it matters:
 - 補助タブの障害で主要な亀裂通知を止めない。
 Validation:
-- fixtureによるserde試験と、片側だけ失敗するpoller試験を通す。
+- fixtureによるserde試験、仲裁scheduleの連続性・範囲property、Oracle expiry検査、source単位の全成功/各失敗matrix、static cache再取得hint試験を通す。
 Revisit when:
-- WFCDが`Descents`やネットセル進捗を安定した公開schemaへ追加したとき。
+- WFCDが仲裁・追加Bounty・`Descents`・ネットセル進捗を安定した公開schemaへ追加したとき、またはbrowse.wfのsource契約・配布場所・有効期間が変わったとき。
 Status: active
 Retention: repo-contract
 
-### 実内容を取得できないコンテンツはタブ化しない
+### 予測可能な共通状態と取得不能な個人状態を分離する
 Authority: Human stated
-Evidence: Stated by user; also Observed that current Arbitration is `SolNode000/Unknown/1970` sentinel and public worldstate has no Netracells mission field
+Evidence: Stated by user to adopt the investigated sources; Observed that WFCD Arbitration is sentinelでもbrowse.wf `arbys.txt`は2029-10-12まで1時間連続し、Netracellsはbrowse.wfでもlocalStorage手動checkのみ
 Working default:
-- 仲裁とネットセルはタブ、tabpanel、合成カードを設けない。
+- 仲裁はコミュニティ予測scheduleとしてtabを設け、source・予測表示・有効期間外の取得不能を明示する。
+- ネットセルは取得tab、tabpanel、合成ミッションcardを設けない。週次消化管理が要求されたらローカルtrackerとして別仕様にする。
 - アルキメデアとDescendiaは取得できる公開ミッション情報を表示するが、個人の残り回数・checkpoint・獲得報酬は表示しない。
 Why it matters:
-- 常に空または推定だけのタブを避け、実際に確認できる情報だけをナビゲーションへ残す。
+- 決定的な共通rotationを利用しつつ、それを公式ライブ値や個人進捗と誤認させない。
 Validation:
-- renderer試験で7タブの完全な順序と仲裁・ネットセルDOMの不在を検査し、live APIの対応fieldを確認する。
+- renderer試験で9タブの完全な順序、仲裁の予測・出典表示、ネットセルDOMの不在を検査し、schedule範囲propertyとlive source fixtureを確認する。
 Revisit when:
-- 仲裁またはネットセルの実ミッションを返す安定した公開source、あるいは認証済みプレイヤーAPIが利用可能になったとき。
+- DE公式またはWFCDが仲裁の安定したライブ値を提供したとき、またはネットセルを返す認証済みプレイヤーAPIが利用可能になったとき。
 Status: active
 Retention: carry-forward
 
-### 7タブのブラウザ風操作と既存ルール操作
+### 9タブのブラウザ風操作と既存ルール操作
 Authority: Human stated
 Evidence: Stated for browser-like shortcuts; Observed existing Cmd/Ctrl+1..9 rule focus in `src/main.ts`
 Working default:
-- macOSのCmd+1..7を7タブへ直接割り当て、Cmd+8/9はアプリが奪わず、Ctrl+Tab / Ctrl+Shift+Tabで巡回する。
+- macOSのCmd+1..9を9タブへ直接割り当て、Ctrl+Tab / Ctrl+Shift+Tabで巡回する。
 - 既存ルールedit focusはCtrl+1..9へ限定して保持する。
 - tablist上ではArrowLeft/Right/Home/Endのroving focusを提供する。
 Why it matters:
@@ -118,16 +125,16 @@ Retention: repo-contract
 ## Open Questions And Discomfort
 
 - `.stratal/brief.md`は今回のような複数機能に跨る判断の再発見を防ぐため、リポジトリへ追跡することを推奨する。
-- 仲裁とネットセルは安定した実データ源が利用可能になるまで意図的にタブを設けない。
+- 仲裁scheduleとPublic Exportの更新頻度にはSLAがないため、期限・連続性・node解決率を検査し、範囲外では補間や循環をしない。
 
 ## Rejected Directions
 
-- WFCDの古い仲裁データを現在値や取得不可カードとして表示しない。現行性を検証できるsourceが復旧したらタブ再追加を検討する。
+- WFCDの`SolNode000/Unknown/1970`仲裁sentinelを現在値として表示しない。仲裁は検証済みbrowse.wf scheduleだけから作り、範囲外を剰余で循環させない。
 - ネットセルを週次リセットだけの合成タブとして表示せず、Descendiaの個人進捗も端末ローカルの推測値として自動管理しない。明示的な手動tracker要求が出たら別機能として再検討する。
 - 画像pixel goldenを主要回帰契約にしない。固定レンダリング環境が導入されたら補助証拠として再検討する。
 
 ## Evidence Notes
 
 - `AGENTS.md`, `specs/patterns.pkl`, `specs/notifier.pkl`, `src-tauri/src/poller.rs`, `src/main.ts`, `tests/renderer/harness.ts`を確認。
-- 2026-07-18に`https://api.warframestat.us/pc`、個別endpoint、`https://api.warframe.com/cdn/worldState.php`を実測。
+- 2026-07-18に`https://api.warframestat.us/pc`、`https://api.warframe.com/cdn/worldState.php`、`https://browse.wf/arbys.txt`、Public Export、`https://oracle.browse.wf/bounty-cycle`とbrowse.wf公開実装を実測。
 - DE Update 41はDescendiaを21階・月曜00:00 UTC更新と説明している。

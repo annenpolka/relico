@@ -126,6 +126,24 @@ clauses: Listing<patterns.Clause> = new {
     id = "MUT-002"
     desc = "起動直後のseed中または通知ミュート中に観測した合致亀裂は通知済みidとしてmarkするが配送対象を1件も返さない。通常配送へ戻しても同じidを滞留通知せず、その後に現れた新規idだけを1回返す。配送判定はHTTP取得開始時ではなく取得後の最新設定を使い、ミュート・一時停止・表示言語の変更を次の配送前へ反映する。ミュートは一覧・通知候補・next表示を変えず、明示操作のTEST DELIVERYには適用しない"
   }
+  new patterns.ArbitrationSchedule {
+    id = "ARB-001"
+    desc = "browse.wf仲裁scheduleは2件以上の非空nodeを持ち、先頭timestampがUTC時間境界に揃い、隣接行ごとに厳密な3600秒間隔で増加するときだけ受理する。空node、重複、逆順、1秒でも異なるgap、数値でないtimestampは全体を不正として扱う"
+    scenario = "validation"
+  }
+  new patterns.ArbitrationSchedule {
+    id = "ARB-002"
+    desc = "仲裁schedule lookupはnowをUTC時間slotへ切り下げ、先頭timestamp以上かつ末尾timestamp+3600秒未満だけ対応する行を返す。先頭より前と末尾slot終了以後はOutOfRangeであり、剰余による循環・端値補間を行わない"
+    scenario = "lookup"
+  }
+  new patterns.TimedSourceIsolation {
+    id = "SRC-001"
+    desc = "WFCD、DE公式worldstate、browse.wf Oracle Bounty、browse.wf仲裁scheduleは独立sourceである。成功sourceはexpiry>nowのcardだけで自分のsliceを置換してfreshとし、失敗sourceはexpiry>nowのlast-known-goodだけを保持して生存cardがあればstale、なければunavailableとし、他sourceのcard・healthを変えない。schedule範囲外はcardを空にしてout-of-rangeとし、expiry欠落cardを時限cardとして保持しない。有効な動的Bounty payloadをstatic assetへjoinした失敗だけBounty cacheを、仲裁deriveのFailed/OutOfRangeは仲裁cacheだけを24時間待たず短期再取得する。動的BountyのHTTP・JSON・expiry・必須field失敗ではstatic cacheを再取得せず、再取得は対象cache用assetだけをfetch/applyして他sourceのcard・healthを変えない。join不整合が続く再取得間隔は1分、5分、30分、以後2時間を上限とし、join成功で先頭へresetする。static assetのfetch失敗中はjoin backoff段を消費せず、60秒のfetch retry成功後に続きから再開する"
+  }
+  new patterns.BountyFreshness {
+    id = "BNT-001"
+    desc = "browse.wf Oracle bounty-cycleはexpiryが変換可能なミリ秒時刻で、同一の取得後nowより厳密に未来の場合だけfreshとする。expiry欠落・変換不能・now以下の期限切れpayloadは成功扱いせず、last-known-good Bountyを上書きしない"
+  }
   new patterns.NotifyCandidates {
     id = "NTY-001"
     desc = "通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない"
@@ -193,6 +211,31 @@ clauses: Listing<patterns.Clause> = new {
   new patterns.AppConfigCompat {
     id = "CFG-005"
     desc = "AppConfigのlocaleが欠落した旧JSONは日本語(ja)として読み込み、ja/en/zh-Hansはwire値を変えずserialize/deserializeを往復する。通知ミュート設定が欠落した旧JSONはOFFとなり、有効なstartMinute/endMinuteは往復保持される。分値は0..1439だけを有効とし、範囲外値は通知を止めないfail-openとなる。locale・通知ミュートだけの変更はnotification projectionを変えない"
+  }
+  new patterns.TimedContentFixture {
+    id = "TMD-001"
+    desc = "時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。旧synthetic availabilityとbackend netracells fieldは持たない"
+    scenario = "wire_shape"
+  }
+  new patterns.TimedContentFixture {
+    id = "TMD-002"
+    desc = "有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する"
+    scenario = "arbitration_join"
+  }
+  new patterns.TimedContentFixture {
+    id = "TMD-003"
+    desc = "期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない"
+    scenario = "oracle_bounties"
+  }
+  new patterns.TimedContentFixture {
+    id = "TMD-004"
+    desc = "DE公式EndlessXpSchedule fixtureはactiveなEXC_NORMALの3 frameとEXC_HARDの5 weaponをkind=circuit・variantなしの一つのCircuit cardへ正規化し、stage titleをNormal Circuit/Steel Path Circuitとしてactivation/expiryとofficial-live sourceを保持する。active scheduleは厳密に1件を要求し、空・active 0件・active複数はsource errorとしてlast-known-goodを空で上書きしない"
+    scenario = "circuit"
+  }
+  new patterns.TimedContentFixture {
+    id = "TMD-005"
+    desc = "既存sourceの詳細を落とさず、WFCD固定fixtureのSortieはkind/title、boss・faction・rewardのsubtitle、stage title/node、modifier名・説明を保持し、Archonはkind/title、boss・factionのsubtitle、stage title/nodeを保持する。Syndicate nodeをstageとして保持し、Area jobはjob固有expiryごとに期限を分離してreward drop(item/rarity/chance/count)を保持し、Archimedeaはcondition descriptionとstandard/elite区分を保持する。通常Sortieのmissions・Archonのvariantsのような当該cardで使わないfieldとArchon rewardPoolの欠落は許容するが、取得中entryの必須日時・interval・使用するstage/detail fieldが壊れたWFCD payloadは部分成功にせずsource errorとする。DE Descentsはexpired entryを除外し、payload内のactiveと全future entryをactivation順に保持してSpecs/Aurasを残し、futureをupcomingとして区別する。Descentsの空payload・全expired・逆転interval・空stage・重複Index・Specs/Auras欠落はsource errorとしてlast-known-goodを空で上書きせず、固定fixtureでは現在1週と将来5週の各21 stageを検査する"
+    scenario = "rich_details"
   }
   new patterns.NotificationExample {
     id = "NTF-001"
@@ -263,7 +306,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-001"
-    desc = "パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)。一覧画面のSpaceはパレットを開かずに編集中ルールの表示選択(enabled)をトグルし(action:toggle-rule)、一覧画面の↑/↓はedit focusを前後のルールへ巡回移動し、Ctrl+1..9は対応indexのルールへedit focusを移す(パレット表示中も有効。フォーカス移動は設定を変更しない)。Cmd+1..7はコンテンツタブ専用でルールを変更せず、Cmd+8/9はアプリが奪わない。IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力でき、DESELECT ALL RULES候補は全表示選択を解除して通知参加を変えない(renderer統合)"
+    desc = "パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)。一覧画面のSpaceはパレットを開かずに編集中ルールの表示選択(enabled)をトグルし(action:toggle-rule)、一覧画面の↑/↓はedit focusを前後のルールへ巡回移動し、Ctrl+1..9は対応indexのルールへedit focusを移す(パレット表示中も有効。フォーカス移動は設定を変更しない)。Cmd+1..9は9個のコンテンツタブ専用でルールを変更しない。IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力でき、DESELECT ALL RULES候補は全表示選択を解除して通知参加を変えない(renderer統合)"
     scenario = "palette_keyboard"
   }
   new patterns.RendererScenario {
@@ -308,7 +351,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-010"
-    desc = "コンテンツ領域は公開データから実内容を取得できるfissures/sortie/archon/syndicates/area-missions/archimedea/descendiaの7タブをこの順で持ち、英語表示はFissures/Sortie/Archon Hunt/Syndicates/Area Missions/Archimedea/Descendiaとなる。実内容を取得できないarbitration/netracellsのtabとtabpanelは持たない。active tabと可視tabpanelは常に各1つで、Cmd+1..7は対応タブへ切替、Cmd+8/9はactive tabを変えずアプリが奪わない。Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持する(renderer統合)"
+    desc = "コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。仲裁cardはcommunity schedule・browse.wf出典、将来Descendiaはupcoming、AreaはWFCDとOracleのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)"
     scenario = "content_tabs"
   }
   new patterns.RendererScenario {
@@ -318,7 +361,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-012"
-    desc = "locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、本文・aria-label・placeholderの言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合)"
+    desc = "locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、本文・aria-label・placeholderに加えて仲裁のcommunity schedule表示、Circuitの通常/鋼候補見出し・個人進捗非公開注記の言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合)"
     scenario = "locale_display"
   }
   new patterns.E2eScenario {
@@ -398,7 +441,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.Manual {
     id = "MAN-012"
-    desc = "7つの時限コンテンツ表示は公開worldstateから実内容を取得できるものだけを扱い、取得経路の部分障害や個人進捗の非公開性をもっともらしい推測値で埋めない"
-    procedure = "リリース前に実データで確認する。1) 亀裂、ソーティー、アルコン、シンジケート、地位ミッション、アルキメデアはWFCD worldstate、DescendiaはDE公式worldState.phpのDescentsに由来し、片方の取得失敗でも他方と亀裂通知は更新を続け、最後の有効snapshotと取得エラーを区別して表示する。2) 現行公開sourceがSolNode000/Unknown/1970等の無効sentinelしか返さない仲裁と、実ミッションfieldを持たないネットセルはtab・tabpanel・合成カードを設けない。3) アルキメデア、Descendiaの公開データにない個人の残り回数・クリア階・獲得報酬を推測せず、公開ミッション情報とゲーム内確認案内だけを表示する。schema変化はtimed moduleのfixture testで検知し、安定した公開sourceまたは認証済みプレイヤーAPIが利用可能になったときに再検討する。"
+    desc = "9つの時限コンテンツ表示はsourceの由来と時間状態を分離し、取得経路の部分障害や個人進捗の非公開性をもっともらしい推測値で埋めない"
+    procedure = "リリース前に実データで確認する。1) DE公式、WFCD、browse.wf Oracle、browse.wf schedule/Public Exportへ実際に到達でき、cardのofficial/community/schedule badgeとbrowse.wf creditが文字として判読できる。2) 表示中の仲裁をbrowse.wf/liveとゲーム内から数件標本照合する。source別障害、期限切れ、schedule範囲外、個人進捗非推測はSRC-001・BNT-001・RND-010等で機械検証する。第三者scheduleの将来正確性とservice SLAは保証せず、この実データ確認でも将来の継続性を証明したとは扱わない。"
   }
 }

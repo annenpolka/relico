@@ -54,19 +54,82 @@ export interface Fissure {
   planet: string | null;
 }
 
+export type TimedTemporalStatus = "active" | "upcoming";
+export type TimedSourceKind = "official-live" | "community-live" | "community-schedule";
+export type TimedSourceId =
+  | "wfcd-worldstate"
+  | "de-worldstate"
+  | "browse-wf-arbitration-schedule"
+  | "browse-wf-bounty-cycle"
+  | "browse-wf-regions"
+  | "browse-wf-challenges"
+  | "browse-wf-dictionary-en"
+  | "browse-wf-factions";
+export type TimedFreshness = "fresh" | "stale" | "out-of-range" | "unavailable";
+export type TimedConditionKind = "personal" | "deviation" | "risk";
+
+export interface TimedProvenance {
+  kind: TimedSourceKind;
+  contributors: TimedSourceId[];
+}
+
+export interface TimedSourceStatus {
+  source: TimedSourceId;
+  freshness: TimedFreshness;
+  lastAttempt: string | null;
+  lastSuccess: string | null;
+  validUntil: string | null;
+  error: string | null;
+}
+
+export interface TimedSourceStatuses {
+  wfcd: TimedSourceStatus;
+  deDescendia: TimedSourceStatus;
+  deCircuit: TimedSourceStatus;
+  browseWfBounties: TimedSourceStatus;
+  browseWfArbitration: TimedSourceStatus;
+}
+
+export interface TimedCondition {
+  key: string;
+  name: string;
+  description: string;
+  kind: TimedConditionKind;
+  eliteOnly: boolean;
+}
+
+export interface TimedRewardDrop {
+  item: string;
+  rarity: string;
+  chancePercent: number;
+  count: number;
+}
+
+export interface TimedMetadata {
+  key: string;
+  value: string;
+}
+
 export interface TimedContentStage {
   order: number;
   title: string;
   node: string | null;
   detail: string | null;
-  modifiers: string[];
+  modifiers?: string[];
+  conditions?: TimedCondition[];
   enemyLevels?: number[];
   standingStages?: number[];
   minMr?: number;
   timeBound?: string;
+  rewardPool?: string[];
+  rewardDrops?: TimedRewardDrop[];
+  specs?: string[];
+  auras?: string[];
+  choices?: string[];
+  ally?: string;
 }
 
-/** WFCD/DescendiaをUIへ渡す共通カード。ゲーム固有の判定はRust側で正規化する。 */
+/** 各公開sourceをRust側で正規化してUIへ渡す共通カード。 */
 export interface TimedContentCard {
   id: string;
   kind: string;
@@ -75,21 +138,27 @@ export interface TimedContentCard {
   subtitle: string | null;
   activation: string | null;
   expiry: string | null;
-  availability: "available" | "unavailable" | "synthetic";
+  temporalStatus: TimedTemporalStatus;
+  provenance: TimedProvenance;
+  sourceId: TimedSourceId;
+  sourceName: string;
+  sourceUrl: string | null;
+  metadata?: TimedMetadata[];
+  personalModifiers?: TimedCondition[];
   stages: TimedContentStage[];
 }
 
 export interface TimedContentSnapshot {
+  arbitration: TimedContentCard[];
   sortie: TimedContentCard[];
   archon: TimedContentCard[];
   syndicates: TimedContentCard[];
   areaMissions: TimedContentCard[];
+  bounties: TimedContentCard[];
+  circuit: TimedContentCard[];
   archimedea: TimedContentCard[];
   descendia: TimedContentCard[];
-  wfcdOk: boolean;
-  wfcdError: string | null;
-  descentsOk: boolean;
-  descentsError: string | null;
+  sources: TimedSourceStatuses;
   lastPoll: string | null;
 }
 

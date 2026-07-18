@@ -19,10 +19,12 @@
           data-i18n-aria-label-key="tabs.label"
         >
           <button id="tab-fissures" class="content-tab active" type="button" role="tab" tabindex="0" aria-selected="true" aria-controls="panel-fissures" data-tab-id="fissures" data-i18n-key="tabs.fissures">亀裂</button>
+          <button id="tab-arbitration" class="content-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-arbitration" data-tab-id="arbitration" data-i18n-key="tabs.arbitration">仲裁</button>
           <button id="tab-sortie" class="content-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-sortie" data-tab-id="sortie" data-i18n-key="tabs.sortie">ソーティー</button>
           <button id="tab-archon" class="content-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-archon" data-tab-id="archon" data-i18n-key="tabs.archon">アルコン討伐戦</button>
           <button id="tab-syndicates" class="content-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-syndicates" data-tab-id="syndicates" data-i18n-key="tabs.syndicates">シンジケート</button>
           <button id="tab-area-missions" class="content-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-area-missions" data-tab-id="area-missions" data-i18n-key="tabs.areaMissions">地位ミッション</button>
+          <button id="tab-circuit" class="content-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-circuit" data-tab-id="circuit" data-i18n-key="tabs.circuit">サーキット</button>
           <button id="tab-archimedea" class="content-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-archimedea" data-tab-id="archimedea" data-i18n-key="tabs.archimedea">アルキメデア</button>
           <button id="tab-descendia" class="content-tab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="panel-descendia" data-tab-id="descendia" data-i18n-key="tabs.descendia">ディセンディア</button>
         </nav>
@@ -57,10 +59,12 @@
               </table>
             </div>
           </section>
+          <section id="panel-arbitration" class="content-panel timed-panel" role="tabpanel" aria-labelledby="tab-arbitration" hidden><div id="timed-arbitration" class="timed-cards"></div></section>
           <section id="panel-sortie" class="content-panel timed-panel" role="tabpanel" aria-labelledby="tab-sortie" hidden><div id="timed-sortie" class="timed-cards"></div></section>
           <section id="panel-archon" class="content-panel timed-panel" role="tabpanel" aria-labelledby="tab-archon" hidden><div id="timed-archon" class="timed-cards"></div></section>
           <section id="panel-syndicates" class="content-panel timed-panel" role="tabpanel" aria-labelledby="tab-syndicates" hidden><div id="timed-syndicates" class="timed-cards"></div></section>
           <section id="panel-area-missions" class="content-panel timed-panel" role="tabpanel" aria-labelledby="tab-area-missions" hidden><div id="timed-area-missions" class="timed-cards"></div></section>
+          <section id="panel-circuit" class="content-panel timed-panel" role="tabpanel" aria-labelledby="tab-circuit" hidden><div id="timed-circuit" class="timed-cards"></div></section>
           <section id="panel-archimedea" class="content-panel timed-panel" role="tabpanel" aria-labelledby="tab-archimedea" hidden><div id="timed-archimedea" class="timed-cards"></div></section>
           <section id="panel-descendia" class="content-panel timed-panel" role="tabpanel" aria-labelledby="tab-descendia" hidden><div id="timed-descendia" class="timed-cards"></div></section>
         </div>

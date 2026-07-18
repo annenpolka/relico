@@ -2,10 +2,12 @@ import type { MessageKey } from "./i18n";
 
 export const CONTENT_TAB_IDS = [
   "fissures",
+  "arbitration",
   "sortie",
   "archon",
   "syndicates",
   "area-missions",
+  "circuit",
   "archimedea",
   "descendia",
 ] as const;
@@ -14,10 +16,12 @@ export type ContentTabId = (typeof CONTENT_TAB_IDS)[number];
 
 export const CONTENT_TABS: ReadonlyArray<{ id: ContentTabId; labelKey: MessageKey }> = [
   { id: "fissures", labelKey: "tabs.fissures" },
+  { id: "arbitration", labelKey: "tabs.arbitration" },
   { id: "sortie", labelKey: "tabs.sortie" },
   { id: "archon", labelKey: "tabs.archon" },
   { id: "syndicates", labelKey: "tabs.syndicates" },
   { id: "area-missions", labelKey: "tabs.areaMissions" },
+  { id: "circuit", labelKey: "tabs.circuit" },
   { id: "archimedea", labelKey: "tabs.archimedea" },
   { id: "descendia", labelKey: "tabs.descendia" },
 ];

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 // WDIO E2Eビルド(VITE_E2E=1)だけwdio frontend pluginを読み込む。通常ビルドでは除去される
 if (import.meta.env.VITE_E2E) {
@@ -24,8 +25,11 @@ import type {
   Facet,
   Fissure,
   StatusSnapshot,
+  TimedCondition,
   TimedContentCard,
   TimedContentSnapshot,
+  TimedContentStage,
+  TimedSourceStatus,
   WatchRule,
 } from "./types";
 
@@ -538,28 +542,71 @@ function tickTimers() {
 
 // ---- ソーティー・アルコン等の時限コンテンツカード ----
 type TimedTabId = Exclude<ContentTabId, "fissures">;
+type TimedCardField = Exclude<keyof TimedContentSnapshot, "sources" | "lastPoll">;
+type TimedSourceKey = keyof TimedContentSnapshot["sources"];
 
-const TIMED_TAB_FIELDS: Record<TimedTabId, keyof TimedContentSnapshot> = {
-  sortie: "sortie",
-  archon: "archon",
-  syndicates: "syndicates",
-  "area-missions": "areaMissions",
-  archimedea: "archimedea",
-  descendia: "descendia",
+const TIMED_TAB_FIELDS: Record<TimedTabId, readonly TimedCardField[]> = {
+  arbitration: ["arbitration"],
+  sortie: ["sortie"],
+  archon: ["archon"],
+  syndicates: ["syndicates"],
+  "area-missions": ["areaMissions", "bounties"],
+  circuit: ["circuit"],
+  archimedea: ["archimedea"],
+  descendia: ["descendia"],
 };
 
-const PERSONAL_PROGRESS_TABS = new Set<TimedTabId>(["archimedea", "descendia"]);
+const TIMED_TAB_SOURCES: Record<TimedTabId, readonly TimedSourceKey[]> = {
+  arbitration: ["browseWfArbitration"],
+  sortie: ["wfcd"],
+  archon: ["wfcd"],
+  syndicates: ["wfcd"],
+  "area-missions": ["wfcd", "browseWfBounties"],
+  circuit: ["deCircuit"],
+  archimedea: ["wfcd"],
+  descendia: ["deDescendia"],
+};
 
-const AVAILABILITY_KEYS: Record<TimedContentCard["availability"], MessageKey> = {
-  available: "timed.available",
-  unavailable: "timed.unavailable",
-  synthetic: "timed.synthetic",
+const PERSONAL_PROGRESS_KEYS: Partial<Record<TimedTabId, MessageKey>> = {
+  circuit: "timed.circuitProgressUnavailable",
+  archimedea: "timed.personalProgressUnavailable",
+  descendia: "timed.personalProgressUnavailable",
+};
+
+const TEMPORAL_STATUS_KEYS: Record<TimedContentCard["temporalStatus"], MessageKey> = {
+  active: "timed.active",
+  upcoming: "timed.upcoming",
+};
+
+const PROVENANCE_KEYS: Record<TimedContentCard["provenance"]["kind"], MessageKey> = {
+  "official-live": "timed.officialLive",
+  "community-live": "timed.communityLive",
+  "community-schedule": "timed.communitySchedule",
+};
+
+const SOURCE_NAME_KEYS: Record<TimedSourceKey, MessageKey> = {
+  wfcd: "timed.sourceWfcd",
+  deDescendia: "timed.sourceDeDescendia",
+  deCircuit: "timed.sourceDeCircuit",
+  browseWfBounties: "timed.sourceBrowseBounties",
+  browseWfArbitration: "timed.sourceBrowseArbitration",
 };
 
 const TIMED_TITLE_KEYS: Partial<Record<string, MessageKey>> = {
+  arbitration: "tabs.arbitration",
   sortie: "tabs.sortie",
   archon: "tabs.archon",
   descendia: "tabs.descendia",
+};
+
+const TIMED_METADATA_KEYS: Partial<Record<string, MessageKey>> = {
+  rot: "timed.rotation",
+  rotation: "timed.rotation",
+  vaultRot: "timed.vaultRotation",
+  vaultRotation: "timed.vaultRotation",
+  zarimanFaction: "timed.faction",
+  faction: "timed.faction",
+  week: "timed.week",
 };
 
 function localizedDate(value: string): string {
@@ -572,44 +619,264 @@ function localizedDate(value: string): string {
 }
 
 function appendTimedMeta(container: HTMLElement, key: MessageKey, value: string): void {
+  appendTimedMetaLabel(container, t(key), value);
+}
+
+function appendTimedMetaLabel(container: HTMLElement, label: string, value: string): void {
   const item = document.createElement("span");
   const heading = document.createElement("strong");
-  heading.textContent = t(key);
-  item.append(heading, value);
+  heading.textContent = label;
+  item.append(heading, ` ${value}`);
   container.append(item);
 }
 
 function timedCardDescription(card: TimedContentCard): string | null {
+  if (card.subtitle) return card.subtitle;
   if (
     card.kind.includes("syndicat") ||
     card.kind === "area-mission" ||
+    card.kind.includes("bounty") ||
     card.kind === "descendia"
   ) {
     return t("timed.stageCount", { count: card.stages.length });
   }
-  if (card.availability === "available") return card.subtitle;
-  return t(AVAILABILITY_KEYS[card.availability]);
+  return null;
 }
 
-function timedCardElement(card: TimedContentCard): HTMLElement {
+function timedStageTitle(card: TimedContentCard, stage: TimedContentStage): string {
+  if (card.kind === "circuit") {
+    if (stage.title === "Normal Circuit" || stage.order === 1) return t("timed.normalCircuit");
+    if (stage.title === "Steel Path Circuit" || stage.order === 2) {
+      return t("timed.steelPathCircuit");
+    }
+  }
+  return stage.title;
+}
+
+function timedIdentifierLabel(value: string): string {
+  const leaf = (value.split("/").pop() ?? value)
+    .replace(/AllyAgent$/, "")
+    .replace(/\.level$/, "");
+  return leaf
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .trim();
+}
+
+function timedTitle(card: TimedContentCard): string {
+  if (card.kind.includes("circuit")) {
+    if (card.variant === "normal") return t("timed.normalCircuit");
+    if (card.variant === "steel-path" || card.variant === "hard") {
+      return t("timed.steelPathCircuit");
+    }
+    return t("tabs.circuit");
+  }
+  if (card.kind === "archimedea") {
+    if (card.variant === "deep") return t("timed.deepArchimedea");
+    if (card.variant === "temporal") return t("timed.temporalArchimedea");
+  }
+  const localizedTitleKey = TIMED_TITLE_KEYS[card.kind];
+  return localizedTitleKey ? t(localizedTitleKey) : card.title;
+}
+
+function safeSourceUrl(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function sourceElement(card: TimedContentCard): HTMLElement {
+  const safeUrl = safeSourceUrl(card.sourceUrl);
+  if (!safeUrl) {
+    const label = document.createElement("span");
+    label.className = "timed-source-label";
+    label.textContent = card.sourceName;
+    return label;
+  }
+
+  const link = document.createElement("a");
+  link.className = "timed-source-link";
+  link.href = safeUrl;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.textContent = card.sourceName;
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    void openUrl(safeUrl).catch((error) => {
+      railMsg(t("timed.openSourceFailed", { error: String(error) }), "err");
+    });
+  });
+  return link;
+}
+
+function timedBadge(className: string, text: string): HTMLSpanElement {
+  const badge = document.createElement("span");
+  badge.className = `timed-badge ${className}`;
+  badge.textContent = text;
+  return badge;
+}
+
+function conditionGroup(labelKey: MessageKey, conditions: TimedCondition[]): HTMLElement | null {
+  if (!conditions.length) return null;
+  const group = document.createElement("section");
+  group.className = "timed-condition-group";
+  const heading = document.createElement("h4");
+  heading.textContent = t(labelKey);
+  const list = document.createElement("ul");
+  for (const condition of conditions) {
+    const item = document.createElement("li");
+    const name = document.createElement("strong");
+    name.textContent = condition.name || condition.key || condition.description;
+    item.append(name);
+    if (condition.eliteOnly) {
+      item.append(timedBadge("timed-elite-badge", t("timed.eliteOnly")));
+    }
+    if (condition.description && condition.description !== name.textContent) {
+      const description = document.createElement("span");
+      description.className = "timed-condition-description";
+      description.textContent = condition.description;
+      item.append(description);
+    }
+    list.append(item);
+  }
+  group.append(heading, list);
+  return group;
+}
+
+function namedValues(labelKey: MessageKey, values: string[]): HTMLElement | null {
+  const present = values.filter((value) => value.trim() !== "");
+  if (!present.length) return null;
+  const group = document.createElement("div");
+  group.className = "timed-value-group";
+  const heading = document.createElement("strong");
+  heading.textContent = t(labelKey);
+  const list = document.createElement("ul");
+  for (const value of present) {
+    const item = document.createElement("li");
+    item.textContent = value;
+    list.append(item);
+  }
+  group.append(heading, list);
+  return group;
+}
+
+function rewardDetails(stage: TimedContentStage): HTMLDetailsElement | null {
+  const pool = stage.rewardPool ?? [];
+  const drops = stage.rewardDrops ?? [];
+  if (!pool.length && !drops.length) return null;
+  const details = document.createElement("details");
+  details.className = "timed-rewards";
+  const summary = document.createElement("summary");
+  summary.textContent = t("timed.rewards");
+  details.append(summary);
+  const poolGroup = namedValues("timed.rewardPool", pool);
+  if (poolGroup) details.append(poolGroup);
+  if (drops.length) {
+    const list = document.createElement("ul");
+    list.className = "timed-reward-drops";
+    const number = new Intl.NumberFormat(getLocale(), { maximumFractionDigits: 3 });
+    for (const drop of drops) {
+      const item = document.createElement("li");
+      item.textContent = t("timed.rewardDrop", {
+        item: drop.item,
+        rarity: drop.rarity || t("timed.unknownRarity"),
+        chance: number.format(drop.chancePercent),
+        count: drop.count,
+      });
+      list.append(item);
+    }
+    details.append(list);
+  }
+  return details;
+}
+
+function appendStageDetails(body: HTMLElement, stage: TimedContentStage): void {
+  const structured: string[] = [];
+  if (stage.enemyLevels?.length) {
+    structured.push(
+      t("timed.enemyLevels", {
+        min: stage.enemyLevels[0],
+        max: stage.enemyLevels[stage.enemyLevels.length - 1],
+      }),
+    );
+  }
+  if (stage.standingStages?.length) {
+    structured.push(
+      t("timed.standingTotal", {
+        value: stage.standingStages.reduce((total, value) => total + value, 0),
+      }),
+    );
+  }
+  if (stage.minMr !== undefined) structured.push(t("timed.minMr", { value: stage.minMr }));
+  if (stage.timeBound) structured.push(t("timed.timeBound", { value: stage.timeBound }));
+  if (structured.length) {
+    const details = document.createElement("div");
+    details.className = "timed-stage-detail timed-stage-structured";
+    details.textContent = structured.join(" · ");
+    body.append(details);
+  }
+  if (stage.ally) {
+    const ally = document.createElement("div");
+    ally.className = "timed-stage-detail";
+    const allyLabel = timedIdentifierLabel(stage.ally);
+    ally.textContent = `${t("timed.ally")}: ${allyLabel}`;
+    if (allyLabel !== stage.ally) ally.title = stage.ally;
+    body.append(ally);
+  }
+  const legacyModifiers = namedValues("timed.modifiers", stage.modifiers ?? []);
+  if (legacyModifiers) body.append(legacyModifiers);
+  for (const [kind, key] of [
+    ["deviation", "timed.deviation"],
+    ["risk", "timed.risks"],
+  ] as const) {
+    const group = conditionGroup(
+      key,
+      (stage.conditions ?? []).filter((condition) => condition.kind === kind),
+    );
+    if (group) body.append(group);
+  }
+  for (const [key, values] of [
+    ["timed.choices", stage.choices ?? []],
+    ["timed.specs", stage.specs ?? []],
+    ["timed.auras", stage.auras ?? []],
+  ] as const) {
+    const group = namedValues(key, [...values]);
+    if (group) body.append(group);
+  }
+  const rewards = rewardDetails(stage);
+  if (rewards) body.append(rewards);
+}
+
+function timedCardElement(card: TimedContentCard, headingTag: "h2" | "h3" = "h2"): HTMLElement {
   const article = document.createElement("article");
   article.className = "timed-card";
   article.dataset.cardId = card.id;
   article.dataset.kind = card.kind;
-  article.dataset.availability = card.availability;
+  article.dataset.temporalStatus = card.temporalStatus;
+  article.dataset.provenance = card.provenance.kind;
+  article.dataset.sourceId = card.sourceId;
   if (card.variant) article.dataset.variant = card.variant;
 
   const header = document.createElement("div");
   header.className = "timed-card-header";
-  const title = document.createElement("h2");
-  const localizedTitleKey = TIMED_TITLE_KEYS[card.kind];
-  title.textContent = localizedTitleKey ? t(localizedTitleKey) : card.title;
-  header.append(title);
-  // `variant` is an internal normalization marker,
-  // not a player-facing label. Keep it as data for tests/diagnostics only.
+  const title = document.createElement(headingTag);
+  title.textContent = timedTitle(card);
+  const badges = document.createElement("div");
+  badges.className = "timed-badges";
+  badges.append(
+    timedBadge("timed-status-badge", t(TEMPORAL_STATUS_KEYS[card.temporalStatus])),
+    timedBadge("timed-provenance-badge", t(PROVENANCE_KEYS[card.provenance.kind])),
+    sourceElement(card),
+  );
+  badges.title = card.provenance.contributors.join(", ");
+  header.append(title, badges);
   article.append(header);
 
-  // API由来固有名詞はraw表示するが、推定/利用不可/件数説明はapp catalogを優先する。
+  // API由来固有名詞はraw表示し、状態・出典・構造ラベルはapp catalogを使う。
   const description = timedCardDescription(card);
   if (description) {
     const subtitle = document.createElement("p");
@@ -622,8 +889,18 @@ function timedCardElement(card: TimedContentCard): HTMLElement {
   meta.className = "timed-meta";
   if (card.activation) appendTimedMeta(meta, "timed.activation", localizedDate(card.activation));
   if (card.expiry) appendTimedMeta(meta, "timed.expiry", localizedDate(card.expiry));
-  appendTimedMeta(meta, "timed.availability", t(AVAILABILITY_KEYS[card.availability]));
+  for (const item of card.metadata ?? []) {
+    const key = TIMED_METADATA_KEYS[item.key];
+    const fallback = item.key
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/[-_]+/g, " ")
+      .trim();
+    appendTimedMetaLabel(meta, key ? t(key) : fallback, item.value);
+  }
   article.append(meta);
+
+  const personal = conditionGroup("timed.personalModifiers", card.personalModifiers ?? []);
+  if (personal) article.append(personal);
 
   if (card.stages.length) {
     const stages = document.createElement("ol");
@@ -638,7 +915,9 @@ function timedCardElement(card: TimedContentCard): HTMLElement {
       const body = document.createElement("div");
       const stageTitle = document.createElement("div");
       stageTitle.className = "timed-stage-title";
-      stageTitle.textContent = [stage.title, stage.node].filter(Boolean).join(" — ");
+      stageTitle.textContent = [timedStageTitle(card, stage), stage.node]
+        .filter(Boolean)
+        .join(" — ");
       body.append(stageTitle);
       if (stage.detail) {
         const detail = document.createElement("div");
@@ -646,36 +925,7 @@ function timedCardElement(card: TimedContentCard): HTMLElement {
         detail.textContent = stage.detail;
         body.append(detail);
       }
-      const structured: string[] = [];
-      if (stage.enemyLevels?.length) {
-        structured.push(
-          t("timed.enemyLevels", {
-            min: stage.enemyLevels[0],
-            max: stage.enemyLevels[stage.enemyLevels.length - 1],
-          }),
-        );
-      }
-      if (stage.standingStages?.length) {
-        structured.push(
-          t("timed.standingTotal", {
-            value: stage.standingStages.reduce((total, value) => total + value, 0),
-          }),
-        );
-      }
-      if (stage.minMr !== undefined) structured.push(t("timed.minMr", { value: stage.minMr }));
-      if (stage.timeBound) structured.push(t("timed.timeBound", { value: stage.timeBound }));
-      if (structured.length) {
-        const details = document.createElement("div");
-        details.className = "timed-stage-detail timed-stage-structured";
-        details.textContent = structured.join(" · ");
-        body.append(details);
-      }
-      if (stage.modifiers.length) {
-        const modifiers = document.createElement("div");
-        modifiers.className = "timed-stage-modifiers";
-        modifiers.textContent = `${t("timed.modifiers")}: ${stage.modifiers.join(" · ")}`;
-        body.append(modifiers);
-      }
+      appendStageDetails(body, stage);
       item.append(order, body);
       stages.append(item);
     }
@@ -684,44 +934,125 @@ function timedCardElement(card: TimedContentCard): HTMLElement {
   return article;
 }
 
+function upcomingDescendiaElement(card: TimedContentCard): HTMLDetailsElement {
+  const details = document.createElement("details");
+  details.className = "timed-upcoming";
+  details.dataset.cardId = card.id;
+  const summary = document.createElement("summary");
+  const title = document.createElement("span");
+  title.textContent = timedTitle(card);
+  const dates = document.createElement("span");
+  dates.textContent = card.activation
+    ? `${t("timed.upcoming")} · ${localizedDate(card.activation)}`
+    : t("timed.upcoming");
+  summary.append(title, dates);
+  details.append(summary, timedCardElement(card, "h3"));
+  return details;
+}
+
+function sourceStatusElement(
+  sourceKey: TimedSourceKey,
+  source: TimedSourceStatus,
+  polled: boolean,
+): HTMLElement | null {
+  if (source.freshness === "fresh") return null;
+  if (!polled && !source.lastAttempt && !source.error) return null;
+  const messageKey: MessageKey =
+    source.freshness === "stale"
+      ? "timed.sourceStale"
+      : source.freshness === "out-of-range"
+        ? "timed.sourceOutOfRange"
+        : "timed.sourceUnavailable";
+  const message = document.createElement("p");
+  message.className = `timed-source-error timed-source-${source.freshness}`;
+  message.dataset.source = sourceKey;
+  message.dataset.freshness = source.freshness;
+  message.setAttribute("role", "status");
+  message.textContent = t(messageKey, {
+    source: t(SOURCE_NAME_KEYS[sourceKey]),
+    error: source.error ?? t("timed.noErrorDetail"),
+  });
+  return message;
+}
+
+function sourceValidityElement(sourceKey: TimedSourceKey, source: TimedSourceStatus): HTMLElement | null {
+  if (sourceKey !== "browseWfArbitration" || !source.validUntil) return null;
+  const message = document.createElement("p");
+  message.className = "timed-source-validity";
+  message.dataset.source = sourceKey;
+  message.textContent = t("timed.sourceValidUntil", { value: localizedDate(source.validUntil) });
+  return message;
+}
+
+function cardsForTab(tab: TimedTabId, timed: TimedContentSnapshot | undefined): TimedContentCard[] {
+  if (!timed) return [];
+  return TIMED_TAB_FIELDS[tab].flatMap((field) => timed[field] ?? []);
+}
+
+function areaGroup(
+  group: "worldstate" | "bounties",
+  labelKey: MessageKey,
+  cards: TimedContentCard[],
+): HTMLElement | null {
+  if (!cards.length) return null;
+  const section = document.createElement("section");
+  section.className = "timed-card-group";
+  section.dataset.group = group;
+  const heading = document.createElement("h2");
+  heading.className = "timed-group-heading";
+  heading.textContent = t(labelKey);
+  const grid = document.createElement("div");
+  grid.className = "timed-card-group-grid";
+  grid.append(...cards.map((card) => timedCardElement(card, "h3")));
+  section.append(heading, grid);
+  return section;
+}
+
 function renderTimedPanel(tab: TimedTabId): void {
   const root = $(`timed-${tab}`);
   const timed = status?.timedContent;
-  const field = TIMED_TAB_FIELDS[tab];
-  const value = timed?.[field];
-  const cards = Array.isArray(value) ? (value as TimedContentCard[]) : [];
-  const sourceOk =
-    tab === "descendia" ? (timed?.descentsOk ?? true) : (timed?.wfcdOk ?? true);
-  const sourceError = tab === "descendia" ? timed?.descentsError : timed?.wfcdError;
-  const sourceFailed = !sourceOk && (timed?.lastPoll != null || sourceError != null);
+  const cards = cardsForTab(tab, timed);
   const children: HTMLElement[] = [];
 
-  if (sourceFailed) {
-    const error = document.createElement("p");
-    error.className = "timed-source-error";
-    error.textContent = t("timed.sourceError", {
-      source: tab === "descendia" ? "Descendia" : "WFCD",
-      error: sourceError ?? "--",
-    });
-    children.push(error);
+  for (const sourceKey of TIMED_TAB_SOURCES[tab]) {
+    const source = timed?.sources?.[sourceKey];
+    if (!source) continue;
+    const problem = sourceStatusElement(sourceKey, source, timed?.lastPoll != null);
+    if (problem) children.push(problem);
+    const validity = sourceValidityElement(sourceKey, source);
+    if (validity) children.push(validity);
   }
 
-  // A source failure can coexist with last-valid cards. Keep those cards visible
-  // and place the failure banner above them instead of replacing the content.
   if (!cards.length) {
     const empty = document.createElement("p");
     empty.className = "timed-empty";
     empty.textContent = t("timed.noContent");
     children.push(empty);
+  } else if (tab === "area-missions") {
+    const worldstate = areaGroup(
+      "worldstate",
+      "timed.areaWorldstate",
+      timed?.areaMissions ?? [],
+    );
+    const bounties = areaGroup("bounties", "timed.areaBounties", timed?.bounties ?? []);
+    if (worldstate) children.push(worldstate);
+    if (bounties) children.push(bounties);
   } else {
-    children.push(...cards.map(timedCardElement));
+    children.push(
+      ...cards.map((card) =>
+        tab === "descendia" && card.temporalStatus === "upcoming"
+          ? upcomingDescendiaElement(card)
+          : timedCardElement(card),
+      ),
+    );
   }
 
-  if (PERSONAL_PROGRESS_TABS.has(tab)) {
+  const progressKey = PERSONAL_PROGRESS_KEYS[tab];
+  if (progressKey) {
     const note = document.createElement("p");
     note.className = "timed-progress-note";
-    note.dataset.i18nKey = "timed.personalProgressUnavailable";
-    note.textContent = t("timed.personalProgressUnavailable");
+    note.dataset.i18nKey = progressKey;
+    note.textContent = t(progressKey);
     children.push(note);
   }
   root.replaceChildren(...children);
@@ -1126,7 +1457,7 @@ async function init() {
       target.isContentEditable;
     const composing = paletteComposing || e.isComposing || e.key === "Process" || e.keyCode === 229;
 
-    // Cmd+1..7 and Ctrl(+Shift)+Tab are browser-style content navigation.
+    // Cmd+1..9 and Ctrl(+Shift)+Tab are browser-style content navigation.
     // Editable fields and IME composition retain their native key handling.
     if (handleContentTabShortcut(e, paletteRenaming || composing)) {
       if (paletteOpen) closePalette();
