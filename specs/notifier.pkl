@@ -361,7 +361,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-010"
-    desc = "コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。仲裁cardはcommunity schedule・browse.wf出典、将来Descendiaはupcoming、Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)"
+    desc = "コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁cardはcommunity schedule・browse.wf出典で絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示し、将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)"
     scenario = "content_tabs"
   }
   new patterns.RendererScenario {
@@ -371,7 +371,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-012"
-    desc = "locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、document.title、本文・aria-label・placeholderに加えて仲裁のcommunity schedule表示、Areaの5 group見出しと環境state、Circuitの通常/鋼候補見出し・個人進捗非公開注記の言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合)"
+    desc = "locale=ja/en/zh-Hansの各表示はcritical semantic DOM goldenと一致し、html lang、document.title、本文・aria-label・placeholderに加えて仲裁のcommunity schedule表示、Areaの5 group見出しと環境state、Circuitの通常/鋼候補見出しの言語が揃い、missing-key markerを残さない。720x480と950x620でページ全体・railに意図しないoverflowを生まず、各タブ自身のラベルは見切れない(renderer統合)"
     scenario = "locale_display"
   }
   new patterns.E2eScenario {

@@ -528,15 +528,25 @@ function tickTimers() {
     return;
   }
   document.querySelectorAll<HTMLElement>(".t-timer").forEach((el) => {
-    const expiry = Date.parse(el.dataset.expiry ?? "");
-    const rest = Math.floor((expiry - now) / 1000);
-    const h = Math.floor(rest / 3600);
+    // 亀裂表と時限cardで共用する。data-activationは「開始まで」、data-expiryは残り時間
+    const startsIn = el.dataset.activation;
+    const target = Date.parse(startsIn ?? el.dataset.expiry ?? "");
+    const rest = Math.max(0, Math.floor((target - now) / 1000));
+    const d = Math.floor(rest / 86400);
+    const h = Math.floor((rest % 86400) / 3600);
     const m = Math.floor((rest % 3600) / 60);
     const s = rest % 60;
     const mm = String(m).padStart(2, "0");
     const ss = String(s).padStart(2, "0");
-    el.textContent = h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
-    el.classList.toggle("urgent", rest < 600);
+    const text =
+      d > 0
+        ? `${d}d ${String(h).padStart(2, "0")}:${mm}:${ss}`
+        : h > 0
+          ? `${h}:${mm}:${ss}`
+          : `${mm}:${ss}`;
+    const value = el.querySelector<HTMLElement>(".t-val");
+    (value ?? el).textContent = text;
+    el.classList.toggle("urgent", !startsIn && rest < 600);
   });
 }
 
@@ -571,17 +581,6 @@ const TIMED_TAB_SOURCES: Record<TimedTabId, readonly TimedSourceKey[]> = {
   circuit: ["deCircuit"],
   archimedea: ["wfcd"],
   descendia: ["deDescendia"],
-};
-
-const PERSONAL_PROGRESS_KEYS: Partial<Record<TimedTabId, MessageKey>> = {
-  circuit: "timed.circuitProgressUnavailable",
-  archimedea: "timed.personalProgressUnavailable",
-  descendia: "timed.personalProgressUnavailable",
-};
-
-const TEMPORAL_STATUS_KEYS: Record<TimedContentCard["temporalStatus"], MessageKey> = {
-  active: "timed.active",
-  upcoming: "timed.upcoming",
 };
 
 const PROVENANCE_KEYS: Record<TimedContentCard["provenance"]["kind"], MessageKey> = {
@@ -648,10 +647,6 @@ function localizedDate(value: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(timestamp));
-}
-
-function appendTimedMeta(container: HTMLElement, key: MessageKey, value: string): void {
-  appendTimedMetaLabel(container, t(key), value);
 }
 
 function appendTimedMetaLabel(container: HTMLElement, label: string, value: string): void {
@@ -883,7 +878,61 @@ function appendStageDetails(body: HTMLElement, stage: TimedContentStage): void {
   if (rewards) body.append(rewards);
 }
 
-function timedCardElement(card: TimedContentCard, headingTag: "h2" | "h3" = "h2"): HTMLElement {
+/** headerのfaction flag(グリフ+テキスト)としてsubtitleを表示するkind。TMD-005のboss・faction subtitle */
+const FACTION_SUBTITLE_KINDS = new Set(["arbitration", "sortie", "archon"]);
+
+/** 表示グリフ選択用にnode末尾の"(Planet)"を取り出す。惑星の判定意味論はRust側extract_planetが正本 */
+function nodePlanet(node: string): string {
+  return /\(([^)]+)\)\s*$/.exec(node)?.[1] ?? node;
+}
+
+function isSteelPathStage(card: TimedContentCard, stage: TimedContentStage): boolean {
+  return card.kind === "circuit" && (stage.title === "Steel Path Circuit" || stage.order === 2);
+}
+
+function stageGlyphHtml(card: TimedContentCard, stage: TimedContentStage): string {
+  if (card.kind === "circuit") {
+    return glyphHtml("difficulty", isSteelPathStage(card, stage) ? "SteelPath" : "Normal");
+  }
+  return glyphHtml("mission", stage.title);
+}
+
+/**
+ * 亀裂表と同じ時間文法のカウントダウン(tickTimersが毎秒更新)。
+ * activeはexpiry、upcomingはactivation起点の「開始まで」。絶対日時はtooltipへ退避する。
+ */
+function timedTimerElement(card: TimedContentCard): HTMLElement | null {
+  const target = card.temporalStatus === "upcoming" ? card.activation : card.expiry;
+  if (!target) return null;
+  const timer = document.createElement("span");
+  timer.className = "t-timer";
+  timer.title = [
+    card.activation ? `${t("timed.activation")} ${localizedDate(card.activation)}` : null,
+    card.expiry ? `${t("timed.expiry")} ${localizedDate(card.expiry)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  if (card.temporalStatus === "upcoming") {
+    timer.dataset.activation = target;
+    const mini = document.createElement("span");
+    mini.className = "t-mini";
+    mini.textContent = t("timed.activation");
+    const value = document.createElement("span");
+    value.className = "t-val";
+    value.textContent = "--:--";
+    timer.append(mini, value);
+  } else {
+    timer.dataset.expiry = target;
+    timer.textContent = "--:--";
+  }
+  return timer;
+}
+
+function timedCardElement(
+  card: TimedContentCard,
+  headingTag: "h2" | "h3" = "h2",
+  withTimer = true,
+): HTMLElement {
   const article = document.createElement("article");
   article.className = "timed-card";
   article.dataset.cardId = card.id;
@@ -897,31 +946,27 @@ function timedCardElement(card: TimedContentCard, headingTag: "h2" | "h3" = "h2"
   header.className = "timed-card-header";
   const title = document.createElement(headingTag);
   title.textContent = timedTitle(card);
-  const badges = document.createElement("div");
-  badges.className = "timed-badges";
-  badges.append(
-    timedBadge("timed-status-badge", t(TEMPORAL_STATUS_KEYS[card.temporalStatus])),
-    timedBadge("timed-provenance-badge", t(PROVENANCE_KEYS[card.provenance.kind])),
-    sourceElement(card),
-  );
-  badges.title = card.provenance.contributors.join(", ");
-  header.append(title, badges);
-  article.append(header);
+  header.append(title);
 
   // API由来固有名詞はraw表示し、状態・出典・構造ラベルはapp catalogを使う。
   const description = timedCardDescription(card);
   if (description) {
-    const subtitle = document.createElement("p");
+    const subtitle = document.createElement("span");
     subtitle.className = "timed-subtitle";
-    subtitle.textContent = description;
-    article.append(subtitle);
+    if (FACTION_SUBTITLE_KINDS.has(card.kind)) {
+      subtitle.classList.add("icon-label");
+      subtitle.innerHTML = `${glyphHtml("faction", description)}<span>${esc(description)}</span>`;
+    } else {
+      subtitle.textContent = description;
+    }
+    header.append(subtitle);
   }
 
   const meta = document.createElement("div");
   meta.className = "timed-meta";
-  if (card.activation) appendTimedMeta(meta, "timed.activation", localizedDate(card.activation));
-  if (card.expiry) appendTimedMeta(meta, "timed.expiry", localizedDate(card.expiry));
   for (const item of card.metadata ?? []) {
+    // headerのsubtitle flagと同じ値(仲裁のfaction等)は重複表示しない
+    if (card.subtitle && item.value === card.subtitle) continue;
     const key = TIMED_METADATA_KEYS[item.key];
     const fallback = item.key
       .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -929,7 +974,14 @@ function timedCardElement(card: TimedContentCard, headingTag: "h2" | "h3" = "h2"
       .trim();
     appendTimedMetaLabel(meta, key ? t(key) : fallback, timedMetadataValue(item));
   }
-  article.append(meta);
+  // 環境サイクルは1行に畳む: 状態と残り時間をheader行内へ置く
+  const compactEnvironment = card.kind === "area-environment";
+  if (compactEnvironment && meta.childElementCount) header.append(meta);
+
+  const timer = withTimer ? timedTimerElement(card) : null;
+  if (timer) header.append(timer);
+  article.append(header);
+  if (!compactEnvironment && meta.childElementCount) article.append(meta);
 
   const personal = conditionGroup("timed.personalModifiers", card.personalModifiers ?? []);
   if (personal) article.append(personal);
@@ -945,12 +997,24 @@ function timedCardElement(card: TimedContentCard, headingTag: "h2" | "h3" = "h2"
       order.className = "timed-stage-order";
       order.textContent = String(stage.order).padStart(2, "0");
       const body = document.createElement("div");
-      const stageTitle = document.createElement("div");
-      stageTitle.className = "timed-stage-title";
-      stageTitle.textContent = [timedStageTitle(card, stage), stage.node]
-        .filter(Boolean)
-        .join(" — ");
-      body.append(stageTitle);
+      const line = document.createElement("div");
+      line.className = "timed-stage-line";
+      const stageName = document.createElement("span");
+      stageName.className = "icon-label timed-stage-name";
+      if (card.kind === "circuit") {
+        stageName.classList.add(isSteelPathStage(card, stage) ? "t-hard" : "t-normal");
+      }
+      stageName.innerHTML = `${stageGlyphHtml(card, stage)}<span class="timed-stage-title">${esc(
+        timedStageTitle(card, stage),
+      )}</span>`;
+      line.append(stageName);
+      if (stage.node) {
+        const node = document.createElement("span");
+        node.className = "icon-label timed-stage-node";
+        node.innerHTML = `${glyphHtml("planet", nodePlanet(stage.node))}<span>${esc(stage.node)}</span>`;
+        line.append(node);
+      }
+      body.append(line);
       if (stage.detail) {
         const detail = document.createElement("div");
         detail.className = "timed-stage-detail";
@@ -963,6 +1027,16 @@ function timedCardElement(card: TimedContentCard, headingTag: "h2" | "h3" = "h2"
     }
     article.append(stages);
   }
+
+  // 出典はフッター行へ降格する(provenance区分は保持)。
+  const src = document.createElement("div");
+  src.className = "timed-src";
+  src.append(
+    timedBadge("timed-provenance-badge", t(PROVENANCE_KEYS[card.provenance.kind])),
+    sourceElement(card),
+  );
+  src.title = card.provenance.contributors.join(", ");
+  article.append(src);
   return article;
 }
 
@@ -973,12 +1047,17 @@ function upcomingDescendiaElement(card: TimedContentCard): HTMLDetailsElement {
   const summary = document.createElement("summary");
   const title = document.createElement("span");
   title.textContent = timedTitle(card);
-  const dates = document.createElement("span");
-  dates.textContent = card.activation
-    ? `${t("timed.upcoming")} · ${localizedDate(card.activation)}`
-    : t("timed.upcoming");
-  summary.append(title, dates);
-  details.append(summary, timedCardElement(card, "h3"));
+  summary.append(title);
+  // 開始までのカウントダウン(G2)。展開したカード内では重複させない
+  const timer = timedTimerElement(card);
+  if (timer) {
+    summary.append(timer);
+  } else {
+    const dates = document.createElement("span");
+    dates.textContent = t("timed.upcoming");
+    summary.append(dates);
+  }
+  details.append(summary, timedCardElement(card, "h3", false));
   return details;
 }
 
@@ -1093,19 +1172,12 @@ function renderTimedPanel(tab: TimedTabId): void {
     );
   }
 
-  const progressKey = PERSONAL_PROGRESS_KEYS[tab];
-  if (progressKey) {
-    const note = document.createElement("p");
-    note.className = "timed-progress-note";
-    note.dataset.i18nKey = progressKey;
-    note.textContent = t(progressKey);
-    children.push(note);
-  }
   root.replaceChildren(...children);
 }
 
 function renderTimedContent() {
   for (const tab of Object.keys(TIMED_TAB_FIELDS) as TimedTabId[]) renderTimedPanel(tab);
+  tickTimers();
 }
 
 // ---- ステータスバー ----

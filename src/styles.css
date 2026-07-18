@@ -142,12 +142,12 @@ body {
   border-style: dashed;
 }
 
+/* 亀裂表の文法: ヘッダは「タイトル+flag+右端カウントダウン」の1行 */
 .timed-card-header {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 6px 10px;
 }
 
 .timed-card h2,
@@ -160,13 +160,18 @@ body {
   overflow-wrap: anywhere;
 }
 
-.timed-badges {
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 4px;
+.timed-card-header .t-timer {
+  margin-left: auto;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.t-timer .t-mini {
+  color: var(--dim);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  margin-right: 5px;
 }
 
 .timed-badge,
@@ -183,13 +188,28 @@ body {
   text-transform: uppercase;
 }
 
-.timed-status-badge {
-  color: var(--amber);
-}
-
 .timed-card[data-provenance="community-schedule"] .timed-provenance-badge {
   border-style: dashed;
   color: var(--cyan);
+}
+
+/* 出典フッター(provenance区分と出典リンクの降格先) */
+.timed-src {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--rowline);
+}
+
+.timed-src .timed-badge,
+.timed-src .timed-source-label,
+.timed-src .timed-source-link {
+  min-height: 0;
+  padding: 0;
+  border: 0;
 }
 
 .timed-source-link {
@@ -206,8 +226,10 @@ body {
 }
 
 .timed-subtitle {
-  margin: 5px 0;
-  color: var(--ink);
+  min-width: 0;
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.04em;
   overflow-wrap: anywhere;
 }
 
@@ -215,8 +237,13 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 5px 12px;
+  margin-top: 6px;
   color: var(--dim);
   font-size: 9.5px;
+}
+
+.timed-card-header .timed-meta {
+  margin-top: 0;
 }
 
 .timed-meta strong {
@@ -243,6 +270,23 @@ body {
 .timed-stage-order {
   color: var(--amber);
   font-variant-numeric: tabular-nums;
+}
+
+/* ステージ本文1行目: グリフ+ラベルの並び(G1)。ノードはdimの補助値 */
+.timed-stage-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  min-width: 0;
+}
+
+.timed-stage-node {
+  color: var(--dim);
+}
+
+.timed-stage-line .t-hard {
+  font-weight: 700;
 }
 
 .timed-stage-title,
@@ -334,6 +378,46 @@ body {
   gap: 8px;
 }
 
+/* 環境サイクルは「場所 / 状態 / 残り時間」の1行リストに畳む */
+.timed-card-group[data-group="environments"] .timed-card-group-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.timed-card[data-kind="area-environment"] {
+  padding: 5px 10px;
+  border-width: 0 0 1px;
+  border-color: var(--rowline);
+  background: none;
+}
+
+.timed-card[data-kind="area-environment"] .timed-card-header {
+  flex-wrap: nowrap;
+}
+
+.timed-card[data-kind="area-environment"] h3 {
+  font-size: 12px;
+  color: var(--ink);
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timed-card[data-kind="area-environment"] .timed-meta strong {
+  color: var(--dim);
+}
+
+.timed-card[data-kind="area-environment"] .timed-meta {
+  color: var(--amber);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.timed-card[data-kind="area-environment"] .timed-src {
+  display: none;
+}
+
 .timed-upcoming {
   min-width: 0;
   grid-column: 1 / -1;
@@ -344,15 +428,17 @@ body {
 .timed-upcoming > summary {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 12px;
   padding: 9px 10px;
   color: var(--amber);
   cursor: pointer;
 }
 
-.timed-upcoming > summary span:last-child {
+.timed-upcoming > summary .t-timer {
   color: var(--dim);
-  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   text-align: right;
 }
 
@@ -361,7 +447,6 @@ body {
 }
 
 .timed-empty,
-.timed-progress-note,
 .timed-source-error,
 .timed-source-validity {
   grid-column: 1 / -1;

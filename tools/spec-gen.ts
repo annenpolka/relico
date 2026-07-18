@@ -3858,7 +3858,11 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
   await expect(arbitration).toHaveAttribute("data-temporal-status", "active");
   await expect(arbitration).toHaveAttribute("data-provenance", "community-schedule");
   expect(await page.locator("#timed-arbitration").getAttribute("aria-live")).toBeNull();
-  expect(await arbitration.locator(".timed-meta").textContent()).toContain("Starts ");
+  // 亀裂表と同じ時間文法: 絶対日時のStarts表記ではなくdata-expiry駆動のカウントダウン。
+  const arbitrationTimer = arbitration.locator(".t-timer[data-expiry]");
+  await expect(arbitrationTimer).toHaveCount(1);
+  await expect(arbitrationTimer).toHaveText(/^\\d+:\\d{2}(:\\d{2})?$/);
+  expect(await arbitration.textContent()).not.toContain("Starts ");
   await expect(arbitration.locator(".timed-source-link")).toHaveAttribute(
     "href",
     /browse\\.wf/,
@@ -3912,7 +3916,14 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
   await expect(
     page.locator('#panel-descendia details.timed-upcoming[data-card-id="descendia-next"]'),
   ).toBeVisible();
-  await expect(page.locator("#panel-descendia .timed-progress-note")).toBeVisible();
+  // upcomingは開始までのカウントダウン(data-activation駆動)を表示する。
+  await expect(
+    page.locator(
+      '#panel-descendia details.timed-upcoming[data-card-id="descendia-next"] .t-timer[data-activation]',
+    ),
+  ).toHaveCount(1);
+  // 個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。
+  await expect(page.locator(".timed-progress-note")).toHaveCount(0);
 });`;
     case "mute_window":
       return `
@@ -3989,7 +4000,6 @@ const localeGoldens = {
     areaGroups: ["環境サイクル", "通常依頼", "ローカル依頼候補", "追加依頼", "エリアイベント"],
     environmentState: "状態 昼",
     circuitStages: ["通常サーキット", "鋼の道のりサーキット"],
-    circuitProgress: "公開ワールドステートから今週の候補は取得できますが、個人のサーキット進行度は取得できません。ゲーム内で確認してください。",
   },
   en: {
     text: [
@@ -4016,7 +4026,6 @@ const localeGoldens = {
     areaGroups: ["Environments", "Open-world bounties", "Objective rotations", "Additional bounties", "Area events"],
     environmentState: "State Day",
     circuitStages: ["Normal Circuit", "Steel Path Circuit"],
-    circuitProgress: "The public world-state provides this week's choices, but not your personal Circuit progress. Check it in game.",
   },
   "zh-Hans": {
     text: [
@@ -4043,7 +4052,6 @@ const localeGoldens = {
     areaGroups: ["环境周期", "开放世界赏金", "目标轮换", "额外赏金", "地区活动"],
     environmentState: "状态 白昼",
     circuitStages: ["普通无尽回廊", "钢铁之路无尽回廊"],
-    circuitProgress: "公共世界状态可提供本周候选，但无法提供你的个人无尽回廊进度，请在游戏内确认。",
   },
 } as const;
 
@@ -4088,13 +4096,6 @@ for (const [locale, golden] of Object.entries(localeGoldens)) {
     await expect(circuitStages).toHaveCount(2);
     await expect(circuitStages.nth(0)).toHaveText(golden.circuitStages[0]);
     await expect(circuitStages.nth(1)).toHaveText(golden.circuitStages[1]);
-    await expect(page.locator("#panel-circuit .timed-progress-note")).toHaveAttribute(
-      "data-i18n-key",
-      "timed.circuitProgressUnavailable",
-    );
-    await expect(page.locator("#panel-circuit .timed-progress-note")).toHaveText(
-      golden.circuitProgress,
-    );
     await expect(page.locator("[data-i18n-missing]")).toHaveCount(0);
     expect(await page.locator("body").innerText()).not.toMatch(/\\[\\[[^\\]]+\\]\\]/);
 
