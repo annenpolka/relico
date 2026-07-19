@@ -71,7 +71,7 @@
       </section>
 
       <aside class="rail" aria-label="ルールと通知の設定" data-i18n-aria-label-key="sidebar.label">
-        <section class="rail-rules">
+        <section id="fissure-rules" class="rail-rules">
           <div class="rail-heading" title="Space: 表示切替 / ↑↓: 編集対象 / Ctrl+1-9: ルールへ移動 / 任意文字: パレット" data-i18n-title-key="rules.shortcutTitle">
             <h3 data-i18n-key="rules.heading">ルール</h3>
             <span id="rules-meta">--</span>
@@ -82,6 +82,20 @@
           <div class="rowbtns">
             <button id="rule-del" class="action">削除</button>
             <button id="clear-btn" class="action">クリア</button>
+          </div>
+        </section>
+
+        <!-- 亀裂以外のコンテンツタブでは、同じ位置でそのタブの通知ルールを管理する(RND-014) -->
+        <section id="tab-alerts" class="rail-rules tab-alerts" hidden>
+          <div class="rail-heading">
+            <h3 id="tab-alerts-heading">通知</h3>
+            <span id="tab-alerts-meta">--</span>
+          </div>
+          <div id="content-alert-rows"></div>
+          <div class="content-alert-form">
+            <input id="content-keyword-input" type="text" data-i18n-placeholder-key="delivery.contentKeywordPlaceholder" spellcheck="false" />
+            <input id="content-level-input" type="number" min="0" data-i18n-placeholder-key="delivery.contentLevelPlaceholder" />
+            <button id="content-add-btn" class="action" type="button" data-i18n-key="delivery.contentAdd">追加</button>
           </div>
         </section>
 
@@ -128,25 +142,6 @@
               <option value="zh-Hans">简体中文</option>
             </select>
           </label>
-          <div class="content-alerts">
-            <h4 class="content-alerts-heading" data-i18n-key="delivery.contentAlerts">コンテンツ通知</h4>
-            <div class="content-alert-form">
-              <select id="content-kind-select">
-                <option value="" data-i18n-key="delivery.contentKindAll">すべて</option>
-                <option value="arbitration" data-i18n-key="tabs.arbitration">仲裁</option>
-                <option value="sortie" data-i18n-key="tabs.sortie">ソーティー</option>
-                <option value="archon" data-i18n-key="tabs.archon">アルコン討伐戦</option>
-                <option value="area" data-i18n-key="delivery.contentKindArea">エリア</option>
-                <option value="circuit" data-i18n-key="tabs.circuit">サーキット</option>
-                <option value="archimedea" data-i18n-key="tabs.archimedea">アルキメデア</option>
-                <option value="descendia" data-i18n-key="tabs.descendia">ディセンディア</option>
-              </select>
-              <input id="content-keyword-input" type="text" data-i18n-placeholder-key="delivery.contentKeywordPlaceholder" spellcheck="false" />
-              <input id="content-level-input" type="number" min="0" data-i18n-placeholder-key="delivery.contentLevelPlaceholder" />
-              <button id="content-add-btn" class="action" type="button" data-i18n-key="delivery.contentAdd">追加</button>
-            </div>
-            <div id="content-alert-rows"></div>
-          </div>
           <div class="mute-settings">
             <button class="check" id="mute-check" type="button" aria-pressed="false">
               <span class="box">[ ]</span><span class="check-label" data-i18n-key="delivery.muteSchedule">通知ミュート</span>

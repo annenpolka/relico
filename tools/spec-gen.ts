@@ -4573,10 +4573,11 @@ test("${c.id} node levels in fissure table", async ({ page }) => {
     case "content_alerts":
       return `
 // ${c.id}: ${c.desc}
-test("${c.id} content alerts", async ({ page }) => {
+test("${c.id} per-tab rule management", async ({ page }) => {
   await bootConsole(page, { locale: "en" });
-  await page.locator("#delivery-tab").click();
-  await expect(page.locator("#content-alert-rows .content-alert-empty")).toHaveCount(1);
+  // 亀裂タブでは亀裂WatchRuleの一覧が見え、タブ通知UIは非表示
+  await expect(page.locator("#fissure-rules")).toBeVisible();
+  await expect(page.locator("#tab-alerts")).toBeHidden();
   const rulesBefore = await page.locator("#rules-list .rule-row").count();
   const editingBefore = await page.locator("#editing-meta").textContent();
   const contentRules = async () =>
@@ -4586,8 +4587,12 @@ test("${c.id} content alerts", async ({ page }) => {
           .__MOCK_STATE__.config.contentRules,
     );
 
-  // 追加フォーム: 仲裁 × 防衛 × LV60
-  await page.locator("#content-kind-select").selectOption("arbitration");
+  // 仲裁タブでは同じ位置がそのタブの通知ルール管理へ切り替わる
+  await page.keyboard.press("Meta+2");
+  await expect(page.locator("#fissure-rules")).toBeHidden();
+  await expect(page.locator("#tab-alerts")).toBeVisible();
+  await expect(page.locator("#tab-alerts-heading")).toContainText("Arbitration");
+  await expect(page.locator("#content-alert-rows .content-alert-empty")).toHaveCount(1);
   await page.locator("#content-keyword-input").fill("防衛");
   await page.locator("#content-level-input").fill("60");
   await page.locator("#content-add-btn").click();
@@ -4598,13 +4603,15 @@ test("${c.id} content alerts", async ({ page }) => {
       { notify: true, name: null, kinds: ["arbitration"], missionTypes: ["防衛"], minEnemyLevel: 60 },
     ]);
 
-  // エリア選択はkinds=[area-mission, area-objective, bounty]へ展開される
-  await page.locator("#content-kind-select").selectOption("area");
+  // エリアタブでは仲裁のルールは見えず、追加はarea 3 kindへ展開される
+  await page.keyboard.press("Meta+6");
+  await expect(page.locator("#tab-alerts-heading")).toContainText("Area Missions");
+  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(0);
   await page.locator("#content-keyword-input").fill("Capture");
   await page.locator("#content-add-btn").click();
-  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(2);
+  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(1);
   await expect
-    .poll(async () => ((await contentRules()) as Array<{ kinds: string[]; minEnemyLevel: number | null }>)[1])
+    .poll(async () => ((await contentRules()) as Array<{ kinds: string[] }>)[1])
     .toEqual({
       notify: true,
       name: null,
@@ -4613,7 +4620,9 @@ test("${c.id} content alerts", async ({ page }) => {
       minEnemyLevel: null,
     });
 
-  // 行の通知トグルはそのルールのnotifyだけを反転する
+  // 仲裁タブへ戻ると仲裁のルールだけが見え、トグルは元のcontentRulesの該当ルールだけを反転する
+  await page.keyboard.press("Meta+2");
+  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(1);
   await page.locator("#content-alert-rows .content-alert-toggle").first().click();
   await expect
     .poll(async () =>
@@ -4621,24 +4630,28 @@ test("${c.id} content alerts", async ({ page }) => {
     )
     .toEqual([false, true]);
 
-  // 削除ボタンはそのルールだけを除去する
+  // 削除も該当ルールだけを除去する(エリアのルールは残る)
   await page.locator("#content-alert-rows .content-alert-del").first().click();
-  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(1);
+  await expect(page.locator("#content-alert-rows .content-alert-empty")).toHaveCount(1);
   await expect
     .poll(async () =>
       ((await contentRules()) as Array<{ missionTypes: string[] }>).map((rule) => rule.missionTypes),
     )
     .toEqual([["Capture"]]);
 
-  // 亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュートへ波及しない
+  // 亀裂タブへ戻すと亀裂ルールUIへ戻り、亀裂側・ミュートへ波及しない
+  await page.keyboard.press("Meta+1");
+  await expect(page.locator("#fissure-rules")).toBeVisible();
+  await expect(page.locator("#tab-alerts")).toBeHidden();
   await expect(page.locator("#rules-list .rule-row")).toHaveCount(rulesBefore);
   await expect(page.locator("#editing-meta")).toHaveText(editingBefore ?? "");
-  await expect(page.locator("#mute-check")).toHaveAttribute("aria-pressed", "false");
   expect(
     (await calls(page)).filter((entry) =>
       ["set_rule_enabled", "set_rule_notify", "apply_candidate", "clear_filter"].includes(entry.cmd),
     ),
   ).toHaveLength(0);
+  await page.locator("#delivery-tab").click();
+  await expect(page.locator("#mute-check")).toHaveAttribute("aria-pressed", "false");
 });`;
     case "filter_auto_tab":
       return `
@@ -4655,12 +4668,22 @@ test("${c.id} filter change reveals fissures tab", async ({ page }) => {
   await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
   await expect(page.locator("#palette-overlay")).toBeVisible();
   await page.keyboard.press("Escape");
-  // 通知トグルは検索条件ではないので切り替えない
+  // 通知トグル(TOGGLE NOTIFY)は検索条件ではないので切り替えない
   await page.keyboard.press("Meta+2");
-  await page.locator(".rule-row .rule-notify").first().click();
+  await page.keyboard.press("t");
+  await page.locator("#palette-input").fill("toggle notify");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (entry) => entry.cmd === "apply_candidate" && entry.args.id === "action:notify-rule",
+      ),
+    )
+    .toBe(true);
   await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
-  // ルール行のVIEW選択トグルは切り替える
-  await page.locator(".rule-row .rule-toggle").first().click();
+  await page.keyboard.press("Escape");
+  // Space(編集中ルールのVIEW選択トグル)は切り替える
+  await page.keyboard.press(" ");
   await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
   // SORTコマンドは表示のみで検索条件ではないので切り替えない
   await page.keyboard.press("Meta+2");
@@ -4669,10 +4692,12 @@ test("${c.id} filter change reveals fissures tab", async ({ page }) => {
   await page.keyboard.press("Enter");
   await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
   await page.keyboard.press("Escape");
-  // CLEARの2度押し実行は切り替える
-  await page.locator("#clear-btn").click();
-  await page.locator("#clear-btn").click();
+  // パレットのCLEARは切り替える
+  await page.keyboard.press("c");
+  await page.locator("#palette-input").fill("clear filters");
+  await page.keyboard.press("Enter");
   await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
+  await page.keyboard.press("Escape");
 });`;
     case "mute_window":
       return `

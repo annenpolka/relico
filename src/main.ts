@@ -116,7 +116,10 @@ function isFilterMutation(id: string): boolean {
 
 /** 検索条件の変更後は結果が見える亀裂タブへ寄せる。パレットは閉じない(RND-015) */
 function revealFissuresTab() {
-  if (getActiveContentTab() !== "fissures") activateContentTab("fissures", false, false);
+  if (getActiveContentTab() !== "fissures") {
+    activateContentTab("fissures", false, false);
+    renderRuleManager();
+  }
 }
 
 async function applyCand(id: string) {
@@ -406,7 +409,7 @@ function renderRail() {
   ($("minremain-input") as HTMLInputElement).value = String(config.minRemainingSecs);
   ($("poll-input") as HTMLInputElement).value = String(config.pollIntervalSecs);
   $<HTMLSelectElement>("locale-select").value = config.locale;
-  renderContentAlerts();
+  renderRuleManager();
   renderMuteSettings();
 
   const pauseBtn = $("pause-btn");
@@ -418,50 +421,54 @@ function renderRail() {
   renderWatchLine();
 }
 
-// ---- コンテンツ通知(contentRules)のDELIVERY UI。合致・通知判定はRust側 ----
-const CONTENT_KIND_GROUPS: Record<string, string[]> = {
-  "": [],
+// ---- コンテンツ通知(contentRules)のタブ別管理UI。合致・通知判定はRust側 ----
+// 各コンテンツタブが対象とするcard kind群。エリアは3 kind、シンジケートはsyndicate
+const CONTENT_TAB_KIND_GROUPS: Record<TimedTabId, readonly string[]> = {
   arbitration: ["arbitration"],
   sortie: ["sortie"],
   archon: ["archon"],
-  // エリア選択は3 kindへ展開する(RND-014)
-  area: ["area-mission", "area-objective", "bounty"],
+  syndicates: ["syndicate"],
+  "area-missions": ["area-mission", "area-objective", "bounty"],
   circuit: ["circuit"],
   archimedea: ["archimedea"],
   descendia: ["descendia"],
 };
 
-const CONTENT_KIND_LABEL_KEYS: Record<string, MessageKey> = {
-  "": "delivery.contentKindAll",
+const TAB_LABEL_KEYS: Record<TimedTabId, MessageKey> = {
   arbitration: "tabs.arbitration",
   sortie: "tabs.sortie",
   archon: "tabs.archon",
-  area: "delivery.contentKindArea",
+  syndicates: "tabs.syndicates",
+  "area-missions": "tabs.areaMissions",
   circuit: "tabs.circuit",
   archimedea: "tabs.archimedea",
   descendia: "tabs.descendia",
 };
 
-function contentKindLabel(kinds: string[]): string {
-  const encoded = JSON.stringify(kinds);
-  for (const [value, group] of Object.entries(CONTENT_KIND_GROUPS)) {
-    if (JSON.stringify(group) === encoded) return t(CONTENT_KIND_LABEL_KEYS[value]);
-  }
-  return kinds.join("+");
+/** タブの対象になるルール(kinds未指定の「すべて」ルールを含む)を元index付きで返す */
+function tabAlertEntries(tab: TimedTabId): Array<{ rule: ContentWatchRule; index: number }> {
+  const group = CONTENT_TAB_KIND_GROUPS[tab];
+  return (config?.contentRules ?? [])
+    .map((rule, index) => ({ rule, index }))
+    .filter(({ rule }) => !rule.kinds.length || rule.kinds.some((kind) => group.includes(kind)));
 }
 
 function saveContentRules(mutate: (rules: ContentWatchRule[]) => void) {
   if (!config) return;
   mutate(config.contentRules);
   save();
-  renderContentAlerts();
+  renderRuleManager();
 }
 
-function renderContentAlerts() {
+function renderTabAlerts(tab: TimedTabId) {
   if (!config) return;
+  $("tab-alerts-heading").textContent = t("delivery.contentAlertsFor", {
+    tab: t(TAB_LABEL_KEYS[tab]),
+  });
+  const entries = tabAlertEntries(tab);
+  $("tab-alerts-meta").textContent = String(entries.length);
   const box = $("content-alert-rows");
-  const rules = config.contentRules;
-  if (!rules.length) {
+  if (!entries.length) {
     const empty = document.createElement("p");
     empty.className = "content-alert-empty";
     empty.textContent = t("delivery.contentEmpty");
@@ -469,7 +476,7 @@ function renderContentAlerts() {
     return;
   }
   box.replaceChildren(
-    ...rules.map((rule, index) => {
+    ...entries.map(({ rule, index }) => {
       const row = document.createElement("div");
       row.className = `content-alert-row${rule.notify ? "" : " off"}`;
 
@@ -488,10 +495,10 @@ function renderContentAlerts() {
 
       const summary = document.createElement("span");
       summary.className = "content-alert-summary";
-      const parts = [
-        contentKindLabel(rule.kinds),
-        rule.missionTypes.length ? rule.missionTypes.join("+") : t("delivery.contentKindAll"),
-      ];
+      const parts = [];
+      // kinds未指定は全タブ共通ルール。タブ一致のkindは自明なので表記しない
+      if (!rule.kinds.length) parts.push(t("delivery.contentKindAll"));
+      parts.push(rule.missionTypes.length ? rule.missionTypes.join("+") : t("delivery.contentKindAll"));
       if (rule.minEnemyLevel !== null) parts.push(`LV${rule.minEnemyLevel}+`);
       summary.textContent = parts.join(" / ");
       summary.title = summary.textContent;
@@ -513,9 +520,19 @@ function renderContentAlerts() {
   );
 }
 
+/** rail上部のルール管理をactive content tabへ追従させる(RND-014) */
+function renderRuleManager() {
+  const tab = getActiveContentTab();
+  const fissures = tab === "fissures";
+  $("fissure-rules").hidden = !fissures;
+  $("tab-alerts").hidden = fissures;
+  if (!fissures) renderTabAlerts(tab as TimedTabId);
+}
+
 function addContentAlertFromForm() {
   if (!config) return;
-  const kindValue = $<HTMLSelectElement>("content-kind-select").value;
+  const tab = getActiveContentTab();
+  if (tab === "fissures") return;
   const keywordInput = $<HTMLInputElement>("content-keyword-input");
   const levelInput = $<HTMLInputElement>("content-level-input");
   const keyword = keywordInput.value.trim();
@@ -525,7 +542,7 @@ function addContentAlertFromForm() {
     current.push({
       notify: true,
       name: null,
-      kinds: [...(CONTENT_KIND_GROUPS[kindValue] ?? [])],
+      kinds: [...CONTENT_TAB_KIND_GROUPS[tab as TimedTabId]],
       missionTypes: keyword === "" ? [] : [keyword],
       minEnemyLevel: level,
     });
@@ -1679,6 +1696,8 @@ async function init() {
 
   initContentTabs(() => {
     if (paletteOpen) closePalette();
+    // rail上部のルール管理をタブへ追従させる(RND-014)
+    renderRuleManager();
   });
   initSortHeaders();
   $("rule-new").addEventListener("click", () => applyCand("action:new-rule"));

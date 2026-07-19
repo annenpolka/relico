@@ -407,7 +407,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-014"
-    desc = "DELIVERYパネルのCONTENT ALERTS UIは、種別選択(すべて/仲裁/ソーティー/アルコン/エリア/サーキット/アルキメデア/ディセンディア)・キーワード・LV下限の追加フォームからcontentRulesの行を追加し、行の通知トグルはそのルールのnotifyだけを、削除ボタンはそのルールの除去だけをset_config(contentRules)へ保存する。エリア選択はkinds=[area-mission, area-objective, bounty]へ展開される。これらの操作は亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュート設定を変更しない(renderer統合)"
+    desc = "ルール管理はコンテンツタブごとに分かれる: 亀裂タブではrail上部のルール一覧が亀裂WatchRuleを表示し、それ以外のタブでは同じ位置がそのタブ対象のコンテンツ通知ルール管理UI(タブ名入りheading・行リスト・キーワード+LV下限の追加フォーム)へ切り替わる。行はkindsがタブのkind群(エリアはarea-mission/area-objective/bounty、シンジケートはsyndicate)と交差するルールに加えkinds未指定(すべて)のルールも含み、追加はそのタブのkind群へ展開して保存される。行の通知トグルは元のcontentRulesの該当ルールのnotifyだけを、削除ボタンは該当ルールの除去だけをset_config(contentRules)へ保存する。これらの操作は亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュート設定を変更しない(renderer統合)"
     scenario = "content_alerts"
   }
   new patterns.RendererScenario {

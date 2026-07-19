@@ -1084,30 +1084,14 @@ input:focus-visible {
   width: 96px;
 }
 
-/* ---- コンテンツ通知(contentRules)。RND-014 ---- */
-.content-alerts {
-  margin-top: 4px;
-  padding-top: 3px;
-  border-top: 1px solid var(--rowline);
-}
-
-.content-alerts-heading {
-  margin: 0 0 2px;
-  font-size: 9px;
-  font-weight: 400;
-  letter-spacing: 0.14em;
-  color: var(--dim);
-  text-transform: uppercase;
-}
-
+/* ---- コンテンツ通知(contentRules)のタブ別管理UI。RND-014 ---- */
 .content-alert-form {
   display: grid;
-  grid-template-columns: 60px minmax(0, 1fr) 40px auto;
+  grid-template-columns: minmax(0, 1fr) 44px auto;
   gap: 3px;
   align-items: stretch;
 }
 
-.content-alert-form select,
 .content-alert-form input {
   min-width: 0;
   font-size: 9.5px;
@@ -1120,9 +1104,7 @@ input:focus-visible {
 }
 
 #content-alert-rows {
-  max-height: 46px;
   overflow-y: auto;
-  margin-top: 2px;
 }
 
 .content-alert-empty {
@@ -1256,6 +1238,24 @@ input:focus-visible {
   flex-direction: column;
   flex: 0 0 30%;
   min-height: 0;
+}
+
+/* タブ追従で亀裂ルール⇄タブ通知UIを排他表示する(RND-014) */
+.rail-rules[hidden] {
+  display: none;
+}
+
+/* タブ通知UI: 行リストがrules-listと同じく内側スクロールし、追加フォームが下に付く */
+.tab-alerts #content-alert-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  margin-top: 0;
+}
+
+.tab-alerts .content-alert-form {
+  margin-top: 3px;
 }
 
 @media (max-height: 520px) {

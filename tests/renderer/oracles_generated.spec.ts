@@ -732,12 +732,22 @@ test("RND-015 filter change reveals fissures tab", async ({ page }) => {
   await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
   await expect(page.locator("#palette-overlay")).toBeVisible();
   await page.keyboard.press("Escape");
-  // 通知トグルは検索条件ではないので切り替えない
+  // 通知トグル(TOGGLE NOTIFY)は検索条件ではないので切り替えない
   await page.keyboard.press("Meta+2");
-  await page.locator(".rule-row .rule-notify").first().click();
+  await page.keyboard.press("t");
+  await page.locator("#palette-input").fill("toggle notify");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (entry) => entry.cmd === "apply_candidate" && entry.args.id === "action:notify-rule",
+      ),
+    )
+    .toBe(true);
   await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
-  // ルール行のVIEW選択トグルは切り替える
-  await page.locator(".rule-row .rule-toggle").first().click();
+  await page.keyboard.press("Escape");
+  // Space(編集中ルールのVIEW選択トグル)は切り替える
+  await page.keyboard.press(" ");
   await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
   // SORTコマンドは表示のみで検索条件ではないので切り替えない
   await page.keyboard.press("Meta+2");
@@ -746,17 +756,20 @@ test("RND-015 filter change reveals fissures tab", async ({ page }) => {
   await page.keyboard.press("Enter");
   await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
   await page.keyboard.press("Escape");
-  // CLEARの2度押し実行は切り替える
-  await page.locator("#clear-btn").click();
-  await page.locator("#clear-btn").click();
+  // パレットのCLEARは切り替える
+  await page.keyboard.press("c");
+  await page.locator("#palette-input").fill("clear filters");
+  await page.keyboard.press("Enter");
   await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
+  await page.keyboard.press("Escape");
 });
 
-// RND-014: DELIVERYパネルのCONTENT ALERTS UIは、種別選択(すべて/仲裁/ソーティー/アルコン/エリア/サーキット/アルキメデア/ディセンディア)・キーワード・LV下限の追加フォームからcontentRulesの行を追加し、行の通知トグルはそのルールのnotifyだけを、削除ボタンはそのルールの除去だけをset_config(contentRules)へ保存する。エリア選択はkinds=[area-mission, area-objective, bounty]へ展開される。これらの操作は亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュート設定を変更しない(renderer統合)
-test("RND-014 content alerts", async ({ page }) => {
+// RND-014: ルール管理はコンテンツタブごとに分かれる: 亀裂タブではrail上部のルール一覧が亀裂WatchRuleを表示し、それ以外のタブでは同じ位置がそのタブ対象のコンテンツ通知ルール管理UI(タブ名入りheading・行リスト・キーワード+LV下限の追加フォーム)へ切り替わる。行はkindsがタブのkind群(エリアはarea-mission/area-objective/bounty、シンジケートはsyndicate)と交差するルールに加えkinds未指定(すべて)のルールも含み、追加はそのタブのkind群へ展開して保存される。行の通知トグルは元のcontentRulesの該当ルールのnotifyだけを、削除ボタンは該当ルールの除去だけをset_config(contentRules)へ保存する。これらの操作は亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュート設定を変更しない(renderer統合)
+test("RND-014 per-tab rule management", async ({ page }) => {
   await bootConsole(page, { locale: "en" });
-  await page.locator("#delivery-tab").click();
-  await expect(page.locator("#content-alert-rows .content-alert-empty")).toHaveCount(1);
+  // 亀裂タブでは亀裂WatchRuleの一覧が見え、タブ通知UIは非表示
+  await expect(page.locator("#fissure-rules")).toBeVisible();
+  await expect(page.locator("#tab-alerts")).toBeHidden();
   const rulesBefore = await page.locator("#rules-list .rule-row").count();
   const editingBefore = await page.locator("#editing-meta").textContent();
   const contentRules = async () =>
@@ -766,8 +779,12 @@ test("RND-014 content alerts", async ({ page }) => {
           .__MOCK_STATE__.config.contentRules,
     );
 
-  // 追加フォーム: 仲裁 × 防衛 × LV60
-  await page.locator("#content-kind-select").selectOption("arbitration");
+  // 仲裁タブでは同じ位置がそのタブの通知ルール管理へ切り替わる
+  await page.keyboard.press("Meta+2");
+  await expect(page.locator("#fissure-rules")).toBeHidden();
+  await expect(page.locator("#tab-alerts")).toBeVisible();
+  await expect(page.locator("#tab-alerts-heading")).toContainText("Arbitration");
+  await expect(page.locator("#content-alert-rows .content-alert-empty")).toHaveCount(1);
   await page.locator("#content-keyword-input").fill("防衛");
   await page.locator("#content-level-input").fill("60");
   await page.locator("#content-add-btn").click();
@@ -778,13 +795,15 @@ test("RND-014 content alerts", async ({ page }) => {
       { notify: true, name: null, kinds: ["arbitration"], missionTypes: ["防衛"], minEnemyLevel: 60 },
     ]);
 
-  // エリア選択はkinds=[area-mission, area-objective, bounty]へ展開される
-  await page.locator("#content-kind-select").selectOption("area");
+  // エリアタブでは仲裁のルールは見えず、追加はarea 3 kindへ展開される
+  await page.keyboard.press("Meta+6");
+  await expect(page.locator("#tab-alerts-heading")).toContainText("Area Missions");
+  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(0);
   await page.locator("#content-keyword-input").fill("Capture");
   await page.locator("#content-add-btn").click();
-  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(2);
+  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(1);
   await expect
-    .poll(async () => ((await contentRules()) as Array<{ kinds: string[]; minEnemyLevel: number | null }>)[1])
+    .poll(async () => ((await contentRules()) as Array<{ kinds: string[] }>)[1])
     .toEqual({
       notify: true,
       name: null,
@@ -793,7 +812,9 @@ test("RND-014 content alerts", async ({ page }) => {
       minEnemyLevel: null,
     });
 
-  // 行の通知トグルはそのルールのnotifyだけを反転する
+  // 仲裁タブへ戻ると仲裁のルールだけが見え、トグルは元のcontentRulesの該当ルールだけを反転する
+  await page.keyboard.press("Meta+2");
+  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(1);
   await page.locator("#content-alert-rows .content-alert-toggle").first().click();
   await expect
     .poll(async () =>
@@ -801,24 +822,28 @@ test("RND-014 content alerts", async ({ page }) => {
     )
     .toEqual([false, true]);
 
-  // 削除ボタンはそのルールだけを除去する
+  // 削除も該当ルールだけを除去する(エリアのルールは残る)
   await page.locator("#content-alert-rows .content-alert-del").first().click();
-  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(1);
+  await expect(page.locator("#content-alert-rows .content-alert-empty")).toHaveCount(1);
   await expect
     .poll(async () =>
       ((await contentRules()) as Array<{ missionTypes: string[] }>).map((rule) => rule.missionTypes),
     )
     .toEqual([["Capture"]]);
 
-  // 亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュートへ波及しない
+  // 亀裂タブへ戻すと亀裂ルールUIへ戻り、亀裂側・ミュートへ波及しない
+  await page.keyboard.press("Meta+1");
+  await expect(page.locator("#fissure-rules")).toBeVisible();
+  await expect(page.locator("#tab-alerts")).toBeHidden();
   await expect(page.locator("#rules-list .rule-row")).toHaveCount(rulesBefore);
   await expect(page.locator("#editing-meta")).toHaveText(editingBefore ?? "");
-  await expect(page.locator("#mute-check")).toHaveAttribute("aria-pressed", "false");
   expect(
     (await calls(page)).filter((entry) =>
       ["set_rule_enabled", "set_rule_notify", "apply_candidate", "clear_filter"].includes(entry.cmd),
     ),
   ).toHaveLength(0);
+  await page.locator("#delivery-tab").click();
+  await expect(page.locator("#mute-check")).toHaveAttribute("aria-pressed", "false");
 });
 
 // RND-013: 亀裂表のNODE列はbackend snapshotのnodeLevels(ExportRegions由来)に表示名が一致するnodeへLV {min}-{max}を併記し、鋼(isHard)の亀裂は基底levelへ+100した範囲を表示する。行tooltipにも同じ値を含める。lookupにないnodeへはlevelを表示せず捏造しない。level表示は表示のみで設定・通知を変えない(renderer統合)
