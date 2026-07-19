@@ -25,6 +25,18 @@ pub fn text(locale: AppLocale, key: &str) -> String {
         .unwrap_or_else(|| format!("[[{key}]]"))
 }
 
+/// APIの英語ゲーム用語を訳語テーブル(term.mission.* / term.faction.*)で選択言語化する。
+/// テーブルにない未知値は原文のまま返す(missing markerを出さない)。SPEC: NTF-002 / NTF-005
+pub fn term(locale: AppLocale, prefix: &str, raw: &str) -> String {
+    let trimmed = raw.trim();
+    let key = format!("{prefix}.{}", trimmed.to_lowercase().replace(' ', "-"));
+    catalog()
+        .get(locale.as_str())
+        .and_then(|messages| messages.get(&key))
+        .cloned()
+        .unwrap_or_else(|| trimmed.to_string())
+}
+
 pub fn format(locale: AppLocale, key: &str, args: &[(&str, &str)]) -> String {
     let mut message = text(locale, key);
     for (name, value) in args {
@@ -55,6 +67,9 @@ pub fn rule_summary(locale: AppLocale, rule: &WatchRule) -> String {
     }
     if !rule.planets.is_empty() {
         summary.push_str(&format!("/P{}", rule.planets.len()));
+    }
+    if !rule.factions.is_empty() {
+        summary.push_str(&format!("/F{}", rule.factions.len()));
     }
     match rule.storms {
         StormMode::Exclude => {}

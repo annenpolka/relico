@@ -20,6 +20,7 @@ use relico_lib::timed;
 const TIERS: &[&str] = &["Lith", "Meso", "Neo", "Axi", "Requiem", "Omnia"];
 const MISSIONS: &[&str] = &["Defense", "Survival", "Capture", "Extermination", "Rescue", "Disruption", "Mobile Defense", "Void Flood", "Void Cascade", "Volatile"];
 const PLANETS: &[&str] = &["Mars", "Ceres", "Sedna", "Void", "Saturn", "Phobos", "Zariman", "Veil Proxima", "Kuva Fortress", "Lua"];
+const FACTIONS: &[&str] = &["Grineer", "Corpus", "Infested", "Orokin", "Corrupted", "Murmur", "The Murmur"];
 const CONTENT_KINDS: &[&str] = &["arbitration", "sortie", "archon", "area-mission", "area-objective", "bounty", "circuit", "archimedea", "descendia"];
 const CONTENT_KEYWORDS: &[&str] = &["Defense", "防衛", "Capture", "確保", "Survival", "md", "Netracells", "Vault"];
 const CONTENT_STAGE_TITLES: &[&str] = &["Defense", "Survival", "Excavation", "Mobile Defense", "Netracells", "Capture the Grineer Commander", "Isolation Vault", "Liberation"];
@@ -92,19 +93,25 @@ fn arb_rule() -> impl Strategy<Value = WatchRule> {
         arb_subset(TIERS),
         arb_subset(MISSIONS),
         arb_subset(PLANETS),
+        arb_subset(FACTIONS),
         arb_mode(),
         arb_storm_mode(),
     )
-        .prop_map(|(enabled, notify, name, tiers, mission_types, planets, mode, storms)| WatchRule {
-            enabled,
-            notify,
-            name,
-            tiers,
-            mission_types,
-            planets,
-            mode,
-            storms,
-        })
+        .prop_map(
+            |(enabled, notify, name, tiers, mission_types, planets, factions, mode, storms)| {
+                WatchRule {
+                    enabled,
+                    notify,
+                    name,
+                    tiers,
+                    mission_types,
+                    planets,
+                    factions,
+                    mode,
+                    storms,
+                }
+            },
+        )
 }
 
 fn arb_settings() -> impl Strategy<Value = FilterSettings> {
@@ -121,11 +128,12 @@ fn arb_fissure() -> impl Strategy<Value = Fissure> {
         proptest::sample::select(TIERS.to_vec()),
         proptest::sample::select(MISSIONS.to_vec()),
         proptest::sample::select(PLANETS.to_vec()),
+        proptest::sample::select(FACTIONS.to_vec()),
         any::<bool>(),
         any::<bool>(),
         -600i64..7200,
     )
-        .prop_map(|(id, tier, mission, planet, is_storm, is_hard, expiry_off)| {
+        .prop_map(|(id, tier, mission, planet, enemy, is_storm, is_hard, expiry_off)| {
             let now = base_now();
             Fissure {
                 id,
@@ -133,7 +141,7 @@ fn arb_fissure() -> impl Strategy<Value = Fissure> {
                 expiry: now + Duration::seconds(expiry_off),
                 node: format!("Node ({planet})"),
                 mission_type: mission.to_string(),
-                enemy: "Grineer".to_string(),
+                enemy: enemy.to_string(),
                 tier: tier.to_string(),
                 tier_num: 1,
                 is_storm,
@@ -344,6 +352,20 @@ proptest! {
             filter::rule_matches(&empty_rule, &f),
             filter::rule_matches(&pinned_rule, &f),
             "SPEC FLT-006 違反: ルールのplanetsが空のとき、惑星を理由に棄却しない(空=全惑星対象)"
+        );
+    }
+
+    /// FLT-016: ルールのfactionsが空のとき、陣営を理由に棄却しない(空=全陣営対象)。非空ならAPIのenemy値との完全一致で絞り込む
+    #[test]
+    fn flt_016(rule in arb_rule(), f in arb_fissure()) {
+        let mut empty_rule = rule.clone();
+        empty_rule.factions = vec![];
+        let mut pinned_rule = rule;
+        pinned_rule.factions = vec![f.enemy.clone()];
+        prop_assert_eq!(
+            filter::rule_matches(&empty_rule, &f),
+            filter::rule_matches(&pinned_rule, &f),
+            "SPEC FLT-016 違反: ルールのfactionsが空のとき、陣営を理由に棄却しない(空=全陣営対象)。非空ならAPIのenemy値との完全一致で絞り込む"
         );
     }
 
@@ -3217,7 +3239,7 @@ fn ntf_001() {
     );
 }
 
-/// NTF-002: desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める
+/// NTF-002: desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める。ミッション種別と勢力は選択言語の訳語テーブル(term.mission/term.faction)で表示し、テーブルにない未知値は原文のまま使う
 #[test]
 fn ntf_002() {
     let now = base_now();
@@ -3237,21 +3259,35 @@ fn ntf_002() {
     let payload = notify::desktop_payload(&fissure, now);
     assert_eq!(
         payload.title,
-        "Axi Survival — Test Node (Void) 【鋼】 [STORM]",
-        "SPEC NTF-002 違反: desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める (title)"
+        "Axi 耐久 — Test Node (Void) 【鋼】 [STORM]",
+        "SPEC NTF-002 違反: desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める。ミッション種別と勢力は選択言語の訳語テーブル(term.mission/term.faction)で表示し、テーブルにない未知値は原文のまま使う (title)"
     );
     assert_eq!(
         payload.body,
-        "Orokin / 消滅まで残り30分",
-        "SPEC NTF-002 違反: desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める (body)"
+        "オロキン / 消滅まで残り30分",
+        "SPEC NTF-002 違反: desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める。ミッション種別と勢力は選択言語の訳語テーブル(term.mission/term.faction)で表示し、テーブルにない未知値は原文のまま使う (body)"
+    );
+
+    // 訳語テーブルにない未知のミッション・勢力は原文のまま使う
+    let mut unknown = fissure.clone();
+    unknown.mission_type = "Mystery Mode".to_string();
+    unknown.enemy = "Mystery Faction".to_string();
+    let unknown_payload = notify::desktop_payload(&unknown, now);
+    assert!(
+        unknown_payload.title.contains("Mystery Mode") && !unknown_payload.title.contains("[["),
+        "SPEC NTF-002 違反: desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める。ミッション種別と勢力は選択言語の訳語テーブル(term.mission/term.faction)で表示し、テーブルにない未知値は原文のまま使う (未知ミッションのfallback)"
+    );
+    assert!(
+        unknown_payload.body.contains("Mystery Faction") && !unknown_payload.body.contains("[["),
+        "SPEC NTF-002 違反: desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める。ミッション種別と勢力は選択言語の訳語テーブル(term.mission/term.faction)で表示し、テーブルにない未知値は原文のまま使う (未知勢力のfallback)"
     );
 
     fissure.expiry = now - Duration::seconds(1);
     let expired = notify::desktop_payload(&fissure, now);
     assert_eq!(
         expired.body,
-        "Orokin / 消滅まで残り0分",
-        "SPEC NTF-002 違反: desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める (期限切れbody)"
+        "オロキン / 消滅まで残り0分",
+        "SPEC NTF-002 違反: desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める。ミッション種別と勢力は選択言語の訳語テーブル(term.mission/term.faction)で表示し、テーブルにない未知値は原文のまま使う (期限切れbody)"
     );
 }
 
@@ -3321,7 +3357,7 @@ fn ntf_004() {
     }
 }
 
-/// NTF-006: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する
+/// NTF-006: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。stage titleが既知ミッション種別なら訳語テーブルで選択言語化し、テーブルにないtitleとnodeは原文を保持する。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まない
 #[test]
 fn ntf_006() {
     let now = base_now();
@@ -3333,38 +3369,53 @@ fn ntf_006() {
     stage.enemy_levels = vec![15, 25];
     card.stages = vec![stage];
 
-    for locale in [AppLocale::Ja, AppLocale::En, AppLocale::ZhHans] {
+    for (locale, mission) in [
+        (AppLocale::Ja, "耐久"),
+        (AppLocale::En, "Survival"),
+        (AppLocale::ZhHans, "生存"),
+    ] {
         let payload = notify::content_desktop_payload_for_locale(&card, now, locale);
         assert!(
             !payload.title.contains("[[") && !payload.body.contains("[["),
-            "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (missing-key marker: {locale:?})",
+            "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。stage titleが既知ミッション種別なら訳語テーブルで選択言語化し、テーブルにないtitleとnodeは原文を保持する。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まない (missing-key marker: {locale:?})",
         );
-        assert!(payload.title.contains("Survival"), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (stage title: {locale:?})");
+        // stage titleは既知ミッション種別なら訳語テーブルで選択言語化する
+        assert!(payload.title.contains(mission), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。stage titleが既知ミッション種別なら訳語テーブルで選択言語化し、テーブルにないtitleとnodeは原文を保持する。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まない (stage title: {locale:?})");
         assert!(
             payload.body.contains("Zeugma (Phobos)"),
-            "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (node: {locale:?})",
+            "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。stage titleが既知ミッション種別なら訳語テーブルで選択言語化し、テーブルにないtitleとnodeは原文を保持する。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まない (node: {locale:?})",
         );
-        assert!(payload.body.contains("15-25"), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (enemy level: {locale:?})");
-        assert!(payload.body.contains("45"), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (残り分数: {locale:?})");
+        assert!(payload.body.contains("15-25"), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。stage titleが既知ミッション種別なら訳語テーブルで選択言語化し、テーブルにないtitleとnodeは原文を保持する。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まない (enemy level: {locale:?})");
+        assert!(payload.body.contains("45"), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。stage titleが既知ミッション種別なら訳語テーブルで選択言語化し、テーブルにないtitleとnodeは原文を保持する。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まない (残り分数: {locale:?})");
 
         let description = notify::content_discord_description_for_locale(&card, locale);
         assert!(
             description.contains("Zeugma (Phobos)"),
-            "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (discord node: {locale:?})",
+            "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。stage titleが既知ミッション種別なら訳語テーブルで選択言語化し、テーブルにないtitleとnodeは原文を保持する。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まない (discord node: {locale:?})",
         );
         assert!(
             description.contains(&format!(
                 "<t:{}:R>",
                 card.expiry.expect("fixture expiry").timestamp()
             )),
-            "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (discord動的タイムスタンプ: {locale:?})",
+            "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。stage titleが既知ミッション種別なら訳語テーブルで選択言語化し、テーブルにないtitleとnodeは原文を保持する。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まない (discord動的タイムスタンプ: {locale:?})",
         );
     }
 
     let ja = notify::content_desktop_payload_for_locale(&card, now, AppLocale::Ja);
-    assert!(ja.title.contains("仲裁"), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (ja kindラベル)");
+    assert!(ja.title.contains("仲裁"), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。stage titleが既知ミッション種別なら訳語テーブルで選択言語化し、テーブルにないtitleとnodeは原文を保持する。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まない (ja kindラベル)");
     let en = notify::content_desktop_payload_for_locale(&card, now, AppLocale::En);
-    assert!(en.title.contains("Arbitration"), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (en kindラベル)");
+    assert!(en.title.contains("Arbitration"), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。stage titleが既知ミッション種別なら訳語テーブルで選択言語化し、テーブルにないtitleとnodeは原文を保持する。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まない (en kindラベル)");
+
+    // 訳語テーブルにないstage titleは原文のまま使う
+    let mut sentence = card.clone();
+    sentence.stages[0].title = "Capture the Grineer Commander".to_string();
+    let sentence_payload = notify::content_desktop_payload_for_locale(&sentence, now, AppLocale::Ja);
+    assert!(
+        sentence_payload.title.contains("Capture the Grineer Commander")
+            && !sentence_payload.title.contains("[["),
+        "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。stage titleが既知ミッション種別なら訳語テーブルで選択言語化し、テーブルにないtitleとnodeは原文を保持する。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まない (未知stage titleのfallback)",
+    );
 
     // 未知kindはラベルを捏造せずrawを保持する
     let mut unknown = card.clone();
@@ -3372,11 +3423,11 @@ fn ntf_006() {
     let unknown_payload = notify::content_desktop_payload_for_locale(&unknown, now, AppLocale::Ja);
     assert!(
         unknown_payload.title.contains("mystery-kind") && !unknown_payload.title.contains("[["),
-        "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (未知kindのfallback)",
+        "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。stage titleが既知ミッション種別なら訳語テーブルで選択言語化し、テーブルにないtitleとnodeは原文を保持する。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まない (未知kindのfallback)",
     );
 }
 
-/// NTF-005: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する
+/// NTF-005: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。ミッション種別・勢力は訳語テーブルで選択言語化し(訳語のないlocale・未知値は原文のまま)、node・tierの固有名詞と通知先identifierは原文を保持する
 #[test]
 fn ntf_005() {
     let now = base_now();
@@ -3393,30 +3444,37 @@ fn ntf_005() {
         is_hard: true,
     };
 
-    for (locale, hard, body, accepted, watch_prefix, storm_include, storm_only, candidate_error, rule_error) in [
-        (AppLocale::Ja, "鋼", "Orokin / 消滅まで残り30分", "通知要求を受け付けました: desktop", "監視:", "+VOID嵐", "VOID嵐のみ", "不明な候補ID: bad", "不明なルール番号: 99"),
-        (AppLocale::En, "Steel Path", "Orokin / 30 min remaining", "Notification request accepted: desktop", "Watch:", "+VOID STORM", "VOID STORM ONLY", "Unknown candidate ID: bad", "Unknown rule index: 99"),
-        (AppLocale::ZhHans, "钢铁之路", "Orokin / 剩余 30 分钟", "通知请求已接受：desktop", "监视：", "+虚空风暴", "仅虚空风暴", "未知候选项 ID：bad", "未知规则序号：99"),
+    for (locale, hard, mission, body, accepted, watch_prefix, storm_include, storm_only, candidate_error, rule_error) in [
+        (AppLocale::Ja, "鋼", "耐久", "オロキン / 消滅まで残り30分", "通知要求を受け付けました: desktop", "監視:", "+VOID嵐", "VOID嵐のみ", "不明な候補ID: bad", "不明なルール番号: 99"),
+        (AppLocale::En, "Steel Path", "Survival", "Orokin / 30 min remaining", "Notification request accepted: desktop", "Watch:", "+VOID STORM", "VOID STORM ONLY", "Unknown candidate ID: bad", "Unknown rule index: 99"),
+        (AppLocale::ZhHans, "钢铁之路", "生存", "Orokin / 剩余 30 分钟", "通知请求已接受：desktop", "监视：", "+虚空风暴", "仅虚空风暴", "未知候选项 ID：bad", "未知规则序号：99"),
     ] {
         let payload = notify::desktop_payload_for_locale(&fissure, now, locale);
-        assert!(payload.title.contains(hard), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (hard label: {})", payload.title);
-        assert_eq!(payload.body, body, "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (body)");
+        assert!(payload.title.contains(hard), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。ミッション種別・勢力は訳語テーブルで選択言語化し(訳語のないlocale・未知値は原文のまま)、node・tierの固有名詞と通知先identifierは原文を保持する (hard label: {})", payload.title);
+        // ミッション種別は訳語テーブルで選択言語化し、node・tierは原文を保持する
+        assert!(payload.title.contains(mission), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。ミッション種別・勢力は訳語テーブルで選択言語化し(訳語のないlocale・未知値は原文のまま)、node・tierの固有名詞と通知先identifierは原文を保持する (localized mission: {})", payload.title);
+        assert!(
+            payload.title.contains("Axi") && payload.title.contains("Test Node (Void)"),
+            "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。ミッション種別・勢力は訳語テーブルで選択言語化し(訳語のないlocale・未知値は原文のまま)、node・tierの固有名詞と通知先identifierは原文を保持する (tier/node raw: {})",
+            payload.title
+        );
+        assert_eq!(payload.body, body, "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。ミッション種別・勢力は訳語テーブルで選択言語化し(訳語のないlocale・未知値は原文のまま)、node・tierの固有名詞と通知先identifierは原文を保持する (body)");
         let summary = notify::summarize_test_outcomes_for_locale(
             &[NotificationOutcome::Requested { destination: "desktop" }],
             locale,
         )
         .expect("Requestedをlocale別に要約できること");
-        assert_eq!(summary, accepted, "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (test summary)");
+        assert_eq!(summary, accepted, "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。ミッション種別・勢力は訳語テーブルで選択言語化し(訳語のないlocale・未知値は原文のまま)、node・tierの固有名詞と通知先identifierは原文を保持する (test summary)");
 
         let mut cfg = AppConfig::default();
         cfg.locale = locale;
         cfg.rules[0].storms = StormMode::Include;
         let include_watch = relico_lib::watch_line(&cfg);
-        assert!(include_watch.starts_with(watch_prefix), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (tray: {include_watch})");
-        assert!(include_watch.contains(storm_include), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (Storm Include: {include_watch})");
+        assert!(include_watch.starts_with(watch_prefix), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。ミッション種別・勢力は訳語テーブルで選択言語化し(訳語のないlocale・未知値は原文のまま)、node・tierの固有名詞と通知先identifierは原文を保持する (tray: {include_watch})");
+        assert!(include_watch.contains(storm_include), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。ミッション種別・勢力は訳語テーブルで選択言語化し(訳語のないlocale・未知値は原文のまま)、node・tierの固有名詞と通知先identifierは原文を保持する (Storm Include: {include_watch})");
         cfg.rules[0].storms = StormMode::Only;
         let only_watch = relico_lib::watch_line(&cfg);
-        assert!(only_watch.contains(storm_only), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (Storm Only: {only_watch})");
+        assert!(only_watch.contains(storm_only), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。ミッション種別・勢力は訳語テーブルで選択言語化し(訳語のないlocale・未知値は原文のまま)、node・tierの固有名詞と通知先identifierは原文を保持する (Storm Only: {only_watch})");
 
         let actual_candidate_error = relico_lib::i18n::format(
             locale,
@@ -3428,8 +3486,8 @@ fn ntf_005() {
             "error.unknownRuleIndex",
             &[("index", "99")],
         );
-        assert_eq!(actual_candidate_error, candidate_error, "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (candidate error)");
-        assert_eq!(actual_rule_error, rule_error, "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (rule error)");
+        assert_eq!(actual_candidate_error, candidate_error, "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。ミッション種別・勢力は訳語テーブルで選択言語化し(訳語のないlocale・未知値は原文のまま)、node・tierの固有名詞と通知先identifierは原文を保持する (candidate error)");
+        assert_eq!(actual_rule_error, rule_error, "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。ミッション種別・勢力は訳語テーブルで選択言語化し(訳語のないlocale・未知値は原文のまま)、node・tierの固有名詞と通知先identifierは原文を保持する (rule error)");
         for rendered in [
             &payload.title,
             &payload.body,
@@ -3439,7 +3497,7 @@ fn ntf_005() {
             &actual_candidate_error,
             &actual_rule_error,
         ] {
-            assert!(!rendered.contains("[["), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する (missing marker: {rendered})");
+            assert!(!rendered.contains("[["), "SPEC NTF-005 違反: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。ミッション種別・勢力は訳語テーブルで選択言語化し(訳語のないlocale・未知値は原文のまま)、node・tierの固有名詞と通知先identifierは原文を保持する (missing marker: {rendered})");
         }
     }
 }

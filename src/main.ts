@@ -159,6 +159,7 @@ function summarize(r: WatchRule): string {
   let s = `${tiers}/${mode}`;
   if (r.missionTypes.length) s += `/M${r.missionTypes.length}`;
   if (r.planets.length) s += `/P${r.planets.length}`;
+  if (r.factions.length) s += `/F${r.factions.length}`;
   if (r.storms === "Include") s += `/${t("rules.stormInclude")}`;
   if (r.storms === "Only") s += `/${t("rules.stormOnly")}`;
   return s;
@@ -277,6 +278,7 @@ const FACET_LABEL_KEYS: Record<RuleFacet, MessageKey> = {
   storm: "facets.storm",
   mission: "facets.mission",
   planet: "facets.planet",
+  faction: "facets.faction",
 };
 
 const PALETTE_FACET_LABEL_KEYS: Record<Facet, MessageKey> = {
@@ -361,6 +363,7 @@ function renderRail() {
   renderFacetLauncher("storm-checks", "storm");
   renderFacetLauncher("mission-checks", "mission");
   renderFacetLauncher("planet-checks", "planet");
+  renderFacetLauncher("faction-checks", "faction");
 
   setCheck("desktop-check", config.desktopNotification);
   setCheck("autostart-check", autostart);
@@ -619,9 +622,13 @@ function renderTable() {
         ? `<span class="flag t-storm">${glyphHtml("storm", "Only")}<span>${esc(t("table.stormValue").toUpperCase())}</span></span>`
         : `<span class="t-no-storm">—</span>`;
       const planet = planetForFissure(f.planet, f.isStorm);
-      // backend snapshotのnodeLevelsにあるnodeだけLVを併記する(捏造しない)。RND-013
-      const levels = status?.nodeLevels?.[f.node];
-      const levelText = levels ? t("table.level", { min: levels[0], max: levels[1] }) : null;
+      // backend snapshotのnodeLevelsにあるnodeだけLVを併記する(捏造しない)。
+      // 鋼(isHard)は基底levelへ+100した範囲を表示する。RND-013
+      const baseLevels = status?.nodeLevels?.[f.node];
+      const hardOffset = f.isHard ? 100 : 0;
+      const levelText = baseLevels
+        ? t("table.level", { min: baseLevels[0] + hardOffset, max: baseLevels[1] + hardOffset })
+        : null;
       tr.title = [
         f.tier.toUpperCase(),
         f.node,

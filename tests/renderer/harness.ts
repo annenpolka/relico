@@ -71,6 +71,7 @@ function installMock({
     tiers: string[];
     missionTypes: string[];
     planets: string[];
+    factions: string[];
     mode: string;
     storms: string;
   };
@@ -91,6 +92,7 @@ function installMock({
     tiers: [],
     missionTypes: [],
     planets: [],
+    factions: [],
     mode: "Both",
     storms: "Exclude",
   });
@@ -173,11 +175,12 @@ function installMock({
       paused: false,
       notificationsMuted,
       suppressedToday: notificationsMuted ? 2 : 0,
-      // ExportRegions由来のnode level lookup。Hepit (Void)は意図的に欠落させ、
-      // lookupにないnodeへlevelを捏造しないこと(RND-013)の検査に使う
+      // ExportRegions由来のnode level lookup。Nsu Grid (Veil Proxima)は意図的に欠落させ、
+      // lookupにないnodeへlevelを捏造しないこと(RND-013)の検査に使う。
+      // Taveuni行はisHard=trueのため表示は+100(RND-013)
       nodeLevels: {
         "Taveuni (Kuva Fortress)": [32, 37],
-        "Nsu Grid (Veil Proxima)": [80, 90],
+        "Hepit (Void)": [10, 15],
       } as Record<string, [number, number]>,
       timedContent: {
         arbitration: [
@@ -562,6 +565,9 @@ function installMock({
     { id: "planet:Sedna", label: "Sedna", facet: "planet" },
     { id: "planet:Kuva Fortress", label: "Kuva Fortress", facet: "planet" },
     { id: "planet:Void", label: "Void", facet: "planet" },
+    { id: "faction:Grineer", label: "Grineer", facet: "faction" },
+    { id: "faction:Corpus", label: "Corpus", facet: "faction" },
+    { id: "faction:The Murmur", label: "The Murmur", facet: "faction" },
     { id: "action:new-rule", label: "NEW RULE", facet: "action" },
     { id: "action:delete-rule", label: "DELETE RULE", facet: "action" },
     { id: "action:rename-rule", label: "RENAME RULE", facet: "action" },
@@ -621,6 +627,8 @@ function installMock({
         return r.missionTypes.includes(value);
       case "planet":
         return r.planets.includes(value);
+      case "faction":
+        return r.factions.includes(value);
       case "mode":
         return r.mode === value;
       case "storm":
@@ -712,6 +720,9 @@ function installMock({
       } else if (id.startsWith("planet:")) {
         const r = prepareFilterTarget();
         toggle(r.planets, value);
+      } else if (id.startsWith("faction:")) {
+        const r = prepareFilterTarget();
+        toggle(r.factions, value);
       } else if (id.startsWith("mode:")) {
         const r = prepareFilterTarget();
         r.mode = value;

@@ -62,6 +62,12 @@ clauses: Listing<patterns.Clause> = new {
     axisField = "planets"
     matchExpr = "filter::extract_planet(&f.node).into_iter().collect()"
   }
+  new patterns.RulePassWhenEmpty {
+    id = "FLT-016"
+    desc = "ルールのfactionsが空のとき、陣営を理由に棄却しない(空=全陣営対象)。非空ならAPIのenemy値との完全一致で絞り込む"
+    axisField = "factions"
+    matchExpr = "vec![f.enemy.clone()]"
+  }
   new patterns.SettingsRejectWhen {
     id = "FLT-007"
     desc = "残り時間がmin_remaining_secs未満の亀裂は、ルール構成に依らず合致しない(期限切れ含む)"
@@ -274,7 +280,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.NotificationExample {
     id = "NTF-002"
-    desc = "desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める"
+    desc = "desktop通知payloadは呼出側から渡した同一nowで残り時間を計算し、HARDとSTORMを独立にtitleへ含め、期限切れの残り時間を0分に丸める。ミッション種別と勢力は選択言語の訳語テーブル(term.mission/term.faction)で表示し、テーブルにない未知値は原文のまま使う"
     scenario = "desktop_payload"
   }
   new patterns.NotificationExample {
@@ -289,12 +295,12 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.NotificationExample {
     id = "NTF-006"
-    desc = "コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する"
+    desc = "コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。stage titleが既知ミッション種別なら訳語テーブルで選択言語化し、テーブルにないtitleとnodeは原文を保持する。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まない"
     scenario = "content_payload"
   }
   new patterns.NotificationExample {
     id = "NTF-005"
-    desc = "ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する"
+    desc = "ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。ミッション種別・勢力は訳語テーブルで選択言語化し(訳語のないlocale・未知値は原文のまま)、node・tierの固有名詞と通知先identifierは原文を保持する"
     scenario = "localized_backend"
   }
   new patterns.StaticCheck {
@@ -361,7 +367,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-004"
-    desc = "最小720x480でも右サイドバーは縦スクロールなしでルール一覧・NEW/DEL/CLEAR・5軸launcher・配送設定・TEST/PAUSE・時間設定へ到達でき、ルール一覧はrail高さの固定比率領域に全ルール行を保持して内側だけ縦スクロールし、launcherはパレットをその軸に絞って開く(renderer統合)"
+    desc = "最小720x480でも右サイドバーは縦スクロールなしでルール一覧・NEW/DEL/CLEAR・6軸launcher(レリック/モード/VOID嵐/ミッション/惑星/勢力)・配送設定・TEST/PAUSE・時間設定へ到達でき、ルール一覧はrail高さの固定比率領域に全ルール行を保持して内側だけ縦スクロールし、launcherはパレットをその軸に絞って開く(renderer統合)"
     scenario = "sidebar_fit"
   }
   new patterns.RendererScenario {
@@ -391,7 +397,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-010"
-    desc = "コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁cardはcommunity schedule・browse.wf出典で絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示し、将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。DescendiaのSpecs/Aurasは生のLotus pathを本文へ表示せず、path leafを人間可読ラベル(CoH接頭辞とSpec/Aura接尾辞を除去しcamelCaseを分かち書き)へ整形して表示し、整形前のraw識別子はtooltipへ保持する。Descendiaのactive cardはupcoming行と同じくpanel全幅の単一列で表示し、multi-card gridの分割幅で細長く積まない。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。パレットのGO TO {タブ}候補は対応タブへ切り替えてパレットを閉じ、ルール・設定を変更しない。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)"
+    desc = "コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁cardはcommunity schedule・browse.wf出典で絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示し、将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。DescendiaのSpecs/Aurasは生のLotus pathを本文へ表示せず、path leafを人間可読ラベル(CoH接頭辞とSpec/Aura接尾辞を除去しcamelCaseを分かち書き)へ整形して表示し、整形前のraw識別子はtooltipへ保持する。Descendiaのactive cardはupcoming行と同じくpanel全幅の単一列で表示し、multi-card gridの分割幅で細長く積まない。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。パレットのGO TO {タブ}候補は対応タブへ切り替えてパレットを閉じ、ルール・設定を変更しない。タブ列が横幅からあふれるときは、あふれている側だけにedge fadeヒント(scrolled-start/scrolled-end)を付けてスクロール可能性を示し、native scrollbarより控えめな細いテーマ色バーを使う。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)"
     scenario = "content_tabs"
   }
   new patterns.RendererScenario {
@@ -401,7 +407,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-013"
-    desc = "亀裂表のNODE列はbackend snapshotのnodeLevels(ExportRegions由来)に表示名が一致するnodeへLV {min}-{max}を併記し、行tooltipにも含める。lookupにないnodeへはlevelを表示せず捏造しない。level表示は表示のみで設定・通知を変えない(renderer統合)"
+    desc = "亀裂表のNODE列はbackend snapshotのnodeLevels(ExportRegions由来)に表示名が一致するnodeへLV {min}-{max}を併記し、鋼(isHard)の亀裂は基底levelへ+100した範囲を表示する。行tooltipにも同じ値を含める。lookupにないnodeへはlevelを表示せず捏造しない。level表示は表示のみで設定・通知を変えない(renderer統合)"
     scenario = "node_levels"
   }
   new patterns.RendererScenario {

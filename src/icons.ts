@@ -175,6 +175,7 @@ export function candidateGlyphHtml(facet: Facet, id: string): string {
     case "tier":
     case "planet":
     case "mission":
+    case "faction":
     case "storm":
     case "action":
       return glyphHtml(facet, value);

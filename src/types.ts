@@ -3,7 +3,15 @@
 
 export type Mode = "Normal" | "SteelPath" | "Both";
 export type StormMode = "Exclude" | "Include" | "Only";
-export type Facet = "tier" | "mission" | "planet" | "mode" | "storm" | "action" | "rule";
+export type Facet =
+  | "tier"
+  | "mission"
+  | "planet"
+  | "faction"
+  | "mode"
+  | "storm"
+  | "action"
+  | "rule";
 export type AppLocale = "ja" | "en" | "zh-Hans";
 
 export interface NotificationMute {
@@ -24,6 +32,8 @@ export interface WatchRule {
   tiers: string[];
   missionTypes: string[];
   planets: string[];
+  /** 陣営(APIのenemy値)。空=全陣営対象 */
+  factions: string[];
   mode: Mode;
   storms: StormMode;
 }

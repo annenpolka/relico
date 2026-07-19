@@ -72,6 +72,54 @@ body {
   scrollbar-color: var(--dim) transparent;
 }
 
+/* 狭幅ではタブがはみ出す。WKWebViewの標準バーはタブに重なって読みづらいため、
+   極細のテーマ色バーへ置き換える(スクロール可能なことは細線で示す) */
+.content-tabs::-webkit-scrollbar {
+  height: 3px;
+}
+
+.content-tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.content-tabs::-webkit-scrollbar-thumb {
+  background: rgba(255, 180, 84, 0.35);
+  border-radius: 1.5px;
+}
+
+.content-tabs::-webkit-scrollbar-thumb:hover {
+  background: var(--amber);
+}
+
+/* あふれている側だけに出すedge fadeヒント。maskは要素座標へ固定され
+   コンテンツと一緒にスクロールしないため、続きがある側の端が薄まって見える。RND-010 */
+.content-tabs.scrolled-end:not(.scrolled-start) {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), rgba(0, 0, 0, 0.15));
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), rgba(0, 0, 0, 0.15));
+}
+
+.content-tabs.scrolled-start:not(.scrolled-end) {
+  -webkit-mask-image: linear-gradient(to right, rgba(0, 0, 0, 0.15), #000 28px);
+  mask-image: linear-gradient(to right, rgba(0, 0, 0, 0.15), #000 28px);
+}
+
+.content-tabs.scrolled-start.scrolled-end {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    rgba(0, 0, 0, 0.15),
+    #000 28px,
+    #000 calc(100% - 28px),
+    rgba(0, 0, 0, 0.15)
+  );
+  mask-image: linear-gradient(
+    to right,
+    rgba(0, 0, 0, 0.15),
+    #000 28px,
+    #000 calc(100% - 28px),
+    rgba(0, 0, 0, 0.15)
+  );
+}
+
 .content-tab {
   flex: 0 0 auto;
   min-width: max-content;

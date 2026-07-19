@@ -3366,13 +3366,18 @@ fn ${name}() {
     stage.enemy_levels = vec![15, 25];
     card.stages = vec![stage];
 
-    for locale in [AppLocale::Ja, AppLocale::En, AppLocale::ZhHans] {
+    for (locale, mission) in [
+        (AppLocale::Ja, "耐久"),
+        (AppLocale::En, "Survival"),
+        (AppLocale::ZhHans, "生存"),
+    ] {
         let payload = notify::content_desktop_payload_for_locale(&card, now, locale);
         assert!(
             !payload.title.contains("[[") && !payload.body.contains("[["),
             "${msg} (missing-key marker: {locale:?})",
         );
-        assert!(payload.title.contains("Survival"), "${msg} (stage title: {locale:?})");
+        // stage titleは既知ミッション種別なら訳語テーブルで選択言語化する
+        assert!(payload.title.contains(mission), "${msg} (stage title: {locale:?})");
         assert!(
             payload.body.contains("Zeugma (Phobos)"),
             "${msg} (node: {locale:?})",
@@ -3398,6 +3403,16 @@ fn ${name}() {
     assert!(ja.title.contains("仲裁"), "${msg} (ja kindラベル)");
     let en = notify::content_desktop_payload_for_locale(&card, now, AppLocale::En);
     assert!(en.title.contains("Arbitration"), "${msg} (en kindラベル)");
+
+    // 訳語テーブルにないstage titleは原文のまま使う
+    let mut sentence = card.clone();
+    sentence.stages[0].title = "Capture the Grineer Commander".to_string();
+    let sentence_payload = notify::content_desktop_payload_for_locale(&sentence, now, AppLocale::Ja);
+    assert!(
+        sentence_payload.title.contains("Capture the Grineer Commander")
+            && !sentence_payload.title.contains("[["),
+        "${msg} (未知stage titleのfallback)",
+    );
 
     // 未知kindはラベルを捏造せずrawを保持する
     let mut unknown = card.clone();
@@ -3430,20 +3445,34 @@ fn ${name}() {
     let payload = notify::desktop_payload(&fissure, now);
     assert_eq!(
         payload.title,
-        "Axi Survival — Test Node (Void) 【鋼】 [STORM]",
+        "Axi 耐久 — Test Node (Void) 【鋼】 [STORM]",
         "${msg} (title)"
     );
     assert_eq!(
         payload.body,
-        "Orokin / 消滅まで残り30分",
+        "オロキン / 消滅まで残り30分",
         "${msg} (body)"
+    );
+
+    // 訳語テーブルにない未知のミッション・勢力は原文のまま使う
+    let mut unknown = fissure.clone();
+    unknown.mission_type = "Mystery Mode".to_string();
+    unknown.enemy = "Mystery Faction".to_string();
+    let unknown_payload = notify::desktop_payload(&unknown, now);
+    assert!(
+        unknown_payload.title.contains("Mystery Mode") && !unknown_payload.title.contains("[["),
+        "${msg} (未知ミッションのfallback)"
+    );
+    assert!(
+        unknown_payload.body.contains("Mystery Faction") && !unknown_payload.body.contains("[["),
+        "${msg} (未知勢力のfallback)"
     );
 
     fissure.expiry = now - Duration::seconds(1);
     let expired = notify::desktop_payload(&fissure, now);
     assert_eq!(
         expired.body,
-        "Orokin / 消滅まで残り0分",
+        "オロキン / 消滅まで残り0分",
         "${msg} (期限切れbody)"
     );
 }`;
@@ -3534,13 +3563,20 @@ fn ${name}() {
         is_hard: true,
     };
 
-    for (locale, hard, body, accepted, watch_prefix, storm_include, storm_only, candidate_error, rule_error) in [
-        (AppLocale::Ja, "鋼", "Orokin / 消滅まで残り30分", "通知要求を受け付けました: desktop", "監視:", "+VOID嵐", "VOID嵐のみ", "不明な候補ID: bad", "不明なルール番号: 99"),
-        (AppLocale::En, "Steel Path", "Orokin / 30 min remaining", "Notification request accepted: desktop", "Watch:", "+VOID STORM", "VOID STORM ONLY", "Unknown candidate ID: bad", "Unknown rule index: 99"),
-        (AppLocale::ZhHans, "钢铁之路", "Orokin / 剩余 30 分钟", "通知请求已接受：desktop", "监视：", "+虚空风暴", "仅虚空风暴", "未知候选项 ID：bad", "未知规则序号：99"),
+    for (locale, hard, mission, body, accepted, watch_prefix, storm_include, storm_only, candidate_error, rule_error) in [
+        (AppLocale::Ja, "鋼", "耐久", "オロキン / 消滅まで残り30分", "通知要求を受け付けました: desktop", "監視:", "+VOID嵐", "VOID嵐のみ", "不明な候補ID: bad", "不明なルール番号: 99"),
+        (AppLocale::En, "Steel Path", "Survival", "Orokin / 30 min remaining", "Notification request accepted: desktop", "Watch:", "+VOID STORM", "VOID STORM ONLY", "Unknown candidate ID: bad", "Unknown rule index: 99"),
+        (AppLocale::ZhHans, "钢铁之路", "生存", "Orokin / 剩余 30 分钟", "通知请求已接受：desktop", "监视：", "+虚空风暴", "仅虚空风暴", "未知候选项 ID：bad", "未知规则序号：99"),
     ] {
         let payload = notify::desktop_payload_for_locale(&fissure, now, locale);
         assert!(payload.title.contains(hard), "${msg} (hard label: {})", payload.title);
+        // ミッション種別は訳語テーブルで選択言語化し、node・tierは原文を保持する
+        assert!(payload.title.contains(mission), "${msg} (localized mission: {})", payload.title);
+        assert!(
+            payload.title.contains("Axi") && payload.title.contains("Test Node (Void)"),
+            "${msg} (tier/node raw: {})",
+            payload.title
+        );
         assert_eq!(payload.body, body, "${msg} (body)");
         let summary = notify::summarize_test_outcomes_for_locale(
             &[NotificationOutcome::Requested { destination: "desktop" }],
@@ -3977,7 +4013,7 @@ test("${c.id} sidebar fits minimum window", async ({ page }) => {
   for (const id of ["rule-new", "rule-del", "clear-btn"]) {
     await expect(page.locator("#" + id)).toBeVisible();
   }
-  for (const id of ["tier-checks", "mode-checks", "storm-checks", "mission-checks", "planet-checks"]) {
+  for (const id of ["tier-checks", "mode-checks", "storm-checks", "mission-checks", "planet-checks", "faction-checks"]) {
     await expect(page.locator("#" + id)).toBeVisible();
   }
   // launcherは既存パレットをその軸に絞って開く
@@ -4363,6 +4399,23 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
     ).length,
   ).toBe(0);
 
+  // タブ列があふれるときは、あふれている側だけedge fadeヒントを付ける。
+  await page.locator("#content-tabs").evaluate((el) => {
+    el.scrollLeft = 0;
+  });
+  await page.setViewportSize({ width: 720, height: 620 });
+  await expect(page.locator("#content-tabs")).toHaveClass(/scrolled-end/);
+  await expect(page.locator("#content-tabs")).not.toHaveClass(/scrolled-start/);
+  await page.locator("#content-tabs").evaluate((el) => {
+    el.scrollLeft = el.scrollWidth;
+  });
+  await expect(page.locator("#content-tabs")).toHaveClass(/scrolled-start/);
+  await expect(page.locator("#content-tabs")).not.toHaveClass(/scrolled-end/);
+  // 収まる幅ではどちらのヒントも付けない。
+  await page.setViewportSize({ width: 1100, height: 620 });
+  await expect(page.locator("#content-tabs")).not.toHaveClass(/scrolled-start|scrolled-end/);
+  await page.setViewportSize({ width: 960, height: 620 });
+
   // ARIA roving focusは矢印/Home/Endでactive tabと共に移動する。
   await page.locator("#tab-fissures").focus();
   await page.keyboard.press("ArrowRight");
@@ -4478,16 +4531,19 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
 // ${c.id}: ${c.desc}
 test("${c.id} node levels in fissure table", async ({ page }) => {
   await bootConsole(page);
-  // snapshotのnodeLevelsに一致するnodeはLV {min}-{max}を併記する
+  // 鋼(isHard)の亀裂は基底node levelへ+100した範囲を表示する
   const kuva = page.locator("#fissure-rows tr", { hasText: "Taveuni" });
-  await expect(kuva.locator(".col-node .t-level")).toHaveText("LV 32-37");
-  const storm = page.locator("#fissure-rows tr", { hasText: "Nsu Grid" });
-  await expect(storm.locator(".col-node .t-level")).toHaveText("LV 80-90");
-  // 行tooltipにもlevelを含める
-  expect(await kuva.getAttribute("title")).toContain("LV 32-37");
+  await expect(kuva.locator(".col-node .t-level")).toHaveText("LV 132-137");
+  // 通常亀裂は基底levelをそのまま表示する
+  const normal = page.locator("#fissure-rows tr", { hasText: "Hepit" });
+  await expect(normal.locator(".col-node .t-node")).toHaveText("Hepit (Void)");
+  await expect(normal.locator(".col-node .t-level")).toHaveText("LV 10-15");
+  // 行tooltipにも同じ値を含める
+  expect(await kuva.getAttribute("title")).toContain("LV 132-137");
+  expect(await normal.getAttribute("title")).toContain("LV 10-15");
   // lookupにないnodeへはlevelを表示しない(捏造しない)
-  const unknown = page.locator("#fissure-rows tr", { hasText: "Hepit" });
-  await expect(unknown.locator(".col-node .t-node")).toHaveText("Hepit (Void)");
+  const unknown = page.locator("#fissure-rows tr", { hasText: "Nsu Grid" });
+  await expect(unknown.locator(".col-node .t-node")).toHaveText("Nsu Grid (Veil Proxima)");
   await expect(unknown.locator(".col-node .t-level")).toHaveCount(0);
   expect(await unknown.getAttribute("title")).not.toContain("LV");
   // level表示は表示のみ: 設定・通知の変更を呼ばない
@@ -4933,6 +4989,7 @@ use relico_lib::timed;
 const TIERS: &[&str] = &[${rustStrArray(TIER_POOL)}];
 const MISSIONS: &[&str] = &[${rustStrArray(MISSION_POOL)}];
 const PLANETS: &[&str] = &[${rustStrArray(PLANET_POOL)}];
+const FACTIONS: &[&str] = &[${rustStrArray(FACTION_POOL)}];
 const CONTENT_KINDS: &[&str] = &[${rustStrArray(CONTENT_KIND_POOL)}];
 const CONTENT_KEYWORDS: &[&str] = &[${rustStrArray(CONTENT_KEYWORD_POOL)}];
 const CONTENT_STAGE_TITLES: &[&str] = &[${rustStrArray(CONTENT_STAGE_TITLE_POOL)}];
@@ -5005,19 +5062,25 @@ fn arb_rule() -> impl Strategy<Value = WatchRule> {
         arb_subset(TIERS),
         arb_subset(MISSIONS),
         arb_subset(PLANETS),
+        arb_subset(FACTIONS),
         arb_mode(),
         arb_storm_mode(),
     )
-        .prop_map(|(enabled, notify, name, tiers, mission_types, planets, mode, storms)| WatchRule {
-            enabled,
-            notify,
-            name,
-            tiers,
-            mission_types,
-            planets,
-            mode,
-            storms,
-        })
+        .prop_map(
+            |(enabled, notify, name, tiers, mission_types, planets, factions, mode, storms)| {
+                WatchRule {
+                    enabled,
+                    notify,
+                    name,
+                    tiers,
+                    mission_types,
+                    planets,
+                    factions,
+                    mode,
+                    storms,
+                }
+            },
+        )
 }
 
 fn arb_settings() -> impl Strategy<Value = FilterSettings> {
@@ -5034,11 +5097,12 @@ fn arb_fissure() -> impl Strategy<Value = Fissure> {
         proptest::sample::select(TIERS.to_vec()),
         proptest::sample::select(MISSIONS.to_vec()),
         proptest::sample::select(PLANETS.to_vec()),
+        proptest::sample::select(FACTIONS.to_vec()),
         any::<bool>(),
         any::<bool>(),
         -600i64..7200,
     )
-        .prop_map(|(id, tier, mission, planet, is_storm, is_hard, expiry_off)| {
+        .prop_map(|(id, tier, mission, planet, enemy, is_storm, is_hard, expiry_off)| {
             let now = base_now();
             Fissure {
                 id,
@@ -5046,7 +5110,7 @@ fn arb_fissure() -> impl Strategy<Value = Fissure> {
                 expiry: now + Duration::seconds(expiry_off),
                 node: format!("Node ({planet})"),
                 mission_type: mission.to_string(),
-                enemy: "Grineer".to_string(),
+                enemy: enemy.to_string(),
                 tier: tier.to_string(),
                 tier_num: 1,
                 is_storm,

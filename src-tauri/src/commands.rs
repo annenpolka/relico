@@ -80,6 +80,7 @@ pub fn query_candidates(state: State<AppState>, q: String, active: usize) -> Vec
                 Facet::Tier => rule.is_some_and(|ru| ru.tiers.contains(&c.value)),
                 Facet::Mission => rule.is_some_and(|ru| ru.mission_types.contains(&c.value)),
                 Facet::Planet => rule.is_some_and(|ru| ru.planets.contains(&c.value)),
+                Facet::Faction => rule.is_some_and(|ru| ru.factions.contains(&c.value)),
                 Facet::Mode => rule.is_some_and(|ru| {
                     matches!(
                         (&ru.mode, c.value.as_str()),

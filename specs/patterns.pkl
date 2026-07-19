@@ -49,7 +49,7 @@ class RulePassWhenEmpty extends Clause {
   pattern = "rule_pass_when_empty"
   label = "property-tested"
   /// WatchRuleのフィールド名
-  axisField: "tiers" | "mission_types" | "planets"
+  axisField: "tiers" | "mission_types" | "planets" | "factions"
   /// fに合致する値を作るRust式
   matchExpr: String
 }

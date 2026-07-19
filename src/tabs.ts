@@ -89,6 +89,18 @@ function onTabKeydown(event: KeyboardEvent): void {
   activateContentTab(next, true);
 }
 
+/** あふれている側だけedge fadeヒントを付け、スクロール可能な方向を示す(RND-010) */
+function updateTabOverflowHints(tablist: HTMLElement): void {
+  // リサイズ時のscrollLeftクランプはscrollイベントを発火しないことがあるため、
+  // 収まっている場合はscrollLeftに依らず両ヒントを外す
+  const overflowing = tablist.scrollWidth > tablist.clientWidth + 1;
+  tablist.classList.toggle("scrolled-start", overflowing && tablist.scrollLeft > 1);
+  tablist.classList.toggle(
+    "scrolled-end",
+    overflowing && tablist.scrollLeft + tablist.clientWidth < tablist.scrollWidth - 1,
+  );
+}
+
 export function initContentTabs(change?: (tab: ContentTabId) => void): void {
   onChange = change;
   for (const { id } of CONTENT_TABS) {
@@ -96,6 +108,17 @@ export function initContentTabs(change?: (tab: ContentTabId) => void): void {
     if (!button) continue;
     button.addEventListener("click", () => activateContentTab(id));
     button.addEventListener("keydown", onTabKeydown);
+  }
+  const tablist = document.getElementById("content-tabs");
+  if (tablist) {
+    const update = () => updateTabOverflowHints(tablist);
+    tablist.addEventListener("scroll", update, { passive: true });
+    // resize直後はflex再レイアウト前のことがあるため、次フレームでも再評価する
+    window.addEventListener("resize", () => {
+      update();
+      requestAnimationFrame(update);
+    });
+    update();
   }
   activateContentTab("fissures");
 }

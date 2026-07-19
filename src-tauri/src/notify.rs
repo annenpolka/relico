@@ -33,10 +33,9 @@ pub fn title_for(fissure: &Fissure) -> String {
 }
 
 pub fn title_for_locale(fissure: &Fissure, locale: AppLocale) -> String {
-    let mut title = format!(
-        "{} {} — {}",
-        fissure.tier, fissure.mission_type, fissure.node
-    );
+    // ミッション種別は訳語テーブルで選択言語化し、tier・nodeの固有名詞は原文を保持する
+    let mission = i18n::term(locale, "term.mission", &fissure.mission_type);
+    let mut title = format!("{} {} — {}", fissure.tier, mission, fissure.node);
     if fissure.is_hard {
         title.push_str(&format!(" 【{}】", i18n::text(locale, "notify.hard")));
     }
@@ -67,7 +66,7 @@ pub fn desktop_payload_for_locale(
             locale,
             "notify.remaining",
             &[
-                ("faction", &fissure.enemy),
+                ("faction", &i18n::term(locale, "term.faction", &fissure.enemy)),
                 ("minutes", &remaining_min.to_string()),
             ],
         ),
@@ -104,6 +103,8 @@ pub fn content_title_for_locale(card: &TimedContent, locale: AppLocale) -> Strin
         .map(|stage| stage.title.as_str())
         .filter(|title| !title.trim().is_empty())
         .unwrap_or(card.title.as_str());
+    // 既知ミッション種別だけ訳語化され、テーブルにないtitleは原文が返る
+    let subject = i18n::term(locale, "term.mission", subject);
     format!("{label} — {subject}")
 }
 
@@ -434,7 +435,7 @@ pub async fn discord_for_locale(
                 locale,
                 "notify.discordExpiry",
                 &[
-                    ("faction", &fissure.enemy),
+                    ("faction", &i18n::term(locale, "term.faction", &fissure.enemy)),
                     ("timestamp", &format!("<t:{}:R>", fissure.expiry.timestamp())),
                 ],
             ),

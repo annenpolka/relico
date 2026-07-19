@@ -11,6 +11,7 @@ pub enum Facet {
     Tier,
     Mission,
     Planet,
+    Faction,
     Mode,
     Storm,
     Action,
@@ -29,65 +30,99 @@ pub struct Candidate {
 
 pub const TIERS: &[&str] = &["Lith", "Meso", "Neo", "Axi", "Requiem", "Omnia"];
 
-// 日本語aliasは暫定(日本語クライアントの正式訳の確認が要る)。ローマ字・略語併記
+// 日本語alias + ローマ字(ヘボン式・長音省略/母音連続の両方)・略語を併記する。
+// IMEなしでも日本語語彙を引けるようにするための語彙データで、FZY条項が機械検証する
 const MISSIONS: &[(&str, &[&str])] = &[
     (
         "Survival",
         &["耐久", "生存", "taikyu", "taikyuu", "seizon", "surv"],
     ),
-    ("Defense", &["防衛", "boei", "def"]),
-    ("Mobile Defense", &["モバイル防衛", "md"]),
+    ("Defense", &["防衛", "boei", "bouei", "def"]),
+    (
+        "Mobile Defense",
+        &["モバイル防衛", "mobairuboei", "mobairubouei", "mobairu", "md"],
+    ),
     ("Capture", &["確保", "kakuho", "cap"]),
-    ("Extermination", &["掃滅", "soumetsu", "ext"]),
-    ("Rescue", &["救出", "kyushutsu"]),
-    ("Sabotage", &["妨害", "bougai", "sab"]),
-    ("Spy", &["潜入", "sennyu"]),
+    ("Extermination", &["掃滅", "soumetsu", "sometsu", "ext"]),
+    ("Rescue", &["救出", "kyushutsu", "kyuushutsu"]),
+    ("Sabotage", &["妨害", "bougai", "bogai", "sab"]),
+    ("Spy", &["潜入", "sennyu", "sennyuu"]),
     (
         "Disruption",
         &["分裂", "ディスラプション", "bunretsu", "kakuran", "dis"],
     ),
     ("Excavation", &["発掘", "hakkutsu", "exc"]),
-    ("Interception", &["傍受", "boju", "int"]),
-    ("Hijack", &["ハイジャック"]),
-    ("Assault", &["アサルト"]),
-    ("Defection", &["離反"]),
-    ("Infested Salvage", &["感染回収"]),
-    ("Hive", &["ハイブ"]),
-    ("Alchemy", &["アルケミー", "alc"]),
-    ("Void Flood", &["ボイドフラッド", "vf"]),
-    ("Void Cascade", &["ボイドカスケード", "vc"]),
-    ("Void Armageddon", &["ボイドアルマゲドン", "va"]),
-    ("Volatile", &["ボラタイル", "vol"]),
-    ("Skirmish", &["スカーミッシュ"]),
-    ("Orphix", &["オルフィクス"]),
+    ("Interception", &["傍受", "boju", "bouju", "int"]),
+    ("Hijack", &["ハイジャック", "haijakku"]),
+    ("Assault", &["アサルト", "asaruto"]),
+    ("Defection", &["離反", "rihan"]),
+    (
+        "Infested Salvage",
+        &["感染回収", "kansenkaishu", "kansenkaishuu", "kansen"],
+    ),
+    ("Hive", &["ハイブ", "haibu"]),
+    ("Alchemy", &["アルケミー", "arukemi", "arukemii", "alc"]),
+    ("Void Flood", &["ボイドフラッド", "furaddo", "boidofuraddo", "vf"]),
+    (
+        "Void Cascade",
+        &["ボイドカスケード", "kasukedo", "kasukeedo", "boidokasukedo", "vc"],
+    ),
+    (
+        "Void Armageddon",
+        &["ボイドアルマゲドン", "arumagedon", "boidoarumagedon", "va"],
+    ),
+    ("Volatile", &["ボラタイル", "boratairu", "vol"]),
+    ("Skirmish", &["スカーミッシュ", "sukamisshu", "sukaamisshu"]),
+    ("Orphix", &["オルフィクス", "orufikusu"]),
 ];
 
 const PLANETS: &[(&str, &[&str])] = &[
     ("Mercury", &["水星", "suisei"]),
     ("Venus", &["金星", "kinsei"]),
-    ("Earth", &["地球", "chikyu"]),
-    ("Lua", &["ルア"]),
+    ("Earth", &["地球", "chikyu", "chikyuu"]),
+    ("Lua", &["ルア", "rua"]),
     ("Mars", &["火星", "kasei"]),
-    ("Phobos", &["フォボス"]),
-    ("Deimos", &["ダイモス"]),
-    ("Ceres", &["ケレス", "seresu"]),
+    ("Phobos", &["フォボス", "fobosu"]),
+    ("Deimos", &["ダイモス", "daimosu"]),
+    ("Ceres", &["ケレス", "seresu", "keresu"]),
     ("Jupiter", &["木星", "mokusei"]),
-    ("Europa", &["エウロパ"]),
+    ("Europa", &["エウロパ", "europa"]),
     ("Saturn", &["土星", "dosei"]),
-    ("Uranus", &["天王星", "tennousei"]),
-    ("Neptune", &["海王星", "kaiousei"]),
-    ("Pluto", &["冥王星", "meiousei"]),
-    ("Sedna", &["セドナ", "sedona"]),
-    ("Eris", &["エリス"]),
-    ("Void", &["ボイド"]),
-    ("Kuva Fortress", &["クバ要塞", "kuva"]),
-    ("Zariman", &["ザリマン"]),
-    ("Earth Proxima", &["地球プロキシマ"]),
-    ("Venus Proxima", &["金星プロキシマ"]),
-    ("Saturn Proxima", &["土星プロキシマ"]),
-    ("Neptune Proxima", &["海王星プロキシマ"]),
-    ("Pluto Proxima", &["冥王星プロキシマ"]),
-    ("Veil Proxima", &["ヴェール", "veil"]),
+    ("Uranus", &["天王星", "tennousei", "tennosei"]),
+    ("Neptune", &["海王星", "kaiousei", "kaiosei"]),
+    ("Pluto", &["冥王星", "meiousei", "meiosei"]),
+    ("Sedna", &["セドナ", "sedona", "sedna"]),
+    ("Eris", &["エリス", "erisu"]),
+    ("Void", &["ボイド", "boido"]),
+    (
+        "Kuva Fortress",
+        &["クバ要塞", "kuva", "kuba", "kubayousai", "kubayosai"],
+    ),
+    ("Zariman", &["ザリマン", "zariman"]),
+    ("Earth Proxima", &["地球プロキシマ", "chikyupurokishima", "purokishima"]),
+    ("Venus Proxima", &["金星プロキシマ", "kinseipurokishima", "purokishima"]),
+    ("Saturn Proxima", &["土星プロキシマ", "doseipurokishima", "purokishima"]),
+    (
+        "Neptune Proxima",
+        &["海王星プロキシマ", "kaiouseipurokishima", "purokishima"],
+    ),
+    (
+        "Pluto Proxima",
+        &["冥王星プロキシマ", "meiouseipurokishima", "purokishima"],
+    ),
+    ("Veil Proxima", &["ヴェール", "veil", "veru", "beru", "purokishima"]),
+];
+
+/// 陣営(APIのenemy値)。日本語alias + ローマ字併記。SPEC: FLT-016
+const FACTIONS: &[(&str, &[&str])] = &[
+    ("Grineer", &["グリニア", "gurinia"]),
+    ("Corpus", &["コーパス", "kopasu", "koopasu"]),
+    ("Infested", &["感染体", "kansentai", "kansen"]),
+    ("Orokin", &["オロキン", "orokin"]),
+    ("Corrupted", &["コラプト", "koraputo", "堕落"]),
+    ("The Murmur", &["ザ・マーマー", "マーマー", "mama", "maamaa"]),
+    ("Crossfire", &["クロスファイア", "混戦", "kurosufaia"]),
+    ("Narmer", &["ナルメル", "narumeru"]),
 ];
 
 /// content_filterのキーワード正準化が参照するミッション語彙(label + aliases)。
@@ -174,96 +209,165 @@ pub fn catalog() -> Vec<Candidate> {
             facet: Facet::Planet,
         });
     }
+    for (f, aliases) in FACTIONS {
+        out.push(Candidate {
+            id: format!("faction:{f}"),
+            label: f.to_string(),
+            value: f.to_string(),
+            aliases: aliases.iter().map(|s| s.to_string()).collect(),
+            facet: Facet::Faction,
+        });
+    }
     for (label, value, aliases) in [
-        ("NEW RULE", "new-rule", vec!["新ルール", "rule", ";"]),
-        ("DELETE RULE", "delete-rule", vec!["ルール削除", "delrule"]),
+        (
+            "NEW RULE",
+            "new-rule",
+            vec!["新ルール", "rule", ";", "shinki", "ruuru", "shinruuru"],
+        ),
+        (
+            "DELETE RULE",
+            "delete-rule",
+            vec!["ルール削除", "delrule", "sakujo", "ruurusakujo"],
+        ),
         (
             "RENAME RULE",
             "rename-rule",
-            vec!["改名", "名前変更", "rename", "name"],
+            vec!["改名", "名前変更", "rename", "name", "kaimei", "namae", "namaehenko"],
         ),
         (
             "TOGGLE VIEW",
             "toggle-rule",
-            vec!["表示切替", "表示トグル", "toggle view", "onoff"],
+            vec!["表示切替", "表示トグル", "toggle view", "onoff", "hyoji", "hyouji", "kirikae"],
         ),
         (
             "TOGGLE NOTIFY",
             "notify-rule",
-            vec!["ミュート", "通知切替", "mute", "notify"],
+            vec!["ミュート", "通知切替", "mute", "notify", "tsuchi", "tsuuchi", "myuto"],
         ),
         (
             "DESELECT ALL RULES",
             "deselect-all-rules",
-            vec!["全ルール解除", "全表示解除", "表示ルール全解除", "show all"],
+            vec![
+                "全ルール解除",
+                "全表示解除",
+                "表示ルール全解除",
+                "show all",
+                "kaijo",
+                "zenkaijo",
+            ],
         ),
-        ("CLEAR", "clear", vec!["クリア", "リセット", "reset"]),
-        ("PAUSE / RESUME", "pause", vec!["一時停止", "teishi"]),
+        ("CLEAR", "clear", vec!["クリア", "リセット", "reset", "kuria", "risetto"]),
+        (
+            "PAUSE / RESUME",
+            "pause",
+            vec!["一時停止", "teishi", "ichijiteishi", "pozu", "saikai"],
+        ),
         // 亀裂表の項目別ソート(表示のみ。適用はフロント側でRND-007の結線を通る)
-        ("SORT BY TIER", "sort-tier", vec!["ソート", "並べ替え", "ティア順"]),
-        ("SORT BY NODE", "sort-node", vec!["ソート", "並べ替え", "ノード順"]),
+        (
+            "SORT BY TIER",
+            "sort-tier",
+            vec!["ソート", "並べ替え", "ティア順", "sooto", "narabikae", "tia"],
+        ),
+        (
+            "SORT BY NODE",
+            "sort-node",
+            vec!["ソート", "並べ替え", "ノード順", "sooto", "narabikae", "nodo"],
+        ),
         (
             "SORT BY MISSION",
             "sort-mission",
-            vec!["ソート", "並べ替え", "ミッション順"],
+            vec!["ソート", "並べ替え", "ミッション順", "sooto", "narabikae", "misshon"],
         ),
         (
             "SORT BY FACTION",
             "sort-faction",
-            vec!["ソート", "並べ替え", "勢力順", "ファクション順"],
+            vec![
+                "ソート",
+                "並べ替え",
+                "勢力順",
+                "ファクション順",
+                "sooto",
+                "narabikae",
+                "seiryoku",
+            ],
         ),
         (
             "SORT BY T-REMAIN",
             "sort-timer",
-            vec!["ソート", "並べ替え", "残り時間順", "時間順"],
+            vec![
+                "ソート",
+                "並べ替え",
+                "残り時間順",
+                "時間順",
+                "sooto",
+                "narabikae",
+                "jikan",
+                "nokorijikan",
+            ],
         ),
         (
             "SORT BY MODE",
             "sort-mode",
-            vec!["ソート", "並べ替え", "モード順", "難易度順"],
+            vec!["ソート", "並べ替え", "モード順", "難易度順", "sooto", "narabikae", "modo"],
         ),
         (
             "SORT BY STORM",
             "sort-storm",
-            vec!["ソート", "並べ替え", "嵐順", "ストーム順"],
+            vec![
+                "ソート",
+                "並べ替え",
+                "嵐順",
+                "ストーム順",
+                "sooto",
+                "narabikae",
+                "arashi",
+            ],
         ),
         // コンテンツタブ切替(表示のみ。適用はフロント側でRND-010の結線を通る)
-        ("GO TO FISSURES", "tab-fissures", vec!["タブ", "tab", "亀裂"]),
+        (
+            "GO TO FISSURES",
+            "tab-fissures",
+            vec!["タブ", "tab", "亀裂", "tabu", "kiretsu"],
+        ),
         (
             "GO TO ARBITRATION",
             "tab-arbitration",
-            vec!["タブ", "tab", "仲裁", "アービトレーション"],
+            vec!["タブ", "tab", "仲裁", "アービトレーション", "tabu", "chusai", "chuusai"],
         ),
-        ("GO TO SORTIE", "tab-sortie", vec!["タブ", "tab", "ソーティー"]),
+        (
+            "GO TO SORTIE",
+            "tab-sortie",
+            vec!["タブ", "tab", "ソーティー", "tabu", "soti", "sooti"],
+        ),
         (
             "GO TO ARCHON HUNT",
             "tab-archon",
-            vec!["タブ", "tab", "アルコン", "討伐戦"],
+            vec!["タブ", "tab", "アルコン", "討伐戦", "tabu", "arukon", "tobatsu"],
         ),
         (
             "GO TO SYNDICATES",
             "tab-syndicates",
-            vec!["タブ", "tab", "シンジケート"],
+            vec!["タブ", "tab", "シンジケート", "tabu", "shinjiketo", "shinjikeeto"],
         ),
         (
             "GO TO AREA MISSIONS",
             "tab-area-missions",
-            vec!["タブ", "tab", "地位ミッション", "エリア", "依頼"],
+            vec!["タブ", "tab", "地位ミッション", "エリア", "依頼", "tabu", "eria", "irai"],
         ),
         (
             "GO TO CIRCUIT",
             "tab-circuit",
-            vec!["タブ", "tab", "サーキット", "回廊"],
+            vec!["タブ", "tab", "サーキット", "回廊", "tabu", "sakitto", "saakitto", "kairo"],
         ),
         (
             "GO TO ARCHIMEDEA",
             "tab-archimedea",
-            vec!["タブ", "tab", "アルキメデア"],
+            vec!["タブ", "tab", "アルキメデア", "tabu", "arukimedea"],
         ),
         (
             "GO TO DESCENDIA",
             "tab-descendia",
-            vec!["タブ", "tab", "ディセンディア"],
+            vec!["タブ", "tab", "ディセンディア", "tabu", "disendia", "deisendia"],
         ),
     ] {
         out.push(Candidate {
@@ -283,7 +387,7 @@ pub fn catalog_with_rules(rules: &[WatchRule]) -> Vec<Candidate> {
     let mut out = catalog();
     for (i, rule) in rules.iter().enumerate() {
         let fallback = format!("R{}", i + 1);
-        let mut aliases = vec!["rule".to_string(), rule_summary(rule)];
+        let mut aliases = vec!["rule".to_string(), "ruuru".to_string(), rule_summary(rule)];
         if rule.name.is_some() {
             aliases.push(fallback.clone());
         }
@@ -578,6 +682,7 @@ enum Axis {
     Tiers,
     Missions,
     Planets,
+    Factions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -592,6 +697,7 @@ fn axis_members(rule: &WatchRule, axis: Axis) -> &Vec<String> {
         Axis::Tiers => &rule.tiers,
         Axis::Missions => &rule.mission_types,
         Axis::Planets => &rule.planets,
+        Axis::Factions => &rule.factions,
     }
 }
 
@@ -600,6 +706,7 @@ fn set_axis(rule: &mut WatchRule, axis: Axis, members: Vec<String>) {
         Axis::Tiers => rule.tiers = members,
         Axis::Missions => rule.mission_types = members,
         Axis::Planets => rule.planets = members,
+        Axis::Factions => rule.factions = members,
     }
 }
 
@@ -608,6 +715,7 @@ fn toggle_member(rule: &mut WatchRule, axis: Axis, value: &str) {
         Axis::Tiers => &mut rule.tiers,
         Axis::Missions => &mut rule.mission_types,
         Axis::Planets => &mut rule.planets,
+        Axis::Factions => &mut rule.factions,
     };
     if let Some(pos) = members.iter().position(|m| m == value) {
         members.remove(pos);
@@ -678,6 +786,11 @@ pub fn apply(state: &mut EditorState, cand: &Candidate) {
         Facet::Planet => {
             toggle_member(rule, Axis::Planets, &cand.value);
             Changed::Axis(Axis::Planets)
+        }
+        // 陣営はドメイン互換表で無制約(どの組合せとも共存)なので上書き解決を誘発しない
+        Facet::Faction => {
+            toggle_member(rule, Axis::Factions, &cand.value);
+            Changed::Axis(Axis::Factions)
         }
         Facet::Mode => {
             rule.mode = match cand.value.as_str() {
@@ -800,6 +913,9 @@ pub fn rule_summary(rule: &WatchRule) -> String {
     }
     if !rule.planets.is_empty() {
         s.push_str(&format!("/P{}", rule.planets.len()));
+    }
+    if !rule.factions.is_empty() {
+        s.push_str(&format!("/F{}", rule.factions.len()));
     }
     match rule.storms {
         StormMode::Exclude => {}

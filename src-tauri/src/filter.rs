@@ -72,6 +72,8 @@ pub struct WatchRule {
     pub tiers: Vec<String>,
     pub mission_types: Vec<String>,
     pub planets: Vec<String>,
+    /// 陣営(APIのenemy値)。空なら全陣営対象。SPEC: FLT-016
+    pub factions: Vec<String>,
     pub mode: Mode,
     #[serde(alias = "includeStorms", alias = "include_storms")]
     pub storms: StormMode,
@@ -86,6 +88,7 @@ impl Default for WatchRule {
             tiers: vec![],
             mission_types: vec![],
             planets: vec![],
+            factions: vec![],
             mode: Mode::Both,
             storms: StormMode::Exclude,
         }
@@ -103,6 +106,7 @@ struct WatchRuleWire {
     tiers: Vec<String>,
     mission_types: Vec<String>,
     planets: Vec<String>,
+    factions: Vec<String>,
     mode: Mode,
     #[serde(alias = "includeStorms", alias = "include_storms")]
     storms: StormMode,
@@ -118,6 +122,7 @@ impl Default for WatchRuleWire {
             tiers: rule.tiers,
             mission_types: rule.mission_types,
             planets: rule.planets,
+            factions: rule.factions,
             mode: rule.mode,
             storms: rule.storms,
         }
@@ -137,6 +142,7 @@ impl<'de> Deserialize<'de> for WatchRule {
             tiers: wire.tiers,
             mission_types: wire.mission_types,
             planets: wire.planets,
+            factions: wire.factions,
             mode: wire.mode,
             storms: wire.storms,
         })
@@ -193,6 +199,9 @@ pub fn rule_matches(rule: &WatchRule, fissure: &Fissure) -> bool {
         return false;
     }
     if !rule.mission_types.is_empty() && !rule.mission_types.contains(&fissure.mission_type) {
+        return false;
+    }
+    if !rule.factions.is_empty() && !rule.factions.contains(&fissure.enemy) {
         return false;
     }
     if !rule.planets.is_empty() {
