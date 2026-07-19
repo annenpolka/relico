@@ -41,7 +41,7 @@ export function getActiveContentTab(): ContentTabId {
   return activeTab;
 }
 
-export function activateContentTab(id: ContentTabId, focus = false): void {
+export function activateContentTab(id: ContentTabId, focus = false, emitChange = true): void {
   activeTab = id;
   for (const candidate of CONTENT_TAB_IDS) {
     const selected = candidate === id;
@@ -58,7 +58,8 @@ export function activateContentTab(id: ContentTabId, focus = false): void {
   const selectedButton = tabButton(id);
   selectedButton?.scrollIntoView({ block: "nearest", inline: "nearest" });
   if (focus) selectedButton?.focus();
-  onChange?.(id);
+  // 検索条件変更に伴う自動切替(RND-015)はonChange(パレットを閉じる)を発火しない
+  if (emitChange) onChange?.(id);
 }
 
 function offsetTab(offset: number, focus: boolean): void {

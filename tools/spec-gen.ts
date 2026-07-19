@@ -56,6 +56,7 @@ type Clause = {
     | "locale_display"
     | "node_levels"
     | "content_alerts"
+    | "filter_auto_tab"
     | "palette_apply_ipc"
     | "delivery_error_surface"
     | "locale_config_roundtrip";
@@ -4622,6 +4623,40 @@ test("${c.id} content alerts", async ({ page }) => {
       ["set_rule_enabled", "set_rule_notify", "apply_candidate", "clear_filter"].includes(entry.cmd),
     ),
   ).toHaveLength(0);
+});`;
+    case "filter_auto_tab":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} filter change reveals fissures tab", async ({ page }) => {
+  await bootConsole(page);
+  const activeTab = () => page.locator('#content-tabs [role="tab"][aria-selected="true"]');
+  // 亀裂以外のタブでfilter候補を適用すると亀裂タブへ自動で切り替わり、パレットは開いたまま
+  await page.keyboard.press("Meta+2");
+  await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
+  await page.keyboard.press("a");
+  await page.locator("#palette-input").fill("axi");
+  await page.keyboard.press("Enter");
+  await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await page.keyboard.press("Escape");
+  // 通知トグルは検索条件ではないので切り替えない
+  await page.keyboard.press("Meta+2");
+  await page.locator(".rule-row .rule-notify").first().click();
+  await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
+  // ルール行のVIEW選択トグルは切り替える
+  await page.locator(".rule-row .rule-toggle").first().click();
+  await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
+  // SORTコマンドは表示のみで検索条件ではないので切り替えない
+  await page.keyboard.press("Meta+2");
+  await page.keyboard.press("s");
+  await page.locator("#palette-input").fill("sort by node");
+  await page.keyboard.press("Enter");
+  await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
+  await page.keyboard.press("Escape");
+  // CLEARの2度押し実行は切り替える
+  await page.locator("#clear-btn").click();
+  await page.locator("#clear-btn").click();
+  await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
 });`;
     case "mute_window":
       return `

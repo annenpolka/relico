@@ -703,6 +703,39 @@ test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   await expect(page.locator(".timed-progress-note")).toHaveCount(0);
 });
 
+// RND-015: 亀裂の検索条件を変更する操作が成功したとき、コンテンツタブが亀裂以外なら亀裂タブへ自動で切り替える。対象はfilter候補(tier/mission/planet/faction/mode/storm)の適用、RULE候補とルール行・SpaceによるVIEW選択トグル、DESELECT ALL RULES、DELETE RULE、CLEAR。パレット経由の適用では自動切替してもパレットを閉じず連続入力を妨げない。通知トグル・改名・NEW RULEの空draft追加・SORT/GO TOコマンド・contentRules編集・配送設定では切り替えない(renderer統合)
+test("RND-015 filter change reveals fissures tab", async ({ page }) => {
+  await bootConsole(page);
+  const activeTab = () => page.locator('#content-tabs [role="tab"][aria-selected="true"]');
+  // 亀裂以外のタブでfilter候補を適用すると亀裂タブへ自動で切り替わり、パレットは開いたまま
+  await page.keyboard.press("Meta+2");
+  await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
+  await page.keyboard.press("a");
+  await page.locator("#palette-input").fill("axi");
+  await page.keyboard.press("Enter");
+  await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await page.keyboard.press("Escape");
+  // 通知トグルは検索条件ではないので切り替えない
+  await page.keyboard.press("Meta+2");
+  await page.locator(".rule-row .rule-notify").first().click();
+  await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
+  // ルール行のVIEW選択トグルは切り替える
+  await page.locator(".rule-row .rule-toggle").first().click();
+  await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
+  // SORTコマンドは表示のみで検索条件ではないので切り替えない
+  await page.keyboard.press("Meta+2");
+  await page.keyboard.press("s");
+  await page.locator("#palette-input").fill("sort by node");
+  await page.keyboard.press("Enter");
+  await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
+  await page.keyboard.press("Escape");
+  // CLEARの2度押し実行は切り替える
+  await page.locator("#clear-btn").click();
+  await page.locator("#clear-btn").click();
+  await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
+});
+
 // RND-014: DELIVERYパネルのCONTENT ALERTS UIは、種別選択(すべて/仲裁/ソーティー/アルコン/エリア/サーキット/アルキメデア/ディセンディア)・キーワード・LV下限の追加フォームからcontentRulesの行を追加し、行の通知トグルはそのルールのnotifyだけを、削除ボタンはそのルールの除去だけをset_config(contentRules)へ保存する。エリア選択はkinds=[area-mission, area-objective, bounty]へ展開される。これらの操作は亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュート設定を変更しない(renderer統合)
 test("RND-014 content alerts", async ({ page }) => {
   await bootConsole(page, { locale: "en" });

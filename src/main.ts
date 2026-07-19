@@ -19,6 +19,7 @@ import {
 import {
   activateContentTab,
   CONTENT_TAB_IDS,
+  getActiveContentTab,
   handleContentTabShortcut,
   initContentTabs,
   type ContentTabId,
@@ -100,6 +101,24 @@ async function refreshCatalog() {
   catalogView = await invoke<CandView[]>("query_candidates", { q: "", active: editingRuleIndex });
 }
 
+/** 亀裂の検索条件(表示に効く条件・VIEW選択)を変更する候補か。RND-015 */
+function isFilterMutation(id: string): boolean {
+  return (
+    ["tier:", "mission:", "planet:", "faction:", "mode:", "storm:", "rule:"].some((prefix) =>
+      id.startsWith(prefix),
+    ) ||
+    id === "action:toggle-rule" ||
+    id === "action:deselect-all-rules" ||
+    id === "action:delete-rule" ||
+    id === "action:clear"
+  );
+}
+
+/** 検索条件の変更後は結果が見える亀裂タブへ寄せる。パレットは閉じない(RND-015) */
+function revealFissuresTab() {
+  if (getActiveContentTab() !== "fissures") activateContentTab("fissures", false, false);
+}
+
 async function applyCand(id: string) {
   try {
     const res = await invoke<ApplyResult>("apply_candidate", { id, active: editingRuleIndex });
@@ -108,6 +127,7 @@ async function applyCand(id: string) {
     await refreshCatalog();
     renderRail();
     renderStatusbar();
+    if (isFilterMutation(id)) revealFissuresTab();
   } catch (e) {
     railMsg(String(e), "err");
   }
@@ -121,6 +141,7 @@ async function setRuleEnabled(index: number, enabled: boolean) {
     renderRail();
     renderTable();
     renderStatusbar();
+    revealFissuresTab();
   } catch (e) {
     railMsg(String(e), "err");
   }
@@ -1575,6 +1596,7 @@ async function clearFilter() {
     await refreshCatalog();
     renderRail();
     renderStatusbar();
+    revealFissuresTab();
     railMsg(t("common.resetDone"), "ok");
   } catch (e) {
     railMsg(String(e), "err");

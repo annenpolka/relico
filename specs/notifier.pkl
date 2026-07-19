@@ -401,6 +401,11 @@ clauses: Listing<patterns.Clause> = new {
     scenario = "content_tabs"
   }
   new patterns.RendererScenario {
+    id = "RND-015"
+    desc = "亀裂の検索条件を変更する操作が成功したとき、コンテンツタブが亀裂以外なら亀裂タブへ自動で切り替える。対象はfilter候補(tier/mission/planet/faction/mode/storm)の適用、RULE候補とルール行・SpaceによるVIEW選択トグル、DESELECT ALL RULES、DELETE RULE、CLEAR。パレット経由の適用では自動切替してもパレットを閉じず連続入力を妨げない。通知トグル・改名・NEW RULEの空draft追加・SORT/GO TOコマンド・contentRules編集・配送設定では切り替えない(renderer統合)"
+    scenario = "filter_auto_tab"
+  }
+  new patterns.RendererScenario {
     id = "RND-014"
     desc = "DELIVERYパネルのCONTENT ALERTS UIは、種別選択(すべて/仲裁/ソーティー/アルコン/エリア/サーキット/アルキメデア/ディセンディア)・キーワード・LV下限の追加フォームからcontentRulesの行を追加し、行の通知トグルはそのルールのnotifyだけを、削除ボタンはそのルールの除去だけをset_config(contentRules)へ保存する。エリア選択はkinds=[area-mission, area-objective, bounty]へ展開される。これらの操作は亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュート設定を変更しない(renderer統合)"
     scenario = "content_alerts"
