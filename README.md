@@ -60,4 +60,4 @@ src-tauri/      Rustコア(ポーリング・フィルタ・通知・トレイ)
 src/            設定UI(Vite + TypeScript、OPS CONSOLEデザイン)
 ```
 
-設計の詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)、外部通知とUIのE2E境界は [docs/E2E.md](docs/E2E.md) を参照。
+設計の詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)、外部通知とUIのE2E境界は [docs/E2E.md](docs/E2E.md)、Windows対応の現状と実装計画は [docs/WINDOWS.md](docs/WINDOWS.md) を参照。
