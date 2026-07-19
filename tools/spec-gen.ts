@@ -5130,6 +5130,7 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
       return `
 // ${c.id}: ${c.desc}
 test("${c.id} node levels in fissure table", async ({ page }) => {
+  await page.setViewportSize({ width: 720, height: 620 });
   await bootConsole(page);
   // 鋼(isHard)の亀裂は基底node levelへ+100した範囲を表示する
   const kuva = page.locator("#fissure-rows tr", { hasText: "Taveuni" });
@@ -5138,6 +5139,17 @@ test("${c.id} node levels in fissure table", async ({ page }) => {
   const normal = page.locator("#fissure-rows tr", { hasText: "Hepit" });
   await expect(normal.locator(".col-node .t-node")).toHaveText("Hepit (Void)");
   await expect(normal.locator(".col-node .t-level")).toHaveText("LV 10-15");
+  // NODE列の幅が足りない場合はlevelを先に省略し、node名を優先する
+  const kuvaNode = kuva.locator(".col-node .t-node");
+  const kuvaLevel = kuva.locator(".col-node .t-level");
+  expect(await kuvaNode.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  expect(
+    await kuvaNode.evaluate((el) => {
+      const parent = el.parentElement;
+      return parent !== null && el.getBoundingClientRect().right <= parent.getBoundingClientRect().right + 1;
+    }),
+  ).toBe(true);
+  expect(await kuvaLevel.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
   // 行tooltipにも同じ値を含める
   expect(await kuva.getAttribute("title")).toContain("LV 132-137");
   expect(await normal.getAttribute("title")).toContain("LV 10-15");

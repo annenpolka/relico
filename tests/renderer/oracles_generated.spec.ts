@@ -979,8 +979,9 @@ test("RND-014 per-tab rule management", async ({ page }) => {
   await expect(page.locator("#mute-check")).toHaveAttribute("aria-pressed", "false");
 });
 
-// RND-013: 亀裂表のNODE列はbackend snapshotのnodeLevels(ExportRegions由来)に表示名が一致するnodeへLV {min}-{max}を併記し、鋼(isHard)の亀裂は基底levelへ+100した範囲を表示する。行tooltipにも同じ値を含める。lookupにないnodeへはlevelを表示せず捏造しない。level表示は表示のみで設定・通知を変えない(renderer統合)
+// RND-013: 亀裂表のNODE列はbackend snapshotのnodeLevels(ExportRegions由来)に表示名が一致するnodeへLV {min}-{max}を併記し、鋼(isHard)の亀裂は基底levelへ+100した範囲を表示する。NODE列の表示幅が足りない場合はnode名をlevelより優先し、level側を先に省略する。行tooltipにはnode名とlevelの完全な値を含める。lookupにないnodeへはlevelを表示せず捏造しない。level表示は表示のみで設定・通知を変えない(renderer統合)
 test("RND-013 node levels in fissure table", async ({ page }) => {
+  await page.setViewportSize({ width: 720, height: 620 });
   await bootConsole(page);
   // 鋼(isHard)の亀裂は基底node levelへ+100した範囲を表示する
   const kuva = page.locator("#fissure-rows tr", { hasText: "Taveuni" });
@@ -989,6 +990,17 @@ test("RND-013 node levels in fissure table", async ({ page }) => {
   const normal = page.locator("#fissure-rows tr", { hasText: "Hepit" });
   await expect(normal.locator(".col-node .t-node")).toHaveText("Hepit (Void)");
   await expect(normal.locator(".col-node .t-level")).toHaveText("LV 10-15");
+  // NODE列の幅が足りない場合はlevelを先に省略し、node名を優先する
+  const kuvaNode = kuva.locator(".col-node .t-node");
+  const kuvaLevel = kuva.locator(".col-node .t-level");
+  expect(await kuvaNode.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  expect(
+    await kuvaNode.evaluate((el) => {
+      const parent = el.parentElement;
+      return parent !== null && el.getBoundingClientRect().right <= parent.getBoundingClientRect().right + 1;
+    }),
+  ).toBe(true);
+  expect(await kuvaLevel.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
   // 行tooltipにも同じ値を含める
   expect(await kuva.getAttribute("title")).toContain("LV 132-137");
   expect(await normal.getAttribute("title")).toContain("LV 10-15");

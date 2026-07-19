@@ -617,10 +617,16 @@ td .flag > span:last-child {
   white-space: nowrap;
 }
 
-/* NODE列のlevel併記。ノード名がellipsisしてもlevelは常に読める。RND-013 */
+td .icon-label > .t-node {
+  flex-shrink: 0;
+}
+
+/* NODE列のlevel併記。幅不足時はlevelを先に縮め、ノード名を優先する。RND-013 */
 td .icon-label > .t-level {
-  flex: 0 0 auto;
-  min-width: max-content;
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--dim);
   font-size: 9.5px;
   letter-spacing: 0.04em;
