@@ -85,9 +85,12 @@
 | STA-002 | `static_check` | example-tested | トレイは専用tray-icon.pngをテンプレート画像として登録する配線を持ち、PNGはモノクロ(+アルファ)形式である |
 | STA-003 | `static_check` | example-tested | macOS AUTOSTARTは内部のUnix実行ファイルをLaunchAgent登録せず、アプリアイコンを保持するAppleScript Login Itemとして.app bundleを登録し、旧relico.plistを一度だけ移行する配線を持つ |
 | STA-004 | `static_check` | example-tested | i18n専用の外部ライブラリを追加せず、TS/Rustの自前lookup・placeholder実装が同じsrc/locales.jsonを直接読む。TSのi18n moduleは相対importだけ、Rustは標準ライブラリ・crate内module・既存の汎用serde_json以外の外部crateを使わない |
-| TLG-001 | `tooling_scenario` | example-tested | just e2eは単一のTAURI_WEBDRIVER_PORTとE2E専用lease fileを実行前とEXIT時に検査し、lease inodeを開いたtarget.noindex/debug/relicoのcanonical executable完全一致だけをTERM、期限後も同じPID・実行ファイル・lease identityならKILLして回収する。portのLISTEN前またはlistener終了後でもlease holderを回収し、leaseなしの同port listenerは拒否する。holder/listenerなしは成功し、別port・別leaseの同一実行ファイルと同portの別実行ファイルは終了しない。basenameによるpkill/killallは使わない |
+| STA-005 | `static_check` | example-tested | Windows x86_64-pc-windows-msvc配布版はtauri-plugin-notificationをWindows targetだけで初期化し、macOS固有backendを置換せず、インストール済みcom.annenpolka.relicoのidentityから通知要求をshowする配線を持つ。Windows bundleはNSISだけを対象にし、per-user installとWebView2 downloadBootstrapperを明示する |
+| TLG-001 | `tooling_scenario` | example-tested | Unixのjust e2eは単一のTAURI_WEBDRIVER_PORTとE2E専用lease fileを実行前とEXIT時に検査し、lease inodeを開いたtarget.noindex/debug/relicoのcanonical executable完全一致だけをTERM、期限後も同じPID・実行ファイル・lease identityならKILLして回収する。portのLISTEN前またはlistener終了後でもlease holderを回収し、leaseなしの同port listenerは拒否する。holder/listenerなしは成功し、別port・別leaseの同一実行ファイルと同portの別実行ファイルは終了しない。basenameによるpkill/killallは使わない |
+| TLG-002 | `tooling_scenario` | example-tested | WindowsのPowerShell/CIからspec-check・renderer-test(Chromium)・WDIO/Tauri E2E(.exe、専用APPDATA identity)・NSIS buildをBashやPOSIX形式の環境変数代入なしで実行できる。E2E janitorはleaseに記録した生存PID・canonical relico.exe・TCP listenerをsignal前に照合し、foreign listenerを拒否する。Windows CIは生成物鮮度、Bun unit、cargo test、renderer、実IPC、NSIS生成とartifact保存を別の保証として実行する |
 | AST-001 | `approved_asset` | example-tested | メニューバー用tray-icon.pngは目視承認済みの内容から変わっていない(変えたらMAN-005の手順で再承認しsha256を更新する) |
 | AST-002 | `approved_asset` | example-tested | 配布用アプリアイコンicon.icnsは目視承認済みの内容から変わっていない(変えたらMAN-006の手順で再承認しsha256を更新する) |
+| AST-003 | `approved_asset` | example-tested | Windows配布用icon.icoは目視承認済みの内容から変わっていない(変えたらMAN-014の手順で再承認しsha256を更新する) |
 | ICN-001 | `renderer_glyphs` | example-tested | 既知のTier・惑星・ミッション・ファクション・難易度・VOID嵐・アクション値には汎用と区別できる専用SVGグリフが割り当てられ、未知値はカテゴリ別の汎用グリフへフォールバックし、グリフは装飾(aria-hidden)である |
 | ICN-002 | `renderer_glyphs` | example-tested | 表示用惑星名はVOID嵐のときだけEarth/Venus/Saturn/Neptune/Pluto/VeilをProxima表記へ寄せ、通常亀裂・その他の惑星・欠損値はそのまま返す |
 | RND-001 | `renderer_scenario` | example-tested | パレットはどこでも打鍵で開いて入力を引き継ぎ、Escで閉じ、一覧画面のEscは設定を変更しない(リセットはCLEARボタン/パレット候補のみ)。一覧画面のSpaceはパレットを開かずに編集中ルールの表示選択(enabled)をトグルし(action:toggle-rule)、一覧画面の↑/↓はedit focusを前後のルールへ巡回移動し、Ctrl+1..9は対応indexのルールへedit focusを移す(パレット表示中も有効。フォーカス移動は設定を変更しない)。Cmd+1..9は9個のコンテンツタブ専用でルールを変更しない。IME変換中のEnterは適用せず、確定後のEnterは候補を適用して開いたまま連続入力でき、DESELECT ALL RULES候補は全表示選択を解除して通知参加を変えない(renderer統合) |
@@ -122,6 +125,9 @@
 | MAN-011 | `manual` | manual | compact表示が実データで読みやすく、VoiceOverでtable semanticsが自然に読み上げられる |
 | MAN-012 | `manual` | manual | 9つの時限コンテンツ表示はsourceの由来と時間状態を分離し、取得経路の部分障害や個人進捗の非公開性をもっともらしい推測値で埋めない |
 | MAN-013 | `manual` | manual | just e2eを中断してもE2E専用アプリだけが終了し、配布版・通知テスト版・通常開発版は終了しない |
+| MAN-014 | `manual` | manual | Windows 10 version 1803以降とWindows 11のx86_64インストール済み配布版で、RELICO名義・アイコン・title・本文を持つデスクトップ通知を人が知覚できる |
+| MAN-015 | `manual` | manual | Windows配布版はタスクバーを常時占有せずトレイ常駐し、close後の再表示・終了と自動起動ON/OFFが機能する |
+| MAN-016 | `manual` | manual | Windows per-user NSIS installerのclean install・同version再install・旧versionからのupgrade・uninstallが成立する |
 
 保証ラベルの意味: **property-tested** = proptestオラクルで機械検証 / **example-tested** = 具体例テストで機械検証 / **manual** = 手動確認(残余)
 
@@ -162,6 +168,18 @@ just devと配布.appの両方で確認する。1) コンソール表示中はDo
 #### MAN-012: 9つの時限コンテンツ表示はsourceの由来と時間状態を分離し、取得経路の部分障害や個人進捗の非公開性をもっともらしい推測値で埋めない
 
 リリース前に実データで確認する。1) DE公式、WFCD、browse.wf Oracle、browse.wf schedule/Public Exportへ実際に到達でき、cardのofficial/community/schedule badgeとbrowse.wf creditが文字として判読できる。2) 表示中の仲裁をbrowse.wf/liveとゲーム内から数件標本照合する。source別障害、期限切れ、schedule範囲外、個人進捗非推測はSRC-001・BNT-001・RND-010等で機械検証する。第三者scheduleの将来正確性とservice SLAは保証せず、この実データ確認でも将来の継続性を証明したとは扱わない。
+
+#### MAN-014: Windows 10 version 1803以降とWindows 11のx86_64インストール済み配布版で、RELICO名義・アイコン・title・本文を持つデスクトップ通知を人が知覚できる
+
+NSISでper-user installしたcom.annenpolka.relicoをスタートメニューから起動し、TEST DELIVERYと実亀裂通知を送る。通知バナーと通知センターで送信元がPowerShell等ではなくRELICO、アイコンが承認済みicon.ico、title/bodyがNTF-002/006のpayloadであることを目視する。pluginのshow成功は要求受付だけで表示済みとは扱わない。通知要求に失敗しても現行のDED-001/POL-002契約どおりidは通知済みのまま再送せず、失敗はログへ残す。icon.icoを変更した場合は通知・トレイ・タスクバー・スタートメニューを100/125/150/200% DPIで再確認してAST-003のsha256を更新する。
+
+#### MAN-015: Windows配布版はタスクバーを常時占有せずトレイ常駐し、close後の再表示・終了と自動起動ON/OFFが機能する
+
+Windows 10 1803+とWindows 11でリリース前に確認する。1) closeでwindowだけが隠れpollerとtrayが継続する。2) tray左クリック/OPEN CONSOLEで再表示・focusし、QUITで終了する。3) Explorer再起動後にtray iconが復帰する。4) AUTOSTARTをON/OFFしてWindows再起動後の起動状態とget_autostartを照合する。5) 通常版com.annenpolka.relicoとE2E版com.annenpolka.relico.e2eの設定・履歴・自動起動が分離する。command/identityの配線はSTA-001/005とE2E-001〜003、OS shellの知覚はこのmanualに残る。
+
+#### MAN-016: Windows per-user NSIS installerのclean install・同version再install・旧versionからのupgrade・uninstallが成立する
+
+署名前の候補artifactをクリーンなWindows 10 1803+およびWindows 11 x86_64 VMで検査する。install先はper-user、WebView2はdownloadBootstrapper、shortcutは生成された既定値を記録する。clean install、同version再install、直前releaseからupgrade、uninstallを順に行い、起動・identity・設定/通知履歴の保持または削除結果を記録する。CIのNSIS bundle成功はinstaller実行の証明ではない。公開配布時は別途Authenticode署名とSmartScreen表示を確認する。
 
 ### 一回限りの受入(対象が変わったときだけ再実施)
 

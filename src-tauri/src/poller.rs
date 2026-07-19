@@ -376,7 +376,7 @@ async fn poll_once(
     emit_snapshot(app, &cfg, state, |_| {});
 
     for f in &to_notify {
-        notify::send(client, &cfg, f).await;
+        notify::send(app, client, &cfg, f).await;
     }
     Ok(Some(filter::notification_projection(&fcfg)))
 }

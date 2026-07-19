@@ -7,6 +7,7 @@
 // 実行: bun tools/spec-gen.ts
 
 import { spawnSync } from "bun";
+import { fileURLToPath } from "node:url";
 
 type Clause = {
   id: string;
@@ -110,7 +111,7 @@ const CONTENT_STAGE_TITLE_POOL = [
 const rustStrArray = (pool: string[]) => pool.map((s) => `"${s}"`).join(", ");
 const tsStrArray = (pool: string[]) => JSON.stringify(pool);
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 
 const pkl = spawnSync(["pkl", "eval", "-f", "json", `${root}specs/notifier.pkl`]);
 if (pkl.exitCode !== 0) {
@@ -3647,6 +3648,76 @@ fn ${name}() {
         "${msg} (Rustがsrc/locales.jsonを直接埋め込まない)"
     );
 }`;
+      case "windows_distribution":
+        return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let cargo = std::fs::read_to_string(manifest.join("Cargo.toml"))
+        .expect("Cargo.tomlを読めること");
+    let windows_dependencies = cargo
+        .split("[target.'cfg(target_os = \\\"windows\\\")'.dependencies]")
+        .nth(1)
+        .expect("Windows target dependency section");
+    assert!(
+        windows_dependencies.contains("tauri-plugin-notification"),
+        "${msg} (Windows targetにnotification pluginがない)"
+    );
+
+    let lib_rs = std::fs::read_to_string(manifest.join("src/lib.rs"))
+        .expect("src/lib.rsを読めること");
+    assert!(
+        lib_rs.contains("#[cfg(target_os = \\\"windows\\\")]")
+            && lib_rs.contains("tauri_plugin_notification::init()"),
+        "${msg} (Windowsだけでnotification pluginを初期化する配線がない)"
+    );
+
+    let notify_rs = std::fs::read_to_string(manifest.join("src/notify.rs"))
+        .expect("src/notify.rsを読めること");
+    for required in [
+        "#[cfg(target_os = \\\"macos\\\")]",
+        "#[cfg(target_os = \\\"windows\\\")]",
+        "tauri_plugin_notification::NotificationExt",
+        ".builder()",
+        ".show()",
+    ] {
+        assert!(notify_rs.contains(required), "${msg} (Windows通知配線: {required})");
+    }
+
+    let windows: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(manifest.join("tauri.windows.conf.json"))
+            .expect("tauri.windows.conf.jsonを読めること"),
+    )
+    .expect("tauri.windows.conf.jsonがJSONであること");
+    assert_eq!(windows["bundle"]["targets"], serde_json::json!(["nsis"]), "${msg} (NSIS限定)");
+    assert_eq!(
+        windows["bundle"]["windows"]["webviewInstallMode"]["type"],
+        "downloadBootstrapper",
+        "${msg} (WebView2 install mode)"
+    );
+    assert_eq!(
+        windows["bundle"]["windows"]["nsis"]["installMode"],
+        "currentUser",
+        "${msg} (per-user install)"
+    );
+
+    let release: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(manifest.join("tauri.conf.json"))
+            .expect("tauri.conf.jsonを読めること"),
+    )
+    .expect("tauri.conf.jsonがJSONであること");
+    assert_eq!(release["identifier"], "com.annenpolka.relico", "${msg} (配布identity)");
+    assert!(
+        release["bundle"]["icon"]
+            .as_array()
+            .is_some_and(|icons| icons.iter().any(|icon| icon == "icons/icon.ico")),
+        "${msg} (Windows icon登録)"
+    );
+    let main_rs = std::fs::read_to_string(manifest.join("src/main.rs"))
+        .expect("src/main.rsを読めること");
+    assert!(main_rs.contains("windows_subsystem = \\\"windows\\\""), "${msg} (release subsystem)");
+}`;
       default:
         throw new Error(`未知のstatic checkシナリオ: ${c.scenario} (${c.id})`);
     }
@@ -3996,7 +4067,7 @@ function genGlyphClause(c: Clause): string {
     case "glyph_known_values":
       return `
 // ${c.id}: ${c.desc}
-test("${c.id} ${name}", () => {
+test("${c.id} ${name}", async () => {
   const pools: Array<[GlyphKind, string[]]> = [
     ["tier", ${tsStrArray(TIER_POOL)}],
     ["planet", ${tsStrArray(PLANET_POOL)}],
@@ -4049,6 +4120,8 @@ function genToolingClause(c: Clause): string {
       return `
 // ${c.id}: ${c.desc}
 test("${c.id} ${name}", async () => {
+  // TLG-001はlsof/inodeを使うUnix経路。WindowsのPID lease経路はTLG-002で検査する。
+  if (process.platform === "win32") return;
   const tempRoot = mkdtempSync(join(tmpdir(), "relico-e2e-cleanup-"));
   const leasePath = join(tempRoot, "owned.lease");
   const otherLeasePath = join(tempRoot, "other.lease");
@@ -4159,21 +4232,121 @@ test("${c.id} ${name}", async () => {
   }
 
   const justfile = readFileSync(new URL("../../justfile", import.meta.url), "utf8");
+  const runE2e = readFileSync(new URL("../../tools/run-e2e.ts", import.meta.url), "utf8");
   const wdioConfig = readFileSync(new URL("../../wdio.conf.ts", import.meta.url), "utf8");
   const mainRs = readFileSync(new URL("../../src-tauri/src/main.rs", import.meta.url), "utf8");
-  expect(justfile).toContain("tools/e2e-process.ts cleanup");
-  expect(justfile).toContain("trap cleanup EXIT");
-  expect(justfile).toContain("src-tauri/target.noindex");
-  expect(justfile).toContain("e2e_port=4445");
-  expect(justfile).toContain('TAURI_WEBDRIVER_PORT="$e2e_port"');
-  expect(justfile).toContain('RELICO_E2E_LEASE_PATH="$e2e_lease"');
-  expect(justfile).toContain("cap_status");
-  expect(justfile).toContain("lease_status");
+  expect(justfile).toContain("bun tools/run-e2e.ts");
+  expect(runE2e).toContain("cleanupOwnedListener");
+  expect(runE2e).toContain("src-tauri/target.noindex");
+  expect(runE2e).toContain("const e2ePort = 4445");
+  expect(runE2e).toContain("TAURI_WEBDRIVER_PORT");
+  expect(runE2e).toContain("RELICO_E2E_LEASE_PATH");
+  expect(runE2e).toContain("finally");
   expect(wdioConfig).toContain("embeddedPort: e2ePort");
   expect(wdioConfig).not.toContain("4445");
   expect(mainRs).toContain("RELICO_E2E_LEASE_PATH");
-  expect(mainRs).toContain("std::fs::File::open");
-  expect(justfile).not.toMatch(/\\b(?:pkill|killall)\\b/);
+  expect(mainRs).toContain("OpenOptions");
+  expect(runE2e).not.toMatch(/\\b(?:pkill|killall)\\b/);
+});`;
+    case "windows_portability":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} ${name}", async () => {
+  const root = new URL("../../", import.meta.url);
+  const justfile = readFileSync(new URL("justfile", root), "utf8");
+  const specCheck = readFileSync(new URL("tools/spec-check.ts", root), "utf8");
+  const runE2e = readFileSync(new URL("tools/run-e2e.ts", root), "utf8");
+  const e2eProcess = readFileSync(new URL("tools/e2e-process.ts", root), "utf8");
+  const build = readFileSync(new URL("tools/build.ts", root), "utf8");
+  const frontendE2e = readFileSync(new URL("tools/build-frontend-e2e.ts", root), "utf8");
+  const wdio = readFileSync(new URL("wdio.conf.ts", root), "utf8");
+  const playwright = readFileSync(new URL("playwright.config.ts", root), "utf8");
+  const e2eConfig = JSON.parse(readFileSync(new URL("src-tauri/tauri.e2e.conf.json", root), "utf8"));
+  const workflow = readFileSync(new URL(".github/workflows/windows.yml", root), "utf8");
+  const lockfile = readFileSync(new URL("bun.lock", root), "utf8");
+  const attributes = readFileSync(new URL(".gitattributes", root), "utf8");
+
+  expect(justfile).toContain("bun tools/spec-check.ts");
+  expect(justfile).toContain("bun tools/run-e2e.ts");
+  expect(justfile).toContain("bun tools/build.ts");
+  expect(justfile).toContain('set windows-shell := ["powershell.exe"');
+  expect(justfile).toContain("node node_modules/@playwright/test/cli.js test");
+  expect(specCheck).toContain("crypto.subtle.digest");
+  expect(runE2e).toContain('process.platform === "win32" ? "relico.exe" : "relico"');
+  expect(runE2e).toContain("cleanupOwnedListener");
+  expect(runE2e).toContain('run("node", ["node_modules/@wdio/cli/bin/wdio.js"');
+  expect(e2eProcess).toContain("Get-NetTCPConnection");
+  expect(e2eProcess).toContain('process.platform === "win32"');
+  expect(e2eProcess).toContain('readFileSync(path, "utf8").trim()');
+  expect(e2eProcess).toContain("$target.Path");
+  expect(e2eProcess).toContain("refusing to terminate foreign listener");
+  expect(build).toContain("tauri.windows.conf.json");
+  expect(build).toContain('process.platform === "win32"');
+  expect(frontendE2e).toContain("VITE_E2E");
+  expect(wdio).toContain('process.platform === "win32" ? "relico.exe" : "relico"');
+  expect(wdio).toContain("process.env.APPDATA");
+  expect(playwright).toContain('process.platform === "win32" ? "chromium" : "webkit"');
+  expect(e2eConfig.build.beforeBuildCommand).toBe("bun tools/build-frontend-e2e.ts");
+  expect(lockfile).toContain('"name": "relico"');
+  for (const generated of [
+    "docs/SPEC.md",
+    "src-tauri/tests/oracles_generated.rs",
+    "tests/unit/oracles_generated.test.ts",
+    "tests/renderer/oracles_generated.spec.ts",
+    "tests/e2e/oracles_generated.e2e.ts",
+  ]) {
+    expect(attributes).toContain(\`\${generated} text eol=lf\`);
+  }
+
+  for (const required of [
+    "windows-latest",
+    "actions/setup-node",
+    "bun install --frozen-lockfile",
+    "just spec-check",
+    "just renderer-test",
+    "just e2e",
+    "just build",
+    "actions/upload-artifact",
+  ]) {
+    expect(workflow).toContain(required);
+  }
+  expect(workflow).toContain("node_modules/@playwright/test/cli.js install --with-deps chromium");
+
+  if (process.platform === "win32") {
+    const tempRoot = mkdtempSync(join(tmpdir(), "relico-e2e-windows-cleanup-"));
+    const leasePath = join(tempRoot, "owned.lease");
+    writeFileSync(leasePath, "");
+    let foreign: ChildProcess | undefined;
+    let owned: ChildProcess | undefined;
+    try {
+      const foreignFixture = await spawnFixture({ listen: true });
+      foreign = foreignFixture.child;
+      await expect(
+        cleanupOwnedListener({
+          port: foreignFixture.port!,
+          expectedExecutable: process.execPath,
+          leasePath,
+          graceMs: 200,
+        }),
+      ).rejects.toThrow(/refusing to terminate foreign listener/);
+      expect(processExists(foreign.pid!)).toBe(true);
+      await stopFixture(foreign);
+
+      const ownedFixture = await spawnFixture({ listen: true, leasePath });
+      owned = ownedFixture.child;
+      const cleaned = await cleanupOwnedListener({
+        port: ownedFixture.port!,
+        expectedExecutable: process.execPath,
+        leasePath,
+        graceMs: 1_000,
+      });
+      expect(cleaned.terminatedPids).toEqual([owned.pid]);
+      expect(processExists(owned.pid!)).toBe(false);
+    } finally {
+      await Promise.all([stopFixture(foreign), stopFixture(owned)]);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }
 });`;
     default:
       throw new Error(`未知のtoolingシナリオ: ${c.scenario} (${c.id})`);
@@ -5793,6 +5966,9 @@ if (process.env.RELICO_TEST_IGNORE_TERM === "1") {
   process.on("SIGTERM", () => process.stdout.write("term\\n"));
 }
 if (process.env.RELICO_TEST_LEASE) {
+  if (process.platform === "win32") {
+    fs.writeFileSync(process.env.RELICO_TEST_LEASE, String(process.pid));
+  }
   globalThis.__relicoLeaseFd = fs.openSync(process.env.RELICO_TEST_LEASE, "r");
 }
 if (process.env.RELICO_TEST_LISTEN === "1") {

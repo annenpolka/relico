@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { candidateGlyphHtml, glyphHtml, planetForFissure, type GlyphKind } from "../../src/icons";
 import { cleanupOwnedListener, leaseHolderPids, processExists } from "../../tools/e2e-process";
 
-const E2E_PROCESS_FIXTURE = "\nconst fs = require(\"node:fs\");\nconst net = require(\"node:net\");\nif (process.env.RELICO_TEST_IGNORE_TERM === \"1\") {\n  process.on(\"SIGTERM\", () => process.stdout.write(\"term\\n\"));\n}\nif (process.env.RELICO_TEST_LEASE) {\n  globalThis.__relicoLeaseFd = fs.openSync(process.env.RELICO_TEST_LEASE, \"r\");\n}\nif (process.env.RELICO_TEST_LISTEN === \"1\") {\n  const server = net.createServer();\n  server.listen(0, \"127.0.0.1\", () => {\n    process.stdout.write(String(server.address().port) + \"\\n\");\n  });\n} else {\n  process.stdout.write(\"ready\\n\");\n}\nsetInterval(() => {}, 1000);\n";
+const E2E_PROCESS_FIXTURE = "\nconst fs = require(\"node:fs\");\nconst net = require(\"node:net\");\nif (process.env.RELICO_TEST_IGNORE_TERM === \"1\") {\n  process.on(\"SIGTERM\", () => process.stdout.write(\"term\\n\"));\n}\nif (process.env.RELICO_TEST_LEASE) {\n  if (process.platform === \"win32\") {\n    fs.writeFileSync(process.env.RELICO_TEST_LEASE, String(process.pid));\n  }\n  globalThis.__relicoLeaseFd = fs.openSync(process.env.RELICO_TEST_LEASE, \"r\");\n}\nif (process.env.RELICO_TEST_LISTEN === \"1\") {\n  const server = net.createServer();\n  server.listen(0, \"127.0.0.1\", () => {\n    process.stdout.write(String(server.address().port) + \"\\n\");\n  });\n} else {\n  process.stdout.write(\"ready\\n\");\n}\nsetInterval(() => {}, 1000);\n";
 
 async function spawnFixture(options: {
   listen?: boolean;
@@ -43,7 +43,7 @@ async function stopFixture(child?: ChildProcess): Promise<void> {
 }
 
 // ICN-001: 既知のTier・惑星・ミッション・ファクション・難易度・VOID嵐・アクション値には汎用と区別できる専用SVGグリフが割り当てられ、未知値はカテゴリ別の汎用グリフへフォールバックし、グリフは装飾(aria-hidden)である
-test("ICN-001 icn_001", () => {
+test("ICN-001 icn_001", async () => {
   const pools: Array<[GlyphKind, string[]]> = [
     ["tier", ["Lith","Meso","Neo","Axi","Requiem","Omnia"]],
     ["planet", ["Mars","Ceres","Sedna","Void","Saturn","Phobos","Zariman","Veil Proxima","Kuva Fortress","Lua"]],
@@ -83,8 +83,10 @@ test("ICN-002 icn_002", () => {
   expect(planetForFissure(null, false)).toBe("");
 });
 
-// TLG-001: just e2eは単一のTAURI_WEBDRIVER_PORTとE2E専用lease fileを実行前とEXIT時に検査し、lease inodeを開いたtarget.noindex/debug/relicoのcanonical executable完全一致だけをTERM、期限後も同じPID・実行ファイル・lease identityならKILLして回収する。portのLISTEN前またはlistener終了後でもlease holderを回収し、leaseなしの同port listenerは拒否する。holder/listenerなしは成功し、別port・別leaseの同一実行ファイルと同portの別実行ファイルは終了しない。basenameによるpkill/killallは使わない
+// TLG-001: Unixのjust e2eは単一のTAURI_WEBDRIVER_PORTとE2E専用lease fileを実行前とEXIT時に検査し、lease inodeを開いたtarget.noindex/debug/relicoのcanonical executable完全一致だけをTERM、期限後も同じPID・実行ファイル・lease identityならKILLして回収する。portのLISTEN前またはlistener終了後でもlease holderを回収し、leaseなしの同port listenerは拒否する。holder/listenerなしは成功し、別port・別leaseの同一実行ファイルと同portの別実行ファイルは終了しない。basenameによるpkill/killallは使わない
 test("TLG-001 tlg_001", async () => {
+  // TLG-001はlsof/inodeを使うUnix経路。WindowsのPID lease経路はTLG-002で検査する。
+  if (process.platform === "win32") return;
   const tempRoot = mkdtempSync(join(tmpdir(), "relico-e2e-cleanup-"));
   const leasePath = join(tempRoot, "owned.lease");
   const otherLeasePath = join(tempRoot, "other.lease");
@@ -195,19 +197,118 @@ test("TLG-001 tlg_001", async () => {
   }
 
   const justfile = readFileSync(new URL("../../justfile", import.meta.url), "utf8");
+  const runE2e = readFileSync(new URL("../../tools/run-e2e.ts", import.meta.url), "utf8");
   const wdioConfig = readFileSync(new URL("../../wdio.conf.ts", import.meta.url), "utf8");
   const mainRs = readFileSync(new URL("../../src-tauri/src/main.rs", import.meta.url), "utf8");
-  expect(justfile).toContain("tools/e2e-process.ts cleanup");
-  expect(justfile).toContain("trap cleanup EXIT");
-  expect(justfile).toContain("src-tauri/target.noindex");
-  expect(justfile).toContain("e2e_port=4445");
-  expect(justfile).toContain('TAURI_WEBDRIVER_PORT="$e2e_port"');
-  expect(justfile).toContain('RELICO_E2E_LEASE_PATH="$e2e_lease"');
-  expect(justfile).toContain("cap_status");
-  expect(justfile).toContain("lease_status");
+  expect(justfile).toContain("bun tools/run-e2e.ts");
+  expect(runE2e).toContain("cleanupOwnedListener");
+  expect(runE2e).toContain("src-tauri/target.noindex");
+  expect(runE2e).toContain("const e2ePort = 4445");
+  expect(runE2e).toContain("TAURI_WEBDRIVER_PORT");
+  expect(runE2e).toContain("RELICO_E2E_LEASE_PATH");
+  expect(runE2e).toContain("finally");
   expect(wdioConfig).toContain("embeddedPort: e2ePort");
   expect(wdioConfig).not.toContain("4445");
   expect(mainRs).toContain("RELICO_E2E_LEASE_PATH");
-  expect(mainRs).toContain("std::fs::File::open");
-  expect(justfile).not.toMatch(/\b(?:pkill|killall)\b/);
+  expect(mainRs).toContain("OpenOptions");
+  expect(runE2e).not.toMatch(/\b(?:pkill|killall)\b/);
+});
+
+// TLG-002: WindowsのPowerShell/CIからspec-check・renderer-test(Chromium)・WDIO/Tauri E2E(.exe、専用APPDATA identity)・NSIS buildをBashやPOSIX形式の環境変数代入なしで実行できる。E2E janitorはleaseに記録した生存PID・canonical relico.exe・TCP listenerをsignal前に照合し、foreign listenerを拒否する。Windows CIは生成物鮮度、Bun unit、cargo test、renderer、実IPC、NSIS生成とartifact保存を別の保証として実行する
+test("TLG-002 tlg_002", async () => {
+  const root = new URL("../../", import.meta.url);
+  const justfile = readFileSync(new URL("justfile", root), "utf8");
+  const specCheck = readFileSync(new URL("tools/spec-check.ts", root), "utf8");
+  const runE2e = readFileSync(new URL("tools/run-e2e.ts", root), "utf8");
+  const e2eProcess = readFileSync(new URL("tools/e2e-process.ts", root), "utf8");
+  const build = readFileSync(new URL("tools/build.ts", root), "utf8");
+  const frontendE2e = readFileSync(new URL("tools/build-frontend-e2e.ts", root), "utf8");
+  const wdio = readFileSync(new URL("wdio.conf.ts", root), "utf8");
+  const playwright = readFileSync(new URL("playwright.config.ts", root), "utf8");
+  const e2eConfig = JSON.parse(readFileSync(new URL("src-tauri/tauri.e2e.conf.json", root), "utf8"));
+  const workflow = readFileSync(new URL(".github/workflows/windows.yml", root), "utf8");
+  const lockfile = readFileSync(new URL("bun.lock", root), "utf8");
+  const attributes = readFileSync(new URL(".gitattributes", root), "utf8");
+
+  expect(justfile).toContain("bun tools/spec-check.ts");
+  expect(justfile).toContain("bun tools/run-e2e.ts");
+  expect(justfile).toContain("bun tools/build.ts");
+  expect(justfile).toContain('set windows-shell := ["powershell.exe"');
+  expect(justfile).toContain("node node_modules/@playwright/test/cli.js test");
+  expect(specCheck).toContain("crypto.subtle.digest");
+  expect(runE2e).toContain('process.platform === "win32" ? "relico.exe" : "relico"');
+  expect(runE2e).toContain("cleanupOwnedListener");
+  expect(runE2e).toContain('run("node", ["node_modules/@wdio/cli/bin/wdio.js"');
+  expect(e2eProcess).toContain("Get-NetTCPConnection");
+  expect(e2eProcess).toContain('process.platform === "win32"');
+  expect(e2eProcess).toContain('readFileSync(path, "utf8").trim()');
+  expect(e2eProcess).toContain("$target.Path");
+  expect(e2eProcess).toContain("refusing to terminate foreign listener");
+  expect(build).toContain("tauri.windows.conf.json");
+  expect(build).toContain('process.platform === "win32"');
+  expect(frontendE2e).toContain("VITE_E2E");
+  expect(wdio).toContain('process.platform === "win32" ? "relico.exe" : "relico"');
+  expect(wdio).toContain("process.env.APPDATA");
+  expect(playwright).toContain('process.platform === "win32" ? "chromium" : "webkit"');
+  expect(e2eConfig.build.beforeBuildCommand).toBe("bun tools/build-frontend-e2e.ts");
+  expect(lockfile).toContain('"name": "relico"');
+  for (const generated of [
+    "docs/SPEC.md",
+    "src-tauri/tests/oracles_generated.rs",
+    "tests/unit/oracles_generated.test.ts",
+    "tests/renderer/oracles_generated.spec.ts",
+    "tests/e2e/oracles_generated.e2e.ts",
+  ]) {
+    expect(attributes).toContain(`${generated} text eol=lf`);
+  }
+
+  for (const required of [
+    "windows-latest",
+    "actions/setup-node",
+    "bun install --frozen-lockfile",
+    "just spec-check",
+    "just renderer-test",
+    "just e2e",
+    "just build",
+    "actions/upload-artifact",
+  ]) {
+    expect(workflow).toContain(required);
+  }
+  expect(workflow).toContain("node_modules/@playwright/test/cli.js install --with-deps chromium");
+
+  if (process.platform === "win32") {
+    const tempRoot = mkdtempSync(join(tmpdir(), "relico-e2e-windows-cleanup-"));
+    const leasePath = join(tempRoot, "owned.lease");
+    writeFileSync(leasePath, "");
+    let foreign: ChildProcess | undefined;
+    let owned: ChildProcess | undefined;
+    try {
+      const foreignFixture = await spawnFixture({ listen: true });
+      foreign = foreignFixture.child;
+      await expect(
+        cleanupOwnedListener({
+          port: foreignFixture.port!,
+          expectedExecutable: process.execPath,
+          leasePath,
+          graceMs: 200,
+        }),
+      ).rejects.toThrow(/refusing to terminate foreign listener/);
+      expect(processExists(foreign.pid!)).toBe(true);
+      await stopFixture(foreign);
+
+      const ownedFixture = await spawnFixture({ listen: true, leasePath });
+      owned = ownedFixture.child;
+      const cleaned = await cleanupOwnedListener({
+        port: ownedFixture.port!,
+        expectedExecutable: process.execPath,
+        leasePath,
+        graceMs: 1_000,
+      });
+      expect(cleaned.terminatedPids).toEqual([owned.pid]);
+      expect(processExists(owned.pid!)).toBe(false);
+    } finally {
+      await Promise.all([stopFixture(foreign), stopFixture(owned)]);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }
 });

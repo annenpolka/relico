@@ -183,6 +183,11 @@ pub fn run() {
             None,
         ));
 
+    // macOSは既存のUserNotifications backendを維持し、WindowsだけTauri pluginを使う。
+    // Windows通知はインストール済みbundle identityから送る。SPEC: STA-005 / MAN-014
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_notification::init());
+
     // WDIO E2E専用ビルドだけWebDriverサーバを埋め込む(just e2e。配布・通常debugには入れない)
     #[cfg(feature = "e2e")]
     let builder = builder
@@ -336,14 +341,14 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
+        .run(|_app, _event| {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen {
                 has_visible_windows: false,
                 ..
-            } = event
+            } = _event
             {
-                show_console(app);
+                show_console(_app);
             }
         });
 }

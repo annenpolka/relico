@@ -338,10 +338,20 @@ clauses: Listing<patterns.Clause> = new {
     desc = "i18n専用の外部ライブラリを追加せず、TS/Rustの自前lookup・placeholder実装が同じsrc/locales.jsonを直接読む。TSのi18n moduleは相対importだけ、Rustは標準ライブラリ・crate内module・既存の汎用serde_json以外の外部crateを使わない"
     scenario = "dependency_free_i18n"
   }
+  new patterns.StaticCheck {
+    id = "STA-005"
+    desc = "Windows x86_64-pc-windows-msvc配布版はtauri-plugin-notificationをWindows targetだけで初期化し、macOS固有backendを置換せず、インストール済みcom.annenpolka.relicoのidentityから通知要求をshowする配線を持つ。Windows bundleはNSISだけを対象にし、per-user installとWebView2 downloadBootstrapperを明示する"
+    scenario = "windows_distribution"
+  }
   new patterns.ToolingScenario {
     id = "TLG-001"
-    desc = "just e2eは単一のTAURI_WEBDRIVER_PORTとE2E専用lease fileを実行前とEXIT時に検査し、lease inodeを開いたtarget.noindex/debug/relicoのcanonical executable完全一致だけをTERM、期限後も同じPID・実行ファイル・lease identityならKILLして回収する。portのLISTEN前またはlistener終了後でもlease holderを回収し、leaseなしの同port listenerは拒否する。holder/listenerなしは成功し、別port・別leaseの同一実行ファイルと同portの別実行ファイルは終了しない。basenameによるpkill/killallは使わない"
+    desc = "Unixのjust e2eは単一のTAURI_WEBDRIVER_PORTとE2E専用lease fileを実行前とEXIT時に検査し、lease inodeを開いたtarget.noindex/debug/relicoのcanonical executable完全一致だけをTERM、期限後も同じPID・実行ファイル・lease identityならKILLして回収する。portのLISTEN前またはlistener終了後でもlease holderを回収し、leaseなしの同port listenerは拒否する。holder/listenerなしは成功し、別port・別leaseの同一実行ファイルと同portの別実行ファイルは終了しない。basenameによるpkill/killallは使わない"
     scenario = "e2e_targeted_cleanup"
+  }
+  new patterns.ToolingScenario {
+    id = "TLG-002"
+    desc = "WindowsのPowerShell/CIからspec-check・renderer-test(Chromium)・WDIO/Tauri E2E(.exe、専用APPDATA identity)・NSIS buildをBashやPOSIX形式の環境変数代入なしで実行できる。E2E janitorはleaseに記録した生存PID・canonical relico.exe・TCP listenerをsignal前に照合し、foreign listenerを拒否する。Windows CIは生成物鮮度、Bun unit、cargo test、renderer、実IPC、NSIS生成とartifact保存を別の保証として実行する"
+    scenario = "windows_portability"
   }
   new patterns.ApprovedAsset {
     id = "AST-001"
@@ -354,6 +364,12 @@ clauses: Listing<patterns.Clause> = new {
     desc = "配布用アプリアイコンicon.icnsは目視承認済みの内容から変わっていない(変えたらMAN-006の手順で再承認しsha256を更新する)"
     path = "icons/icon.icns"
     sha256 = "3b5771fafbd7068879d5ed783b7b66c91acb60d75fd922ca8474df56e9edfb97"
+  }
+  new patterns.ApprovedAsset {
+    id = "AST-003"
+    desc = "Windows配布用icon.icoは目視承認済みの内容から変わっていない(変えたらMAN-014の手順で再承認しsha256を更新する)"
+    path = "icons/icon.ico"
+    sha256 = "b067b62c0a72e0813acd8385a76fa2018e6208c58653738eb4c87fcaf513a6ed"
   }
   new patterns.RendererGlyphs {
     id = "ICN-001"
@@ -530,5 +546,20 @@ clauses: Listing<patterns.Clause> = new {
     desc = "just e2eを中断してもE2E専用アプリだけが終了し、配布版・通知テスト版・通常開発版は終了しない"
     cadence = "one-time"
     procedure = "E2E cleanup配線を変更したときだけ確認する。別名義の配布版または通知テスト版を起動したままjust e2eをworker開始後にCtrl-Cで中断し、target.noindex/debug/relico・E2E lease holder・TCP 4445のlistenerが消え、一時capabilityが削除される一方、別名義のアプリとメニューバー監視は継続することを確認する。対象限定janitorのno-op・foreign listener拒否・port未bindのholder回収・identity変化時のKILL拒否・TERM/KILL・別port非干渉はTLG-001で機械検証する。"
+  }
+  new patterns.Manual {
+    id = "MAN-014"
+    desc = "Windows 10 version 1803以降とWindows 11のx86_64インストール済み配布版で、RELICO名義・アイコン・title・本文を持つデスクトップ通知を人が知覚できる"
+    procedure = "NSISでper-user installしたcom.annenpolka.relicoをスタートメニューから起動し、TEST DELIVERYと実亀裂通知を送る。通知バナーと通知センターで送信元がPowerShell等ではなくRELICO、アイコンが承認済みicon.ico、title/bodyがNTF-002/006のpayloadであることを目視する。pluginのshow成功は要求受付だけで表示済みとは扱わない。通知要求に失敗しても現行のDED-001/POL-002契約どおりidは通知済みのまま再送せず、失敗はログへ残す。icon.icoを変更した場合は通知・トレイ・タスクバー・スタートメニューを100/125/150/200% DPIで再確認してAST-003のsha256を更新する。"
+  }
+  new patterns.Manual {
+    id = "MAN-015"
+    desc = "Windows配布版はタスクバーを常時占有せずトレイ常駐し、close後の再表示・終了と自動起動ON/OFFが機能する"
+    procedure = "Windows 10 1803+とWindows 11でリリース前に確認する。1) closeでwindowだけが隠れpollerとtrayが継続する。2) tray左クリック/OPEN CONSOLEで再表示・focusし、QUITで終了する。3) Explorer再起動後にtray iconが復帰する。4) AUTOSTARTをON/OFFしてWindows再起動後の起動状態とget_autostartを照合する。5) 通常版com.annenpolka.relicoとE2E版com.annenpolka.relico.e2eの設定・履歴・自動起動が分離する。command/identityの配線はSTA-001/005とE2E-001〜003、OS shellの知覚はこのmanualに残る。"
+  }
+  new patterns.Manual {
+    id = "MAN-016"
+    desc = "Windows per-user NSIS installerのclean install・同version再install・旧versionからのupgrade・uninstallが成立する"
+    procedure = "署名前の候補artifactをクリーンなWindows 10 1803+およびWindows 11 x86_64 VMで検査する。install先はper-user、WebView2はdownloadBootstrapper、shortcutは生成された既定値を記録する。clean install、同version再install、直前releaseからupgrade、uninstallを順に行い、起動・identity・設定/通知履歴の保持または削除結果を記録する。CIのNSIS bundle成功はinstaller実行の証明ではない。公開配布時は別途Authenticode署名とSmartScreen表示を確認する。"
   }
 }

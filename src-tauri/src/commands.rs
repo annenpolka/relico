@@ -310,7 +310,10 @@ pub fn get_status(state: State<AppState>) -> StatusSnapshot {
 
 /// MAN-001 / MAN-002 の確認手段。ダミー亀裂で通知経路を発火する
 #[tauri::command]
-pub async fn test_notification(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn test_notification(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
     let cfg = state.cfg_tx.borrow().clone();
     let now = Utc::now();
     let dummy = Fissure {
@@ -329,7 +332,7 @@ pub async fn test_notification(state: State<'_, AppState>) -> Result<String, Str
     let mut outcomes = vec![];
     let mut notes = vec![];
     if cfg.desktop_notification {
-        match notify::desktop_for_locale(&dummy, now, true, cfg.locale).await {
+        match notify::desktop_for_locale_with_app(&app, &dummy, now, true, cfg.locale).await {
             Ok(receipt) => {
                 outcomes.push(notify::NotificationOutcome::Requested {
                     destination: "desktop",

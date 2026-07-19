@@ -348,7 +348,7 @@ class NotificationExample extends Clause {
 class StaticCheck extends Clause {
   pattern = "static_check"
   label = "example-tested"
-  scenario: "bundle_identity" | "tray_template_icon" | "autostart_bundle_icon" | "dependency_free_i18n"
+  scenario: "bundle_identity" | "tray_template_icon" | "autostart_bundle_icon" | "dependency_free_i18n" | "windows_distribution"
 }
 
 /// 人間が一度目視承認したアセットをsha256で固定する。
@@ -376,7 +376,7 @@ class RendererGlyphs extends Clause {
 class ToolingScenario extends Clause {
   pattern = "tooling_scenario"
   label = "example-tested"
-  scenario: "e2e_targeted_cleanup"
+  scenario: "e2e_targeted_cleanup" | "windows_portability"
 }
 
 /// Tauri IPCをmockしたWebKit renderer統合テスト(Playwright)。

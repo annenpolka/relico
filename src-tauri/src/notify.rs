@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use tauri::AppHandle;
 
 use crate::config::{AppConfig, AppLocale};
 use crate::i18n;
@@ -228,6 +229,25 @@ pub async fn desktop_for_locale(
     locale: AppLocale,
 ) -> Result<DesktopReceipt, String> {
     desktop_request(
+        None,
+        format!("relico-{}", fissure.id),
+        desktop_payload_for_locale(fissure, now, locale),
+        interactive,
+        locale,
+    )
+    .await
+}
+
+/// 実アプリのidentityを必要とするOS backendへAppHandleを渡す。
+pub async fn desktop_for_locale_with_app(
+    app: &AppHandle,
+    fissure: &Fissure,
+    now: DateTime<Utc>,
+    interactive: bool,
+    locale: AppLocale,
+) -> Result<DesktopReceipt, String> {
+    desktop_request(
+        Some(app),
         format!("relico-{}", fissure.id),
         desktop_payload_for_locale(fissure, now, locale),
         interactive,
@@ -243,6 +263,24 @@ pub async fn content_desktop_for_locale(
     locale: AppLocale,
 ) -> Result<DesktopReceipt, String> {
     desktop_request(
+        None,
+        format!("relico-content-{}", card.id),
+        content_desktop_payload_for_locale(card, now, locale),
+        interactive,
+        locale,
+    )
+    .await
+}
+
+pub async fn content_desktop_for_locale_with_app(
+    app: &AppHandle,
+    card: &TimedContent,
+    now: DateTime<Utc>,
+    interactive: bool,
+    locale: AppLocale,
+) -> Result<DesktopReceipt, String> {
+    desktop_request(
+        Some(app),
         format!("relico-content-{}", card.id),
         content_desktop_payload_for_locale(card, now, locale),
         interactive,
@@ -253,6 +291,7 @@ pub async fn content_desktop_for_locale(
 
 #[cfg(target_os = "macos")]
 async fn desktop_request(
+    _app: Option<&AppHandle>,
     id: String,
     payload: DesktopPayload,
     interactive: bool,
@@ -347,8 +386,71 @@ async fn desktop_request(
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 async fn desktop_request(
+    app: Option<&AppHandle>,
+    id: String,
+    payload: DesktopPayload,
+    interactive: bool,
+    locale: AppLocale,
+) -> Result<DesktopReceipt, String> {
+    use tauri::plugin::PermissionState;
+    use tauri_plugin_notification::NotificationExt;
+
+    let app = app.ok_or_else(|| {
+        desktop_unavailable_message_for_locale(
+            "Windows notification backend requires an installed app identity",
+            locale,
+        )
+    })?;
+    let notification = app.notification();
+    let mut permission = notification.permission_state().map_err(|error| {
+        i18n::format(
+            locale,
+            "notify.settingsReadFailed",
+            &[("error", &error.to_string())],
+        )
+    })?;
+    if matches!(
+        permission,
+        PermissionState::Prompt | PermissionState::PromptWithRationale
+    ) && interactive
+    {
+        permission = notification.request_permission().map_err(|error| {
+            i18n::format(
+                locale,
+                "notify.permissionRequestFailed",
+                &[("error", &error.to_string())],
+            )
+        })?;
+    }
+    if permission != PermissionState::Granted {
+        return Err(i18n::text(locale, "notify.permissionNotGranted"));
+    }
+
+    notification
+        .builder()
+        .title(payload.title)
+        .body(payload.body)
+        .show()
+        .map_err(|error| {
+            i18n::format(
+                locale,
+                "notify.requestRejected",
+                &[("error", &error.to_string())],
+            )
+        })?;
+
+    // pluginのshow成功はOSへの要求受付だけを表し、表示済みとは扱わない。SPEC: MAN-014
+    Ok(DesktopReceipt {
+        request_id: id,
+        warning: None,
+    })
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+async fn desktop_request(
+    _app: Option<&AppHandle>,
     _id: String,
     _payload: DesktopPayload,
     _interactive: bool,
@@ -482,10 +584,15 @@ async fn discord_post(
 
 /// 設定に応じてデスクトップ+Discordへ通知要求を出す。
 /// dedupの再試行意味論は変えず、即時エラーは必ずログへ残す。
-pub async fn send(client: &reqwest::Client, cfg: &AppConfig, fissure: &Fissure) {
+pub async fn send(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    cfg: &AppConfig,
+    fissure: &Fissure,
+) {
     let now = Utc::now();
     if cfg.desktop_notification {
-        match desktop_for_locale(fissure, now, false, cfg.locale).await {
+        match desktop_for_locale_with_app(app, fissure, now, false, cfg.locale).await {
             Ok(receipt) => {
                 if let Some(warning) = receipt.warning {
                     eprintln!("desktop notification warning: {warning}");
@@ -504,10 +611,15 @@ pub async fn send(client: &reqwest::Client, cfg: &AppConfig, fissure: &Fissure) 
 }
 
 /// contentRulesに合致した時限cardの通知。fissure sendと同じ配送マナーに従う。SPEC: NTF-006
-pub async fn send_content(client: &reqwest::Client, cfg: &AppConfig, card: &TimedContent) {
+pub async fn send_content(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    cfg: &AppConfig,
+    card: &TimedContent,
+) {
     let now = Utc::now();
     if cfg.desktop_notification {
-        match content_desktop_for_locale(card, now, false, cfg.locale).await {
+        match content_desktop_for_locale_with_app(app, card, now, false, cfg.locale).await {
             Ok(receipt) => {
                 if let Some(warning) = receipt.warning {
                     eprintln!("content desktop notification warning: {warning}");
@@ -541,6 +653,7 @@ mod tests {
 
     const WEBHOOK_TOKEN: &str = "do-not-log-this-token";
     const MAX_REQUEST_BYTES: usize = 64 * 1024;
+    const MAX_STUB_CONNECTIONS: usize = 8;
 
     #[derive(Debug)]
     struct CapturedRequest {
@@ -590,7 +703,12 @@ mod tests {
             let mut chunk = [0_u8; 4096];
             let read = stream
                 .read(&mut chunk)
-                .map_err(|_| "stub timed out while reading request".to_string())?;
+                .map_err(|error| {
+                    format!(
+                        "stub failed while reading request: {error} ({:?})",
+                        error.kind()
+                    )
+                })?;
             if read == 0 {
                 return Err("stub connection closed before request completed".to_string());
             }
@@ -681,34 +799,69 @@ mod tests {
 
         let handle = thread::spawn(move || {
             let deadline = Instant::now() + StdDuration::from_secs(3);
-            let (mut stream, _) = loop {
-                match listener.accept() {
-                    Ok(connection) => break connection,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        if Instant::now() >= deadline {
-                            return Err("stub timed out waiting for a request".to_string());
+            let mut last_error = None;
+            let mut rejected_connections = 0;
+            loop {
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if Instant::now() >= deadline {
+                                let detail = last_error
+                                    .as_deref()
+                                    .unwrap_or("no connection reached the stub");
+                                return Err(format!(
+                                    "stub timed out waiting for a valid request; last error: {detail}"
+                                ));
+                            }
+                            thread::sleep(StdDuration::from_millis(5));
                         }
-                        thread::sleep(StdDuration::from_millis(5));
+                        Err(error) => {
+                            return Err(format!("stub failed to accept request: {error}"));
+                        }
                     }
-                    Err(_) => return Err("stub failed to accept request".to_string()),
+                };
+
+                match read_request(&mut stream).and_then(|request| capture_request(&request)) {
+                    Ok(captured) => {
+                        let response = format!(
+                            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                            response_body.len()
+                        );
+                        stream
+                            .write_all(response.as_bytes())
+                            .map_err(|error| format!("stub failed to write response: {error}"))?;
+                        return Ok(captured);
+                    }
+                    Err(error) => {
+                        // Hosted Windows runners can probe a newly opened localhost port.
+                        // Ignore bounded incomplete connections and wait for the real request.
+                        rejected_connections += 1;
+                        last_error = Some(error);
+                        if rejected_connections >= MAX_STUB_CONNECTIONS {
+                            return Err(format!(
+                                "stub rejected {rejected_connections} invalid connections; last error: {}",
+                                last_error.as_deref().expect("last error was just recorded")
+                            ));
+                        }
+                    }
                 }
-            };
-            let request = read_request(&mut stream)?;
-            let captured = capture_request(&request)?;
-            let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
-                response_body.len()
-            );
-            stream
-                .write_all(response.as_bytes())
-                .map_err(|_| "stub failed to write response".to_string())?;
-            Ok(captured)
+            }
         });
 
         (
             format!("http://{address}/api/webhooks/123/{WEBHOOK_TOKEN}"),
             handle,
         )
+    }
+
+    fn send_empty_probe(base_url: &str) {
+        let url = reqwest::Url::parse(base_url).expect("stub URL must be valid");
+        let port = url.port().expect("stub URL must have an ephemeral port");
+        drop(
+            TcpStream::connect(("127.0.0.1", port))
+                .expect("empty localhost probe must connect"),
+        );
     }
 
     fn test_client() -> reqwest::Client {
@@ -759,6 +912,7 @@ mod tests {
     #[tokio::test]
     async fn discord_preserves_thread_waits_for_receipt_and_returns_message_id() {
         let (base_url, server) = spawn_stub("200 OK", r#"{"id":"message-1"}"#);
+        send_empty_probe(&base_url);
         let webhook_url = format!("{base_url}?thread_id=456&wait=false");
 
         let message_id = discord(&test_client(), &webhook_url, &dummy_fissure())

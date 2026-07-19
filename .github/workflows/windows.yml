@@ -1,0 +1,58 @@
+name: Windows
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: extractions/setup-just@v3
+
+      - name: Install Pkl
+        shell: pwsh
+        run: |
+          $pklPath = Join-Path $env:RUNNER_TEMP "pkl.exe"
+          Invoke-WebRequest "https://github.com/apple/pkl/releases/download/0.32.0/pkl-windows-amd64.exe" -OutFile $pklPath
+          $env:RUNNER_TEMP | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - run: bun install --frozen-lockfile
+      - run: node node_modules/@playwright/test/cli.js install --with-deps chromium
+
+      - name: Specification and core tests
+        run: just spec-check
+
+      - name: Renderer integration
+        run: just renderer-test
+
+      - name: Tauri IPC E2E
+        run: just e2e
+
+      - name: Build NSIS installer
+        run: just build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relico-windows-x86_64-nsis
+          path: src-tauri/target.noindex/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error

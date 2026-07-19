@@ -1,0 +1,7 @@
+# Generated specification views are byte-compared by tools/spec-check.ts.
+# Keep their checkout form identical to Bun's LF output on every platform.
+docs/SPEC.md text eol=lf
+src-tauri/tests/oracles_generated.rs text eol=lf
+tests/unit/oracles_generated.test.ts text eol=lf
+tests/renderer/oracles_generated.spec.ts text eol=lf
+tests/e2e/oracles_generated.e2e.ts text eol=lf

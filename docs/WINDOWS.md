@@ -1,18 +1,18 @@
 # Windowsビルド対応調査
 
 - 調査日: 2026-07-19
-- 状態: 静的調査完了、Windows上でのビルド・実機検証は未実施
+- 状態: Windowsネイティブのbuild/test/E2E/NSIS生成まで実施済み。インストール後の目視・署名は未実施
 - 対象: Windows 10/11向けTauri v2アプリ
 
 ## 結論
 
-現状のコードベースには、Windows向けTauriアプリを組み立てるための基礎があります。しかし、Windows版を利用可能な品質で配布するには追加対応が必要です。
+Windows x86_64-pc-windows-msvc向けの通知backend、portableな開発コマンド、Windows CI、Chromium renderer test、実IPC E2E、NSIS生成経路を実装しました。2026-07-19にWindows上でRust/Bun/renderer/E2E/NSIS buildを実行し、機械検証は通過しています。
 
-最も大きな未対応点は次の3つです。
+配布可能レベルへ残る大きな作業は次の3つです。
 
-1. Windowsのデスクトップ通知が未実装である
-2. ビルド、テスト、E2Eの各スクリプトがmacOS/POSIX環境に依存している
-3. Windows CI、インストーラー検証、コード署名の経路がない
+1. インストール済みアプリからの通知表示、トレイ、自動起動を人が確認する
+2. NSISのclean install、upgrade、uninstallをVMで確認する
+3. Authenticodeコード署名とSmartScreenの確認経路を用意する
 
 初期の対応対象は、次を推奨します。
 
@@ -34,7 +34,7 @@ Windows対応を次の3段階に分けます。
 | 利用可能 | 通知、トレイ、自動起動、設定保存、E2EがWindows上で動作する |
 | 配布可能 | 署名済みインストーラー、アップグレード、アンインストール、リリース手順が検証されている |
 
-現状は「ビルド可能」より前の段階です。TauriのWindows向け設定は一部存在しますが、ビルド経路と主要機能の検証がありません。
+現状はローカルWindows検証で「ビルド可能」へ到達しています。GitHub Actions workflowは追加済みですが、リポジトリへpushして実runnerで通った結果はまだありません。「利用可能」「配布可能」はMAN-014〜016のmanual smokeと署名が終わるまで主張しません。
 
 ## すでに存在するWindows向けの土台
 
@@ -49,13 +49,29 @@ Windows対応を次の3段階に分けます。
 
 これらはWindows対応済みの証拠ではありません。Windows実機でのexample-testedまたはmanualな確認が必要です。
 
-## P0: 最初のWindowsビルドに必須の作業
+## 実装・検証結果(2026-07-19)
+
+- `STA-005` / `TLG-002` / `AST-003`と`MAN-014`〜`MAN-016`を仕様正本へ追加し、生成オラクルと`docs/SPEC.md`を更新
+- Windows targetだけへ`tauri-plugin-notification`を追加。macOS UserNotifications backendは維持
+- `just spec-check` / `renderer-test` / `e2e` / `build`をPowerShellから実行可能にし、Playwright/WDIO workerはNode、package/buildはBunに分離
+- rendererはWindowsでChromium、macOSでWebKitを使用
+- E2EはWindowsの`.exe`、APPDATAの専用identity、PID leaseとcanonical executable照合へ対応
+- `.github/workflows/windows.yml`で生成鮮度、unit、Rust、renderer、E2E、NSIS、artifact uploadを定義
+- `src-tauri/tauri.windows.conf.json`でNSIS、`currentUser`、WebView2 `downloadBootstrapper`を明示
+- `bun install --frozen-lockfile`: 成功
+- Bun unit: 4件成功
+- Rust test: 25 + 13 + 80件成功
+- Chromium renderer: 22件成功
+- WDIO/Tauri E2E: 3件成功
+- NSIS: `relico_0.1.0_x64-setup.exe`生成成功
+
+## P0: 最初のWindowsビルドに必須の作業(完了)
 
 ### 1. Windowsでの要求を仕様へ追加する
 
 挙動を変更するため、最初に `specs/*.pkl` を更新します。`docs/SPEC.md` や生成テストは手編集しません。
 
-最低限、次を仕様として明示する必要があります。
+次を仕様へ明示しました。
 
 - Windows通知の要求と、OSに表示されたことの保証範囲
 - 通知送信に失敗した場合の重複排除状態
@@ -69,7 +85,7 @@ Windows対応を次の3段階に分けます。
 
 ### 2. Windowsのデスクトップ通知を実装する
 
-現在の `src-tauri/src/notify.rs` はmacOS実装を持ちますが、macOS以外では「unsupported」を返すstubです。設定上はデスクトップ通知が既定で有効なため、このままWindows版を配布すると主要機能が動きません。
+`src-tauri/src/notify.rs`はmacOS実装を維持し、WindowsではTauri notification pluginへ実アプリの`AppHandle`を渡して通知要求を出します。Linux等の未対応OSだけが`unsupported`を返します。
 
 推奨構成は次のとおりです。
 
@@ -77,15 +93,15 @@ Windows対応を次の3段階に分けます。
 - Windows: `tauri-plugin-notification` を使うtarget別backendを追加する
 - 共通層: 通知要求、成功・失敗、重複排除の契約をOS実装から分離する
 
-このリポジトリでは初期実装時に `tauri-plugin-notification` を使っていましたが、macOS通知の厳密な挙動を実装した際に削除されています。Windows向けだけに再導入できるかを検討します。
+このリポジトリでは初期実装時に使っていた `tauri-plugin-notification` を、Windows target限定の依存関係として再導入しました。macOSでは従来のUserNotifications backendだけを初期化します。
 
 Tauriの通知pluginは、Windowsで正しいアプリ名とアイコンを表示するためにインストール済みアプリとしてのidentityを必要とします。開発時の通知はPowerShell等のidentityとして見えることがあるため、「API呼び出し成功」と「製品として正しく表示された」を分けて検証します。
 
-また、現在のpollerは通知送信より前に重複排除状態を保存します。送信失敗時に再通知するのか、失敗しても通知済みとして扱うのかを仕様で決めてから実装します。
+pollerは通知送信より前に重複排除状態を保存する現行契約を維持しました。送信失敗でも通知済みとして扱って自動再送せず、失敗をログへ残すことをMAN-014へ明記しています。
 
 ### 3. Windowsで実行できるビルドコマンドを用意する
 
-現在の `justfile` はBash、`trap`、LaunchServices、POSIXシグナル等に依存します。共通処理とOS別処理を分離し、少なくとも通常ビルドがPowerShellから実行できるようにします。
+共通処理を`tools/*.ts`へ分離し、`justfile`へPowerShellの`windows-shell`を設定しました。macOS固有のnotification testとsmokeだけは従来どおりOS専用です。
 
 Windows runnerに必要なツールは次のとおりです。
 
@@ -93,10 +109,11 @@ Windows runnerに必要なツールは次のとおりです。
 - WebView2 Runtime
 - Rust stableの `x86_64-pc-windows-msvc` toolchain
 - Bun
+- Node.js LTS(Playwright/WDIO worker runtime)
 - Just
 - Pkl。仕様生成・鮮度検査をWindowsでも行う場合に必要
 
-最初の成果物はNSISだけに絞ることを推奨します。現在の `bundle.targets: "all"` はMSIも対象に含めるため、追加のWiX/VBSCRIPT要件が発生します。
+最初の成果物はNSISだけに絞りました。共通設定の `bundle.targets: "all"` は維持しつつ、Windows buildでは `tauri.windows.conf.json` を重ねてNSISだけを生成し、追加のWiX/VBSCRIPT要件を避けます。
 
 想定する基本コマンドは次です。
 
@@ -105,20 +122,20 @@ bun install --frozen-lockfile
 bun tauri build --bundles nsis
 ```
 
-ただし、現在は `package.json` のpackage名が `relico`、`bun.lock` 内のworkspace名が `warframe-fissure-notifier` です。Windows CIでfrozen installを有効にする前にlockfileを正規化し、macOSでも再現性を確認します。
+`bun.lock`のworkspace名を`relico`へ正規化し、Windowsでfrozen installを確認済みです。macOS CIでの再確認は残ります。
 
 ### 4. テストとCIをWindows対応する
 
-現在、`.github/workflows` はありません。Windows対応ではネイティブWindows runnerを正規の検証環境として追加します。
+`.github/workflows/windows.yml`を追加し、ネイティブ`windows-latest` runnerを正規の検証環境として定義しました。workflow自体の実行結果はpush後に確認します。
 
-移植が必要な箇所は次のとおりです。
+移植前にWindowsを阻害していた箇所と、今回の対応は次のとおりです。
 
-- `just spec-check`: Bashと `shasum` に依存している
-- `tauri.e2e.conf.json`: POSIX形式の環境変数参照を含む
-- `wdio.conf.ts`: macOSの `.app` とUnix実行ファイルを前提としている
-- `tools/e2e-process.ts`: `lsof`、inode、POSIXシグナル、macOSのApplication Support pathを使う
-- `playwright.config.ts`: rendererテストがWebKitだけを対象としている
-- E2Eバイナリ名: Windowsでは `.exe` を扱う必要がある
+- `just spec-check`: Bashと`shasum`依存を`tools/spec-check.ts`へ置換
+- `src-tauri/tauri.e2e.conf.json`: frontend build時の環境変数設定を`tools/build-frontend-e2e.ts`へ移動
+- `wdio.conf.ts`: macOSの`.app`に加え、Windowsの`.exe`とAPPDATAを解決
+- `tools/e2e-process.ts`: Unixの`lsof`/inode検証を維持し、WindowsにはPID lease/canonical executable/listener照合を追加
+- `playwright.config.ts`: macOSではWebKit、WindowsではChromiumを選択
+- Playwright/WDIO: WindowsでBun workerが停止する問題を避け、Node.jsでCLIとworkerを起動
 
 Windows CIには、最低限次のjobまたはstepを置きます。
 
@@ -188,14 +205,14 @@ Microsoft Storeで配布する場合は、NSIS配布とは別のpackage、identi
 
 ## 推奨する実装順
 
-1. サポートするWindows version、architecture、配布方式を決める
-2. Windowsの通知、常駐、自動起動、失敗時挙動を `specs/*.pkl` に追加する
-3. lockfileと共通ビルド処理をportableにする
-4. Windows通知backendを実装する
-5. Windows CIでunit、Rust、renderer、NSIS buildを通す
-6. WDIO E2EとWindows固有の実行プロセス管理を実装する
-7. 通知、トレイ、自動起動、installerのmanual smoke testを実施する
-8. コード署名とrelease artifact公開を追加する
+1. [完了] Windows 10 version 1803+ / Windows 11、x86_64 MSVC、NSISを初期対象に決定
+2. [完了] Windowsの通知、常駐、自動起動、失敗時挙動を`specs/*.pkl`へ追加
+3. [完了] lockfileと共通ビルド処理をportable化
+4. [完了] Windows通知backendを実装
+5. [実装済み] Windows CIへunit、Rust、renderer、NSIS buildを追加。実runner結果はpush後に確認
+6. [完了] WDIO E2EとWindows固有の実行プロセス管理を実装・ローカル実行
+7. [未実施] 通知、トレイ、自動起動、installerのmanual smoke test
+8. [未実施] コード署名とrelease artifact公開
 
 ## 受け入れ基準
 
@@ -214,14 +231,12 @@ Microsoft Storeで配布する場合は、NSIS配布とは別のpackage、identi
 
 CIが通っただけで、Windows通知がユーザーへ表示されたとは判断しません。各検証の保証ラベルを維持します。
 
-## 未決事項
+## 決定済み事項と残る未決事項
 
-- Windows 10の最低versionをどこに置くか
-- ARM64を初回対象に含めるか
-- NSISだけで始めるか、MSIも同時に提供するか
-- WebView2をbootstrapper、offline installer、固定runtimeのどれで提供するか
-- per-userとper-machineのどちらでinstallするか
-- 通知失敗時に重複排除状態を巻き戻して再試行するか
+初期リリースでは、Windows 10 version 1803+ / Windows 11、x86_64 MSVC、NSIS、WebView2 `downloadBootstrapper`、per-user installを採用します。ARM64とMSIは初回対象に含めません。通知要求に失敗しても重複排除状態を巻き戻さず、自動再送しません。
+
+残る未決事項は次のとおりです。
+
 - single-instanceを必須とするか
 - アンインストール時に設定と通知履歴を保持するか
 - `Meta+数字` shortcutをWindowsで変更するか
@@ -235,17 +250,18 @@ Tauri v2では、macOS/LinuxからWindows NSISを作る経路として `cargo-xw
 
 ## 調査時に確認した主なファイル
 
-- `src-tauri/src/notify.rs`: macOS以外の通知backendがstub
+- `src-tauri/src/notify.rs`: macOS UserNotifications + Windows Tauri notification backend
 - `src-tauri/src/poller.rs`: 通知送信前に重複排除状態を保存
 - `src-tauri/src/lib.rs`: トレイ、close時の常駐、設定path
 - `src-tauri/src/commands.rs`: 自動起動command
 - `src-tauri/tauri.conf.json`: bundle targetとWindows icon
 - `src-tauri/Cargo.toml`: Tauri pluginとWindows向けcrate設定
-- `justfile`: build、spec-check、E2EのmacOS/POSIX依存
-- `tauri.e2e.conf.json`: E2E用Tauri設定
-- `wdio.conf.ts`: WDIOの実行対象
-- `tools/e2e-process.ts`: E2Eプロセス管理
-- `playwright.config.ts`: renderer testのbrowser設定
+- `justfile` / `tools/spec-check.ts` / `tools/run-e2e.ts` / `tools/build.ts`: portableな公開コマンド
+- `src-tauri/tauri.e2e.conf.json`: portableなE2E frontend build設定
+- `wdio.conf.ts`: `.exe`とAPPDATAを含むOS別実行対象
+- `tools/e2e-process.ts`: Unix inode / Windows PID leaseのE2Eプロセス管理
+- `playwright.config.ts`: macOS WebKit / Windows Chromium設定
+- `.github/workflows/windows.yml`: Windows CIとNSIS artifact
 - `specs/notifier.pkl`: 通知、アセット、Manual条項
 - `package.json` / `bun.lock`: workspace名の不一致
 
@@ -261,4 +277,4 @@ Tauri v2では、macOS/LinuxからWindows NSISを作る経路として `cargo-xw
 
 ## 調査の限界
 
-この文書はリポジトリの静的調査とTauri公式資料に基づく計画です。Windows runnerでのbuild、test、install、通知、トレイ、自動起動は未検証です。実装中に判明した差分は、この文書と仕様の正本を更新して記録します。
+この文書は静的調査に加えてWindows 11 x86_64上のlocal build/test/E2E/NSIS生成結果を反映しています。インストール済みNSISの実行、通知の人間による知覚、トレイ、自動起動、upgrade/uninstall、署名は未検証であり、MAN-014〜016の保証範囲に残します。

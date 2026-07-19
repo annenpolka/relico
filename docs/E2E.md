@@ -1,29 +1,29 @@
 # E2E自動化の境界
 
-`MAN-001`〜`MAN-011`をすべて同じ意味の「手動」と扱わず、自動化できる境界まで下ろすための設計メモ。調査時点は2026-07-17。
+`MAN-001`〜`MAN-016`をすべて同じ意味の「手動」と扱わず、自動化できる境界まで下ろすための設計メモ。更新日は2026-07-19。
 
 保証ラベルはプロジェクト規約どおり `property-tested` / `example-tested` / `manual` の3種だけを使う。E2Eは具体例を実行するテストなので、導入後の条項は `example-tested` とする。外部端末や人間の知覚まで必要な残余だけを `manual` に残す。
 
-## 導入状況(2026-07-17)
+## 導入状況(2026-07-19)
 
 実装済み:
 
 - **STA-001/002**(静的検査)と **AST-001/002**(目視承認アセットのsha256固定)を `cargo test` へ。
 - **ICN-001/002**(アイコン写像・フォールバック)を `bun test tests/unit` へ。
 - **RND-001〜005**(パレット打鍵・delivery flush・toggle/edit分離・sidebar適合・compact table)を
-  `just renderer-test`(Playwright/WebKit、IPC mockのrenderer統合)へ。ハーネスは `tests/renderer/harness.ts`。
+  `just renderer-test`(Playwright、IPC mockのrenderer統合。macOSはWebKit、WindowsはChromium)へ。ハーネスは `tests/renderer/harness.ts`。
 - **MAN-009の機械検査部分**を `just macos-smoke`(tools/macos-smoke.sh)へ。
 - MAN条項は真の残余だけに縮小し、`one-time`(一回限りの受入)と `per-release` を区別した。
 
-- **E2E-001/002**(WDIO Tauri E2E)を `just e2e` へ。`e2e` cargo feature(tauri-plugin-wdio +
+- **E2E-001〜003**(WDIO Tauri E2E)を `just e2e` へ。`e2e` cargo feature(tauri-plugin-wdio +
   tauri-plugin-wdio-webdriver)・専用identity `com.annenpolka.relico.e2e`・embedded providerで、
-  実IPC・実WKWebViewを通る証明に絞った薄いスモーク。DOM結線の網羅はrenderer統合が担う。
+  実IPC・実WebViewを通る証明に絞った薄いスモーク。macOSとWindowsの両方で同じ生成シナリオを実行し、DOM結線の網羅はrenderer統合が担う。
   既知の注意: `@wdio/tauri-service@1.2.0` はdistが `@wdio/native-utils` 2.5.0のexportを使うのに
   依存を2.4.0へピンする公開バグがあり、package.jsonの `overrides` で2.5.0へ固定している。
   service更新時にoverridesの要否を見直すこと。
 
-残り(任意): MAN-001の通知権限済みrunner(配信済み通知の照合)、MAN-002のnightly live送信、
-visual regression。
+残り: MAN-001の通知権限済みmacOS runner(配信済み通知の照合)、MAN-002のnightly live送信、
+MAN-014〜016のWindows installed-app/installer smoke、visual regression。
 
 ## 現状の分類
 
@@ -43,7 +43,7 @@ Webhook URLは通常300msの遅延保存だが、TEST操作は先に保存をflu
 
 ## WDIO Tauri E2Eハーネス(導入済み — just e2e)
 
-Tauri v2はWebdriverIOのTauri serviceを案内しており、`embedded` provider(アプリ内WebDriverサーバ)ならmacOSをネイティブに操作できる。旧来の `tauri-driver` 直結(external provider)はmacOS非対応なので使わない。構成要素(v1.2.0):
+Tauri v2はWebdriverIOのTauri serviceを案内しており、`embedded` provider(アプリ内WebDriverサーバ)でmacOSとWindowsの実アプリを操作する。旧来の `tauri-driver` 直結(external provider)はmacOS非対応なので使わない。構成要素(v1.2.0):
 
 - npm: `@wdio/tauri-service`(service本体)+ `@wdio/tauri-plugin`(frontend側。VITE_E2E=1のときだけmain.tsが動的import)
 - crates: `tauri-plugin-wdio`(execute/mock/log)+ `tauri-plugin-wdio-webdriver`(embedded provider用。**登録すると無条件でWebDriverサーバが起動する**ため`e2e` feature必須)
@@ -53,10 +53,11 @@ Tauri v2はWebdriverIOのTauri serviceを案内しており、`embedded` provide
 1. Rust plugin 2つは `e2e` cargo featureのoptional依存。通常のdebug/releaseビルドには入らない。
 2. capabilitiesの `wdio:default` はfeature無効ビルドでACLエラーになるため、`tools/e2e-capability.json` を
    `just e2e` がビルド中だけ `capabilities/e2e.json` へコピーする(gitignore済み)。
-3. 専用identity `com.annenpolka.relico.e2e`(tauri.e2e.conf.json)で、配布版の設定・通知権限・
+3. 専用identity `com.annenpolka.relico.e2e`(`src-tauri/tauri.e2e.conf.json`)で、配布版の設定・通知権限・
    LaunchServices状態を汚さない。wdio.conf.tsのonPrepareが設定ディレクトリを毎回まっさらにする。
-4. E2Eの対象は「実command・実WKWebViewを通る」証明のみ(E2E-001/002)。DOM結線の網羅は
+4. E2Eの対象は「実command・実WebViewを通る」証明のみ(E2E-001〜003)。DOM結線の網羅は
    renderer統合(RND-001〜005)が担い、二重実装しない。
+5. Unixではlistener PIDと実行ファイルinode、Windowsではlistener PIDとlease上のPIDとcanonical `.exe`を照合してからだけ既存E2Eプロセスを終了する。
 
 今後の拡張候補: MAN-001は通知権限済みrunnerで配信済み通知をidentifier/title/bodyで照合して後片付けする。MAN-002の受理判定はNTF-004で機械検証済みで、nightly live送信は任意。
 

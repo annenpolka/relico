@@ -1170,7 +1170,7 @@ pub async fn run(
         };
         let _ = app.emit("status", &snapshot);
         for card in &to_notify {
-            notify::send_content(&client, &cfg, card).await;
+            notify::send_content(&app, &client, &cfg, card).await;
         }
         tokio::time::sleep(next_poll_delay(
             &snapshot.timed_content,

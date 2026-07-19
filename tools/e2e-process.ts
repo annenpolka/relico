@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 
 export type CleanupOptions = {
   port: number;
@@ -37,6 +37,19 @@ function runLsof(args: string[]): string {
   throw new Error(`lsof failed (${result.status}): ${result.stderr.trim()}`);
 }
 
+function runPowerShell(script: string): string {
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+    { encoding: "utf8" },
+  );
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`PowerShell failed (${result.status}): ${result.stderr.trim()}`);
+  }
+  return result.stdout;
+}
+
 function canonical(path: string): string {
   return realpathSync(path.replace(/ \(deleted\)$/, ""));
 }
@@ -44,6 +57,19 @@ function canonical(path: string): string {
 export function listeningPids(port: number): number[] {
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error(`invalid TCP port: ${port}`);
+  }
+  if (process.platform === "win32") {
+    const output = runPowerShell(
+      `$connections = Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue; if ($null -ne $connections) { $connections | Select-Object -ExpandProperty OwningProcess -Unique }; exit 0`,
+    );
+    return Array.from(
+      new Set(
+        output
+          .split(/\r?\n/)
+          .map((line) => Number(line.trim()))
+          .filter((pid) => Number.isInteger(pid) && pid > 0),
+      ),
+    ).sort((left, right) => left - right);
   }
   const output = runLsof(["-nP", "-a", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"]);
   return Array.from(
@@ -57,12 +83,19 @@ export function listeningPids(port: number): number[] {
 }
 
 function leaseFileIdentity(path: string): string {
+  if (process.platform === "win32") {
+    return `pid:${readFileSync(path, "utf8").trim()}`;
+  }
   const stats = statSync(path, { bigint: true });
   return `${stats.dev}:${stats.ino}`;
 }
 
 export function leaseHolderPids(path: string): number[] {
   if (!existsSync(path)) return [];
+  if (process.platform === "win32") {
+    const pid = Number(readFileSync(path, "utf8").trim());
+    return Number.isInteger(pid) && pid > 0 && processExists(pid) ? [pid] : [];
+  }
   const leasePath = canonical(path);
   const output = runLsof(["-nP", "-Fp", "--", leasePath]);
   return Array.from(
@@ -77,6 +110,17 @@ export function leaseHolderPids(path: string): number[] {
 
 export function executableForPid(pid: number): string | null {
   if (!Number.isInteger(pid) || pid < 1) return null;
+  if (process.platform === "win32") {
+    const output = runPowerShell(
+      `$target = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -ne $target) { $target.Path }; exit 0`,
+    ).trim();
+    if (!output) return null;
+    try {
+      return canonical(output);
+    } catch {
+      return null;
+    }
+  }
   const output = runLsof(["-nP", "-a", "-p", String(pid), "-d", "txt", "-Fn"]);
   const path = output
     .split("\n")
@@ -177,8 +221,9 @@ async function waitForOwnedExit(
 }
 
 /**
- * E2E専用lease inodeを保持するprocessを、canonical executableが完全一致する場合だけ終了する。
- * port bind前・listener終了後も回収する一方、leaseなしのlistenerや同名processは対象にしない。
+ * Unixはlease inode holder、Windowsはleaseへ記録したPIDを使い、canonical executableが
+ * 完全一致する場合だけ終了する。port bind前・listener終了後も回収する一方、
+ * leaseなしのlistenerや同名processは対象にしない。
  */
 export async function cleanupOwnedListener(options: CleanupOptions): Promise<CleanupResult> {
   const listenerPids = listeningPids(options.port);
