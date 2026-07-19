@@ -228,6 +228,7 @@ test("TLG-002 tlg_002", async () => {
   const e2eConfig = JSON.parse(readFileSync(new URL("src-tauri/tauri.e2e.conf.json", root), "utf8"));
   const workflow = readFileSync(new URL(".github/workflows/windows.yml", root), "utf8");
   const lockfile = readFileSync(new URL("bun.lock", root), "utf8");
+  const attributes = readFileSync(new URL(".gitattributes", root), "utf8");
 
   expect(justfile).toContain("bun tools/spec-check.ts");
   expect(justfile).toContain("bun tools/run-e2e.ts");
@@ -251,6 +252,15 @@ test("TLG-002 tlg_002", async () => {
   expect(playwright).toContain('process.platform === "win32" ? "chromium" : "webkit"');
   expect(e2eConfig.build.beforeBuildCommand).toBe("bun tools/build-frontend-e2e.ts");
   expect(lockfile).toContain('"name": "relico"');
+  for (const generated of [
+    "docs/SPEC.md",
+    "src-tauri/tests/oracles_generated.rs",
+    "tests/unit/oracles_generated.test.ts",
+    "tests/renderer/oracles_generated.spec.ts",
+    "tests/e2e/oracles_generated.e2e.ts",
+  ]) {
+    expect(attributes).toContain(`${generated} text eol=lf`);
+  }
 
   for (const required of [
     "windows-latest",
