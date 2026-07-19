@@ -471,6 +471,11 @@ body {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* Circuitはスパイラル1行 + Circuit cardの縦積み。全幅の単一列に揃える。RND-010 */
+#timed-circuit.timed-cards {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .timed-upcoming {
   min-width: 0;
   grid-column: 1 / -1;

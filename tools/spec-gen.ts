@@ -4489,6 +4489,22 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
   await expect(circuit.locator(".timed-stage")).toHaveCount(2);
   await expect(circuit.locator(".timed-stage").nth(0)).toContainText(/Excalibur.*Mag.*Volt/s);
   await expect(circuit.locator(".timed-stage").nth(1)).toContainText(/Braton.*Lato.*Skana.*Paris.*Kunai/s);
+  // デュヴィリのスパイラル(環境サイクル)をCircuit cardの前へ併記し、状態とカウントダウンを表示する
+  const spiral = page.locator('#panel-circuit .timed-card[data-variant="duviri"]');
+  await expect(spiral).toHaveCount(1);
+  await expect(spiral).toContainText("Duviri");
+  await expect(spiral.locator(".timed-meta")).toContainText("Joy");
+  await expect(spiral.locator(".t-timer[data-expiry]")).toHaveCount(1);
+  expect(
+    await page
+      .locator("#panel-circuit .timed-card")
+      .evaluateAll((cards) => cards.map((card) => card.getAttribute("data-variant"))),
+  ).toEqual(["duviri", null]);
+  // WFCD sourceの障害はCircuitタブでも表示できる
+  await expect(
+    page.locator('#panel-circuit .timed-source-error[data-source="wfcd"]'),
+  ).toContainText("wfcd down");
+  // Area環境サイクルからは取り除かない(5 groupの検査は上のMeta+6節)
 
   await page.keyboard.press("Meta+9");
   await expect(page.locator('#panel-descendia .timed-card[data-temporal-status="active"]')).toBeVisible();

@@ -740,7 +740,8 @@ const TIMED_TAB_SOURCES: Record<TimedTabId, readonly TimedSourceKey[]> = {
   archon: ["wfcd"],
   syndicates: ["wfcd"],
   "area-missions": ["wfcd", "browseWfLocationBounties", "browseWfBounties"],
-  circuit: ["deCircuit"],
+  // スパイラル併記(WFCD由来)のためwfcdの障害もこのタブで表示する。RND-010
+  circuit: ["deCircuit", "wfcd"],
   archimedea: ["wfcd"],
   descendia: ["deDescendia"],
 };
@@ -1271,7 +1272,14 @@ function sourceValidityElement(sourceKey: TimedSourceKey, source: TimedSourceSta
 
 function cardsForTab(tab: TimedTabId, timed: TimedContentSnapshot | undefined): TimedContentCard[] {
   if (!timed) return [];
-  return TIMED_TAB_FIELDS[tab].flatMap((field) => timed[field] ?? []);
+  const cards = TIMED_TAB_FIELDS[tab].flatMap((field) => timed[field] ?? []);
+  if (tab === "circuit") {
+    // 現在のデュヴィリのスパイラル(環境サイクル)をCircuitの文脈として先頭へ併記する。
+    // Area環境サイクルの表示からは取り除かない。RND-010
+    const spiral = (timed.areaEnvironments ?? []).filter((card) => card.variant === "duviri");
+    return [...spiral, ...cards];
+  }
+  return cards;
 }
 
 function areaGroup(

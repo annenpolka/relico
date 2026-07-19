@@ -490,7 +490,7 @@ test("RND-009 serializes rapid new rule and filter apply", async ({ page }) => {
   expect(after[2]).toMatchObject({ enabled: true, notify: false, tiers: ["Axi"] });
 });
 
-// RND-010: コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁cardはcommunity schedule・browse.wf出典で絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示し、将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。DescendiaのSpecs/Aurasは生のLotus pathを本文へ表示せず、path leafを人間可読ラベル(CoH接頭辞とSpec/Aura接尾辞を除去しcamelCaseを分かち書き)へ整形して表示し、整形前のraw識別子はtooltipへ保持する。Descendiaのactive cardはupcoming行と同じくpanel全幅の単一列で表示し、multi-card gridの分割幅で細長く積まない。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。パレットのGO TO {タブ}候補は対応タブへ切り替えてパレットを閉じ、ルール・設定を変更しない。タブ列が横幅からあふれるときは、あふれている側だけにedge fadeヒント(scrolled-start/scrolled-end)を付けてスクロール可能性を示し、native scrollbarより控えめな細いテーマ色バーを使う。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)
+// RND-010: コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁cardはcommunity schedule・browse.wf出典で絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示し、将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。DescendiaのSpecs/Aurasは生のLotus pathを本文へ表示せず、path leafを人間可読ラベル(CoH接頭辞とSpec/Aura接尾辞を除去しcamelCaseを分かち書き)へ整形して表示し、整形前のraw識別子はtooltipへ保持する。Descendiaのactive cardはupcoming行と同じくpanel全幅の単一列で表示し、multi-card gridの分割幅で細長く積まない。Circuitタブは現在のデュヴィリのスパイラル(WFCD由来の環境サイクルcard。状態ラベルと残り時間カウントダウン付き)をCircuit cardの前へ併記し、WFCD sourceの障害はこのタブでも表示できる。スパイラルcardはArea環境サイクルの表示からも取り除かない。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。パレットのGO TO {タブ}候補は対応タブへ切り替えてパレットを閉じ、ルール・設定を変更しない。タブ列が横幅からあふれるときは、あふれている側だけにedge fadeヒント(scrolled-start/scrolled-end)を付けてスクロール可能性を示し、native scrollbarより控えめな細いテーマ色バーを使う。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)
 test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 620 });
   await bootConsole(page, { locale: "en" });
@@ -664,6 +664,22 @@ test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   await expect(circuit.locator(".timed-stage")).toHaveCount(2);
   await expect(circuit.locator(".timed-stage").nth(0)).toContainText(/Excalibur.*Mag.*Volt/s);
   await expect(circuit.locator(".timed-stage").nth(1)).toContainText(/Braton.*Lato.*Skana.*Paris.*Kunai/s);
+  // デュヴィリのスパイラル(環境サイクル)をCircuit cardの前へ併記し、状態とカウントダウンを表示する
+  const spiral = page.locator('#panel-circuit .timed-card[data-variant="duviri"]');
+  await expect(spiral).toHaveCount(1);
+  await expect(spiral).toContainText("Duviri");
+  await expect(spiral.locator(".timed-meta")).toContainText("Joy");
+  await expect(spiral.locator(".t-timer[data-expiry]")).toHaveCount(1);
+  expect(
+    await page
+      .locator("#panel-circuit .timed-card")
+      .evaluateAll((cards) => cards.map((card) => card.getAttribute("data-variant"))),
+  ).toEqual(["duviri", null]);
+  // WFCD sourceの障害はCircuitタブでも表示できる
+  await expect(
+    page.locator('#panel-circuit .timed-source-error[data-source="wfcd"]'),
+  ).toContainText("wfcd down");
+  // Area環境サイクルからは取り除かない(5 groupの検査は上のMeta+6節)
 
   await page.keyboard.press("Meta+9");
   await expect(page.locator('#panel-descendia .timed-card[data-temporal-status="active"]')).toBeVisible();
