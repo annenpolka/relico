@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use tauri::AppHandle;
 
 use crate::config::{AppConfig, AppLocale};
 use crate::i18n;
@@ -228,6 +229,25 @@ pub async fn desktop_for_locale(
     locale: AppLocale,
 ) -> Result<DesktopReceipt, String> {
     desktop_request(
+        None,
+        format!("relico-{}", fissure.id),
+        desktop_payload_for_locale(fissure, now, locale),
+        interactive,
+        locale,
+    )
+    .await
+}
+
+/// 実アプリのidentityを必要とするOS backendへAppHandleを渡す。
+pub async fn desktop_for_locale_with_app(
+    app: &AppHandle,
+    fissure: &Fissure,
+    now: DateTime<Utc>,
+    interactive: bool,
+    locale: AppLocale,
+) -> Result<DesktopReceipt, String> {
+    desktop_request(
+        Some(app),
         format!("relico-{}", fissure.id),
         desktop_payload_for_locale(fissure, now, locale),
         interactive,
@@ -243,6 +263,24 @@ pub async fn content_desktop_for_locale(
     locale: AppLocale,
 ) -> Result<DesktopReceipt, String> {
     desktop_request(
+        None,
+        format!("relico-content-{}", card.id),
+        content_desktop_payload_for_locale(card, now, locale),
+        interactive,
+        locale,
+    )
+    .await
+}
+
+pub async fn content_desktop_for_locale_with_app(
+    app: &AppHandle,
+    card: &TimedContent,
+    now: DateTime<Utc>,
+    interactive: bool,
+    locale: AppLocale,
+) -> Result<DesktopReceipt, String> {
+    desktop_request(
+        Some(app),
         format!("relico-content-{}", card.id),
         content_desktop_payload_for_locale(card, now, locale),
         interactive,
@@ -253,6 +291,7 @@ pub async fn content_desktop_for_locale(
 
 #[cfg(target_os = "macos")]
 async fn desktop_request(
+    _app: Option<&AppHandle>,
     id: String,
     payload: DesktopPayload,
     interactive: bool,
@@ -347,8 +386,71 @@ async fn desktop_request(
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 async fn desktop_request(
+    app: Option<&AppHandle>,
+    id: String,
+    payload: DesktopPayload,
+    interactive: bool,
+    locale: AppLocale,
+) -> Result<DesktopReceipt, String> {
+    use tauri::plugin::PermissionState;
+    use tauri_plugin_notification::NotificationExt;
+
+    let app = app.ok_or_else(|| {
+        desktop_unavailable_message_for_locale(
+            "Windows notification backend requires an installed app identity",
+            locale,
+        )
+    })?;
+    let notification = app.notification();
+    let mut permission = notification.permission_state().map_err(|error| {
+        i18n::format(
+            locale,
+            "notify.settingsReadFailed",
+            &[("error", &error.to_string())],
+        )
+    })?;
+    if matches!(
+        permission,
+        PermissionState::Prompt | PermissionState::PromptWithRationale
+    ) && interactive
+    {
+        permission = notification.request_permission().map_err(|error| {
+            i18n::format(
+                locale,
+                "notify.permissionRequestFailed",
+                &[("error", &error.to_string())],
+            )
+        })?;
+    }
+    if permission != PermissionState::Granted {
+        return Err(i18n::text(locale, "notify.permissionNotGranted"));
+    }
+
+    notification
+        .builder()
+        .title(payload.title)
+        .body(payload.body)
+        .show()
+        .map_err(|error| {
+            i18n::format(
+                locale,
+                "notify.requestRejected",
+                &[("error", &error.to_string())],
+            )
+        })?;
+
+    // pluginのshow成功はOSへの要求受付だけを表し、表示済みとは扱わない。SPEC: MAN-014
+    Ok(DesktopReceipt {
+        request_id: id,
+        warning: None,
+    })
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+async fn desktop_request(
+    _app: Option<&AppHandle>,
     _id: String,
     _payload: DesktopPayload,
     _interactive: bool,
@@ -482,10 +584,15 @@ async fn discord_post(
 
 /// 設定に応じてデスクトップ+Discordへ通知要求を出す。
 /// dedupの再試行意味論は変えず、即時エラーは必ずログへ残す。
-pub async fn send(client: &reqwest::Client, cfg: &AppConfig, fissure: &Fissure) {
+pub async fn send(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    cfg: &AppConfig,
+    fissure: &Fissure,
+) {
     let now = Utc::now();
     if cfg.desktop_notification {
-        match desktop_for_locale(fissure, now, false, cfg.locale).await {
+        match desktop_for_locale_with_app(app, fissure, now, false, cfg.locale).await {
             Ok(receipt) => {
                 if let Some(warning) = receipt.warning {
                     eprintln!("desktop notification warning: {warning}");
@@ -504,10 +611,15 @@ pub async fn send(client: &reqwest::Client, cfg: &AppConfig, fissure: &Fissure) 
 }
 
 /// contentRulesに合致した時限cardの通知。fissure sendと同じ配送マナーに従う。SPEC: NTF-006
-pub async fn send_content(client: &reqwest::Client, cfg: &AppConfig, card: &TimedContent) {
+pub async fn send_content(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    cfg: &AppConfig,
+    card: &TimedContent,
+) {
     let now = Utc::now();
     if cfg.desktop_notification {
-        match content_desktop_for_locale(card, now, false, cfg.locale).await {
+        match content_desktop_for_locale_with_app(app, card, now, false, cfg.locale).await {
             Ok(receipt) => {
                 if let Some(warning) = receipt.warning {
                     eprintln!("content desktop notification warning: {warning}");

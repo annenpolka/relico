@@ -4021,6 +4021,75 @@ fn sta_004() {
     );
 }
 
+/// STA-005: Windows x86_64-pc-windows-msvc配布版はtauri-plugin-notificationをWindows targetだけで初期化し、macOS固有backendを置換せず、インストール済みcom.annenpolka.relicoのidentityから通知要求をshowする配線を持つ。Windows bundleはNSISだけを対象にし、per-user installとWebView2 downloadBootstrapperを明示する
+#[test]
+fn sta_005() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let cargo = std::fs::read_to_string(manifest.join("Cargo.toml"))
+        .expect("Cargo.tomlを読めること");
+    let windows_dependencies = cargo
+        .split("[target.'cfg(target_os = \"windows\")'.dependencies]")
+        .nth(1)
+        .expect("Windows target dependency section");
+    assert!(
+        windows_dependencies.contains("tauri-plugin-notification"),
+        "SPEC STA-005 違反: Windows x86_64-pc-windows-msvc配布版はtauri-plugin-notificationをWindows targetだけで初期化し、macOS固有backendを置換せず、インストール済みcom.annenpolka.relicoのidentityから通知要求をshowする配線を持つ。Windows bundleはNSISだけを対象にし、per-user installとWebView2 downloadBootstrapperを明示する (Windows targetにnotification pluginがない)"
+    );
+
+    let lib_rs = std::fs::read_to_string(manifest.join("src/lib.rs"))
+        .expect("src/lib.rsを読めること");
+    assert!(
+        lib_rs.contains("#[cfg(target_os = \"windows\")]")
+            && lib_rs.contains("tauri_plugin_notification::init()"),
+        "SPEC STA-005 違反: Windows x86_64-pc-windows-msvc配布版はtauri-plugin-notificationをWindows targetだけで初期化し、macOS固有backendを置換せず、インストール済みcom.annenpolka.relicoのidentityから通知要求をshowする配線を持つ。Windows bundleはNSISだけを対象にし、per-user installとWebView2 downloadBootstrapperを明示する (Windowsだけでnotification pluginを初期化する配線がない)"
+    );
+
+    let notify_rs = std::fs::read_to_string(manifest.join("src/notify.rs"))
+        .expect("src/notify.rsを読めること");
+    for required in [
+        "#[cfg(target_os = \"macos\")]",
+        "#[cfg(target_os = \"windows\")]",
+        "tauri_plugin_notification::NotificationExt",
+        ".builder()",
+        ".show()",
+    ] {
+        assert!(notify_rs.contains(required), "SPEC STA-005 違反: Windows x86_64-pc-windows-msvc配布版はtauri-plugin-notificationをWindows targetだけで初期化し、macOS固有backendを置換せず、インストール済みcom.annenpolka.relicoのidentityから通知要求をshowする配線を持つ。Windows bundleはNSISだけを対象にし、per-user installとWebView2 downloadBootstrapperを明示する (Windows通知配線: {required})");
+    }
+
+    let windows: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(manifest.join("tauri.windows.conf.json"))
+            .expect("tauri.windows.conf.jsonを読めること"),
+    )
+    .expect("tauri.windows.conf.jsonがJSONであること");
+    assert_eq!(windows["bundle"]["targets"], serde_json::json!(["nsis"]), "SPEC STA-005 違反: Windows x86_64-pc-windows-msvc配布版はtauri-plugin-notificationをWindows targetだけで初期化し、macOS固有backendを置換せず、インストール済みcom.annenpolka.relicoのidentityから通知要求をshowする配線を持つ。Windows bundleはNSISだけを対象にし、per-user installとWebView2 downloadBootstrapperを明示する (NSIS限定)");
+    assert_eq!(
+        windows["bundle"]["windows"]["webviewInstallMode"]["type"],
+        "downloadBootstrapper",
+        "SPEC STA-005 違反: Windows x86_64-pc-windows-msvc配布版はtauri-plugin-notificationをWindows targetだけで初期化し、macOS固有backendを置換せず、インストール済みcom.annenpolka.relicoのidentityから通知要求をshowする配線を持つ。Windows bundleはNSISだけを対象にし、per-user installとWebView2 downloadBootstrapperを明示する (WebView2 install mode)"
+    );
+    assert_eq!(
+        windows["bundle"]["windows"]["nsis"]["installMode"],
+        "currentUser",
+        "SPEC STA-005 違反: Windows x86_64-pc-windows-msvc配布版はtauri-plugin-notificationをWindows targetだけで初期化し、macOS固有backendを置換せず、インストール済みcom.annenpolka.relicoのidentityから通知要求をshowする配線を持つ。Windows bundleはNSISだけを対象にし、per-user installとWebView2 downloadBootstrapperを明示する (per-user install)"
+    );
+
+    let release: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(manifest.join("tauri.conf.json"))
+            .expect("tauri.conf.jsonを読めること"),
+    )
+    .expect("tauri.conf.jsonがJSONであること");
+    assert_eq!(release["identifier"], "com.annenpolka.relico", "SPEC STA-005 違反: Windows x86_64-pc-windows-msvc配布版はtauri-plugin-notificationをWindows targetだけで初期化し、macOS固有backendを置換せず、インストール済みcom.annenpolka.relicoのidentityから通知要求をshowする配線を持つ。Windows bundleはNSISだけを対象にし、per-user installとWebView2 downloadBootstrapperを明示する (配布identity)");
+    assert!(
+        release["bundle"]["icon"]
+            .as_array()
+            .is_some_and(|icons| icons.iter().any(|icon| icon == "icons/icon.ico")),
+        "SPEC STA-005 違反: Windows x86_64-pc-windows-msvc配布版はtauri-plugin-notificationをWindows targetだけで初期化し、macOS固有backendを置換せず、インストール済みcom.annenpolka.relicoのidentityから通知要求をshowする配線を持つ。Windows bundleはNSISだけを対象にし、per-user installとWebView2 downloadBootstrapperを明示する (Windows icon登録)"
+    );
+    let main_rs = std::fs::read_to_string(manifest.join("src/main.rs"))
+        .expect("src/main.rsを読めること");
+    assert!(main_rs.contains("windows_subsystem = \"windows\""), "SPEC STA-005 違反: Windows x86_64-pc-windows-msvc配布版はtauri-plugin-notificationをWindows targetだけで初期化し、macOS固有backendを置換せず、インストール済みcom.annenpolka.relicoのidentityから通知要求をshowする配線を持つ。Windows bundleはNSISだけを対象にし、per-user installとWebView2 downloadBootstrapperを明示する (release subsystem)");
+}
+
 /// AST-001: メニューバー用tray-icon.pngは目視承認済みの内容から変わっていない(変えたらMAN-005の手順で再承認しsha256を更新する)
 #[test]
 fn ast_001() {
@@ -4046,5 +4115,19 @@ fn ast_002() {
     assert_eq!(
         digest, "3b5771fafbd7068879d5ed783b7b66c91acb60d75fd922ca8474df56e9edfb97",
         "SPEC AST-002 違反: 配布用アプリアイコンicon.icnsは目視承認済みの内容から変わっていない(変えたらMAN-006の手順で再承認しsha256を更新する) — icons/icon.icns が承認済み内容から変わった。見た目を目視で再承認し、specs/notifier.pkl のsha256を更新して just spec-gen すること"
+    );
+}
+
+/// AST-003: Windows配布用icon.icoは目視承認済みの内容から変わっていない(変えたらMAN-014の手順で再承認しsha256を更新する)
+#[test]
+fn ast_003() {
+    use sha2::{Digest, Sha256};
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bytes = std::fs::read(manifest.join("icons/icon.ico"))
+        .expect("承認済みアセット icons/icon.ico を読めること");
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    assert_eq!(
+        digest, "b067b62c0a72e0813acd8385a76fa2018e6208c58653738eb4c87fcaf513a6ed",
+        "SPEC AST-003 違反: Windows配布用icon.icoは目視承認済みの内容から変わっていない(変えたらMAN-014の手順で再承認しsha256を更新する) — icons/icon.ico が承認済み内容から変わった。見た目を目視で再承認し、specs/notifier.pkl のsha256を更新して just spec-gen すること"
     );
 }

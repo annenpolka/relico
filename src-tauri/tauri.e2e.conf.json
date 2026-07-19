@@ -3,6 +3,6 @@
   "productName": "RELICO E2E",
   "identifier": "com.annenpolka.relico.e2e",
   "build": {
-    "beforeBuildCommand": "VITE_E2E=1 bun run build"
+    "beforeBuildCommand": "bun tools/build-frontend-e2e.ts"
   }
 }
