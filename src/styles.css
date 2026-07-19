@@ -1412,16 +1412,50 @@ input:focus-visible {
 }
 
 #rules-list .rule-summary {
+  display: flex;
+  align-items: center;
+  gap: 3px;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+#rules-list .rule-summary-all {
+  color: var(--dim);
+}
+
+#rules-list .rule-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 4px;
+  border: 1px solid var(--line);
+  color: var(--amber);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+#rules-list .rule-chip .glyph {
+  width: 13px;
+  height: 13px;
+}
+
+#rules-list .rule-chip.more {
+  color: var(--dim);
+  border-color: var(--rowline);
 }
 
 #rules-list .rule-row.disabled .rule-toggle,
 #rules-list .rule-row.disabled .rule-edit,
 #rules-list .rule-row.disabled .rno {
   color: var(--dim);
+}
+
+#rules-list .rule-row.disabled .rule-chip {
+  color: var(--dim);
+  border-color: var(--rowline);
 }
 
 #rules-list .rule-row .rno {

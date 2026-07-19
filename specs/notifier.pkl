@@ -168,7 +168,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.ContentPalette {
     id = "CPL-001"
-    desc = "亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{n})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空"
+    desc = "亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{n}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空"
     scenario = "picker_catalog"
   }
   new patterns.ContentPalette {
@@ -227,7 +227,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RuleToggleCandidates {
     id = "EDT-003"
-    desc = "パレットの実行時カタログは各ルールをrule:{index}候補(label=ルール名、未設定ならR{n}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる"
+    desc = "パレットの実行時カタログは各ルールをrule:{index}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{n}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる"
   }
   new patterns.ClearResets {
     id = "CLR-001"
@@ -387,7 +387,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-006"
-    desc = "FILTERSのNAME入力は編集中ルールの名前をdebounce保存し、ルール行は名前を要約より優先表示し、パレットは名前でRULE候補を検索でき、適用はenabledのトグルだけでedit focus表示を変えない。RENAME RULE候補の適用はパレット入力を改名モードへ切り替え、Enterで編集中ルールの名前を保存して通常モードへ戻り、Escは保存せず通常モードへ戻る(renderer統合)"
+    desc = "FILTERSのNAME入力は編集中ルールの名前をdebounce保存する。ルール行本体(.rule-summary)は名前の有無と絞り込み軸で表示を切り替える: 名前なしルールは絞っている軸だけをアイコンチップ(.rule-chip。中身はglyphHtmlのSVGでaria-hidden、title属性に実名を持つ)で表示し、tiersは各tierを個別のtier glyphチップ(title=現状どおり大文字表記)、modeはBoth以外のときだけdifficulty glyphチップ(title=既存i18n文言)、stormsはExclude以外のときだけstorm glyphチップ(title=既存i18n文言)、missionTypes/planets/factionsは軸ごとに2件以下ならそれぞれのglyphチップ(title=格納文字列そのまま)、3件以上なら先頭1件のglyphチップと残数の文字チップ「+{n}」(class=more、アイコンなし)を表示する。名前なしでどの軸も絞っていないルールはチップを出さずdimテキスト「すべての亀裂」(rules.summaryAll)を表示する。名前ありルールは名前をテキスト表示し、tier/mode(Both以外)/storm(Exclude以外)/mission/planet/factionのうち絞っている軸が1つ以上あれば「+{軸数}軸」の文字チップ(rules.chipAxes、アイコンなし)を1つだけ追加し、0なら追加しない。アイコンチップは装飾(aria-hidden)のため、行のtooltip(rules.editTitle)とaria-label(rules.editAria)は表示に関わらず常に全軸要約(summarize)を使い続け、チップのtitle属性と合わせて実名情報を読み取れる。パレットは名前でRULE候補を検索でき、適用はenabledのトグルだけでedit focus表示を変えない。RENAME RULE候補の適用はパレット入力を改名モードへ切り替え、Enterで編集中ルールの名前を保存して通常モードへ戻り、Escは保存せず通常モードへ戻る(renderer統合)"
     scenario = "rule_naming"
   }
   new patterns.RendererScenario {

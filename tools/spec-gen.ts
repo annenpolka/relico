@@ -576,11 +576,10 @@ ${indent(c.fissureOverride ?? "", 8)}
             let cand = catalog.iter().find(|cand| cand.id == format!("crule:{index}"));
             if visible.contains(&index) {
                 let cand = cand.expect("crule候補が存在すること");
-                let expected_label = rule
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("A{}", index + 1));
-                prop_assert_eq!(&cand.label, &expected_label, "${msg} (crule labelが名前/A{{n}}でない)");
+                let expected_label = rule.name.clone().unwrap_or_else(|| {
+                    format!("A{}: {}", index + 1, content_palette::content_rule_summary(rule))
+                });
+                prop_assert_eq!(&cand.label, &expected_label, "${msg} (crule labelが名前/A{{n}}: 要約でない)");
                 prop_assert_eq!(cand.facet, Facet::Rule, "${msg} (crule facetがRULEでない)");
             } else {
                 prop_assert!(cand.is_none(), "${msg} (タブ対象外ルールの候補を出した)");
@@ -1961,8 +1960,11 @@ ${indent(c.fissureOverride ?? "", 8)}
             let cand = catalog.iter()
                 .find(|c| c.id == format!("rule:{i}"))
                 .expect("rule候補が存在すること");
-            let expected_label = rule.name.clone().unwrap_or_else(|| format!("R{}", i + 1));
-            prop_assert_eq!(&cand.label, &expected_label, "${msg} (labelが名前/R{{n}}でない)");
+            let expected_label = rule
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("R{}: {}", i + 1, palette::rule_summary(rule)));
+            prop_assert_eq!(&cand.label, &expected_label, "${msg} (labelが名前/R{{n}}: 要約でない)");
             prop_assert_eq!(cand.facet, Facet::Rule, "${msg} (facetがRULEでない)");
         }
         // 適用は対象ルールのenabledだけを反転し、条件・順序・edit indexを変えない
@@ -4421,6 +4423,52 @@ test("${c.id} rules list scrolls inside fixed-ratio area", async ({ page }) => {
 // ${c.id}: ${c.desc}
 test("${c.id} rule naming and palette toggle", async ({ page }) => {
   await bootConsole(page);
+  // R1(名前なし・どの軸も絞っていない)はチップではなくdimテキストで「すべての亀裂」を表示する
+  await expect(page.locator(".rule-focus .rule-summary")).toHaveText("All fissures");
+  await expect(page.locator(".rule-focus .rule-chip")).toHaveCount(0);
+  // R2(名前なし、tierだけ絞り込み)は絞っている軸だけをアイコンチップ(facet glyph+title=実名)で表示する
+  await page.locator(".rule-row .rule-edit").nth(1).click();
+  await expect(page.locator("#editing-meta")).toHaveText("R2/2");
+  await expect(page.locator(".rule-focus .rule-chip")).toHaveCount(1);
+  await expect(page.locator(".rule-focus .rule-chip").nth(0)).toHaveAttribute("title", "AXI");
+  await expect(page.locator(".rule-focus .rule-chip").nth(0).locator("svg.glyph-tier")).toHaveCount(1);
+  // modeとstormを絞るとdifficulty/storm glyphチップが増える(titleは既存i18n文言)
+  await page.keyboard.press("m");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await page.locator("#palette-input").fill("steel path");
+  await page.keyboard.press("Enter");
+  await page.locator("#palette-input").fill("include storms");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".rule-focus .rule-chip")).toHaveCount(3);
+  await expect(page.locator(".rule-focus .rule-chip").nth(1)).toHaveAttribute("title", "Steel");
+  await expect(page.locator(".rule-focus .rule-chip").nth(1).locator("svg.glyph-difficulty")).toHaveCount(1);
+  await expect(page.locator(".rule-focus .rule-chip").nth(2)).toHaveAttribute("title", "+VOID STORM");
+  await expect(page.locator(".rule-focus .rule-chip").nth(2).locator("svg.glyph-storm")).toHaveCount(1);
+  // missionTypesを3件絞ると先頭1件のアイコンチップ+残数の文字チップ「+n」(アイコンなし)になる
+  await page.keyboard.press("m");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await page.locator("#palette-input").fill("survival");
+  await page.keyboard.press("Enter");
+  await page.locator("#palette-input").fill("mobile defense");
+  await page.keyboard.press("Enter");
+  await page.locator("#palette-input").fill("capture");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".rule-focus .rule-chip")).toHaveCount(5);
+  await expect(page.locator(".rule-focus .rule-chip").nth(3)).toHaveAttribute("title", "Survival");
+  await expect(page.locator(".rule-focus .rule-chip").nth(3).locator("svg.glyph-mission")).toHaveCount(1);
+  await expect(page.locator(".rule-focus .rule-chip").nth(4)).toHaveText("+2");
+  await expect(page.locator(".rule-focus .rule-chip.more")).toHaveCount(1);
+  // 名前を付けると個別アイコンチップは消え、名前テキスト+絞り込み軸数チップ(+4 axes、アイコンなし)だけになる
+  await page.locator("#rulename-input").fill("FARM AXI");
+  await expect(page.locator(".rule-focus .rule-summary")).toContainText("FARM AXI");
+  await expect(page.locator(".rule-focus .rule-chip")).toHaveCount(1);
+  await expect(page.locator(".rule-focus .rule-chip").first()).toHaveText("+4 axes");
+  // R1へ編集対象を戻す(R1の絞り込みはR2の操作で変わらない)
+  await page.locator(".rule-row .rule-edit").first().click();
+  await expect(page.locator("#editing-meta")).toHaveText("R1/2");
+  await expect(page.locator(".rule-focus .rule-summary")).toHaveText("All fissures");
   // NAME入力は編集中ルール(R1)の名前をdebounce保存する
   await page.locator("#rulename-input").fill("MY FARM");
   await expect
@@ -4430,8 +4478,9 @@ test("${c.id} rule naming and palette toggle", async ({ page }) => {
       ),
     )
     .toBe(true);
-  // ルール行は名前を要約より優先表示する
+  // ルール行は名前を要約より優先表示し、絞り込み軸が0なら軸数チップは付けない
   await expect(page.locator(".rule-focus .rule-summary")).toHaveText("MY FARM");
+  await expect(page.locator(".rule-focus .rule-chip")).toHaveCount(0);
   const editingBefore = await page.locator("#editing-meta").textContent();
   // パレットは名前でRULE候補を検索できる(どこでも打鍵で開く)
   await page.locator("#rulename-input").blur();
@@ -5353,9 +5402,9 @@ describe("${c.id}", () => {
     });
     await browser.keys("xi");
     await browser.keys("Enter");
-    // 実apply_candidateのApplyResultがrule summaryへ反映される
+    // 実apply_candidateのApplyResultがrule summaryへ反映される(アイコンチップ+title=実名)
     await browser.waitUntil(
-      async () => (await $(".rule-summary").getText()).includes("AXI"),
+      async () => await $('.rule-summary .rule-chip[title="AXI"]').isExisting(),
       { timeoutMsg: "実IPCのapply_candidate結果がsummaryへ反映されない" },
     );
     await browser.keys("Escape");

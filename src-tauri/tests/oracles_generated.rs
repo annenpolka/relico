@@ -1400,7 +1400,7 @@ proptest! {
         );
     }
 
-    /// CPL-001: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{n})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空
+    /// CPL-001: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{n}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空
     #[test]
     fn cpl_001(
         rules in proptest::collection::vec(arb_content_rule(), 0..5),
@@ -1422,49 +1422,48 @@ proptest! {
 
         // ミッションキーワード候補はパレット語彙全件
         for (label, _) in palette::mission_vocabulary() {
-            prop_assert!(has(format!("ckeyword:{label}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (キーワード候補の欠落: {})", label);
+            prop_assert!(has(format!("ckeyword:{label}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (キーワード候補の欠落: {})", label);
         }
         // レベル下限プリセットと解除候補
         for preset in content_palette::LEVEL_PRESETS {
-            prop_assert!(has(format!("clevel:{preset}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (レベルプリセットの欠落)");
+            prop_assert!(has(format!("clevel:{preset}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (レベルプリセットの欠落)");
         }
-        prop_assert!(has("clevel:off".to_string()), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (レベル解除候補の欠落)");
+        prop_assert!(has("clevel:off".to_string()), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (レベル解除候補の欠落)");
         // タブに表示されるルール(kinds未指定を含む)のnotifyトグル候補
         let visible = content_palette::tab_visible_indices(&rules, group);
         for (index, rule) in rules.iter().enumerate() {
             let cand = catalog.iter().find(|cand| cand.id == format!("crule:{index}"));
             if visible.contains(&index) {
                 let cand = cand.expect("crule候補が存在すること");
-                let expected_label = rule
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("A{}", index + 1));
-                prop_assert_eq!(&cand.label, &expected_label, "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (crule labelが名前/A{{n}}でない)");
-                prop_assert_eq!(cand.facet, Facet::Rule, "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (crule facetがRULEでない)");
+                let expected_label = rule.name.clone().unwrap_or_else(|| {
+                    format!("A{}: {}", index + 1, content_palette::content_rule_summary(rule))
+                });
+                prop_assert_eq!(&cand.label, &expected_label, "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (crule labelが名前/A{{n}}: 要約でない)");
+                prop_assert_eq!(cand.facet, Facet::Rule, "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (crule facetがRULEでない)");
             } else {
-                prop_assert!(cand.is_none(), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (タブ対象外ルールの候補を出した)");
+                prop_assert!(cand.is_none(), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (タブ対象外ルールの候補を出した)");
             }
         }
         // アクション: NEW/DELETE ALERTと共有のGO TO/PAUSEだけを含む
-        prop_assert!(has("caction:new-content-rule".to_string()), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (NEW ALERT欠落)");
-        prop_assert!(has("caction:delete-content-rule".to_string()), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (DELETE ALERT欠落)");
-        prop_assert!(has("action:pause".to_string()), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (PAUSE欠落)");
+        prop_assert!(has("caction:new-content-rule".to_string()), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (NEW ALERT欠落)");
+        prop_assert!(has("caction:delete-content-rule".to_string()), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (DELETE ALERT欠落)");
+        prop_assert!(has("action:pause".to_string()), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (PAUSE欠落)");
         for tab_id in [
             "fissures", "arbitration", "sortie", "archon", "syndicates",
             "area-missions", "circuit", "archimedea", "descendia",
         ] {
-            prop_assert!(has(format!("action:tab-{tab_id}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (GO TO欠落: {})", tab_id);
+            prop_assert!(has(format!("action:tab-{tab_id}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (GO TO欠落: {})", tab_id);
         }
         // 亀裂専用候補を持ち込まない
         for cand in &catalog {
             for forbidden in ["tier:", "mission:", "planet:", "faction:", "mode:", "storm:", "rule:", "action:sort-"] {
-                prop_assert!(!cand.id.starts_with(forbidden), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (亀裂候補の混入: {})", cand.id);
+                prop_assert!(!cand.id.starts_with(forbidden), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (亀裂候補の混入: {})", cand.id);
             }
             for forbidden in [
                 "action:new-rule", "action:delete-rule", "action:rename-rule", "action:toggle-rule",
                 "action:notify-rule", "action:deselect-all-rules", "action:clear",
             ] {
-                prop_assert!(cand.id != forbidden, "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (亀裂ルール操作の混入: {})", cand.id);
+                prop_assert!(cand.id != forbidden, "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (亀裂ルール操作の混入: {})", cand.id);
             }
         }
         // 動的候補: クエリの数字はレベル下限候補になる
@@ -1472,7 +1471,7 @@ proptest! {
         let digits: String = trimmed.chars().filter(|ch| ch.is_ascii_digit()).collect();
         if let Ok(level) = digits.parse::<u32>() {
             if (1..=9999).contains(&level) {
-                prop_assert!(has(format!("clevel:{level}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (クエリ数字のレベル候補欠落)");
+                prop_assert!(has(format!("clevel:{level}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (クエリ数字のレベル候補欠落)");
             }
         }
         // 動的候補: 語彙に解決しない非数字クエリはrawキーワード候補になる
@@ -1480,12 +1479,12 @@ proptest! {
             let canonical = content_filter::canonical_keyword(trimmed);
             let vocabulary_hit = palette::mission_vocabulary().any(|(label, _)| label == canonical);
             if !vocabulary_hit {
-                prop_assert!(has(format!("ckeyword:{trimmed}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (rawキーワード候補欠落)");
+                prop_assert!(has(format!("ckeyword:{trimmed}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (rawキーワード候補欠落)");
             }
         }
         // 未知タブ(亀裂含む)のカタログは空
-        prop_assert!(content_palette::catalog("fissures", &rules, &query).is_empty(), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (亀裂タブへ出した)");
-        prop_assert!(content_palette::catalog("nosuch", &rules, &query).is_empty(), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (未知タブへ出した)");
+        prop_assert!(content_palette::catalog("fissures", &rules, &query).is_empty(), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (亀裂タブへ出した)");
+        prop_assert!(content_palette::catalog("nosuch", &rules, &query).is_empty(), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定なら識別子と条件要約を併記した「A{{n}}: 要約」)、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (未知タブへ出した)");
     }
 
     /// CPL-002: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない
@@ -2103,7 +2102,7 @@ proptest! {
         prop_assert_eq!(empty.active, 0, "SPEC EDT-004 違反: 表示選択が1本もない(無指定)状態でfilter候補を適用すると、既存ルールを変更せず末尾へenabled=true・notify=falseの新しいVIEWルールを1本作り、候補を適用してedit対象にする。以後のfilter候補は同じ新ルールへ適用して増殖させない。edit対象がNEW RULEで作った安全な空draftなら、そのdraftを再利用してVIEWルールへ確定する (ルール0本から作成したルールをedit対象にしない)");
     }
 
-    /// EDT-003: パレットの実行時カタログは各ルールをrule:{index}候補(label=ルール名、未設定ならR{n}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる
+    /// EDT-003: パレットの実行時カタログは各ルールをrule:{index}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{n}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる
     #[test]
     fn edt_003(
         rules in proptest::collection::vec(arb_rule(), 1..5),
@@ -2118,9 +2117,12 @@ proptest! {
             let cand = catalog.iter()
                 .find(|c| c.id == format!("rule:{i}"))
                 .expect("rule候補が存在すること");
-            let expected_label = rule.name.clone().unwrap_or_else(|| format!("R{}", i + 1));
-            prop_assert_eq!(&cand.label, &expected_label, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (labelが名前/R{{n}}でない)");
-            prop_assert_eq!(cand.facet, Facet::Rule, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (facetがRULEでない)");
+            let expected_label = rule
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("R{}: {}", i + 1, palette::rule_summary(rule)));
+            prop_assert_eq!(&cand.label, &expected_label, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (labelが名前/R{{n}}: 要約でない)");
+            prop_assert_eq!(cand.facet, Facet::Rule, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (facetがRULEでない)");
         }
         // 適用は対象ルールのenabledだけを反転し、条件・順序・edit indexを変えない
         let cand = catalog.iter()
@@ -2128,13 +2130,13 @@ proptest! {
             .expect("rule候補が存在すること");
         let mut state = palette::EditorState { rules: rules.clone(), active };
         palette::apply(&mut state, cand);
-        prop_assert_eq!(state.active, active, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (edit indexが変化した)");
+        prop_assert_eq!(state.active, active, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (edit indexが変化した)");
         let mut expected = rules.clone();
         expected[target].enabled = !rules[target].enabled;
-        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (enabled反転以外が変化した)");
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (enabled反転以外が変化した)");
         // 再適用で元に戻る(トグル)
         palette::apply(&mut state, cand);
-        prop_assert_eq!(state.rules.as_slice(), rules.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (再適用で往復しない)");
+        prop_assert_eq!(state.rules.as_slice(), rules.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (再適用で往復しない)");
 
         // action:toggle-rule は編集中(active)ルールのenabledだけを同様に反転する
         let toggle_cand = catalog.iter()
@@ -2142,12 +2144,12 @@ proptest! {
             .expect("TOGGLE RULE候補が存在すること");
         let mut state = palette::EditorState { rules: rules.clone(), active };
         palette::apply(&mut state, toggle_cand);
-        prop_assert_eq!(state.active, active, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (toggle-ruleでedit indexが変化した)");
+        prop_assert_eq!(state.active, active, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (toggle-ruleでedit indexが変化した)");
         let mut expected = rules.clone();
         expected[active].enabled = !rules[active].enabled;
-        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (toggle-ruleがactive以外を変更した)");
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (toggle-ruleがactive以外を変更した)");
         palette::apply(&mut state, toggle_cand);
-        prop_assert_eq!(state.rules.as_slice(), rules.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (toggle-rule再適用で往復しない)");
+        prop_assert_eq!(state.rules.as_slice(), rules.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (toggle-rule再適用で往復しない)");
 
         // action:notify-rule は編集中(active)ルールのnotifyだけを同様に反転する
         let notify_cand = catalog.iter()
@@ -2155,12 +2157,12 @@ proptest! {
             .expect("TOGGLE NOTIFY候補が存在すること");
         let mut state = palette::EditorState { rules: rules.clone(), active };
         palette::apply(&mut state, notify_cand);
-        prop_assert_eq!(state.active, active, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (notify-ruleでedit indexが変化した)");
+        prop_assert_eq!(state.active, active, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (notify-ruleでedit indexが変化した)");
         let mut expected = rules.clone();
         expected[active].notify = !rules[active].notify;
-        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (notify-ruleがnotify以外を変更した)");
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (notify-ruleがnotify以外を変更した)");
         palette::apply(&mut state, notify_cand);
-        prop_assert_eq!(state.rules.as_slice(), rules.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (notify-rule再適用で往復しない)");
+        prop_assert_eq!(state.rules.as_slice(), rules.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (notify-rule再適用で往復しない)");
 
         // action:deselect-all-rules は全enabledだけをfalseにし、通知射影・条件・順序・edit indexを保持する
         let deselect_cand = catalog.iter()
@@ -2172,19 +2174,19 @@ proptest! {
         });
         let mut state = palette::EditorState { rules: rules.clone(), active };
         palette::apply(&mut state, deselect_cand);
-        prop_assert_eq!(state.active, active, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (全ルール解除でedit indexが変化した)");
+        prop_assert_eq!(state.active, active, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (全ルール解除でedit indexが変化した)");
         let mut expected = rules.clone();
         for rule in &mut expected {
             rule.enabled = false;
         }
-        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (全ルール解除がenabled以外を変更した)");
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (全ルール解除がenabled以外を変更した)");
         let after_projection = filter::notification_projection(&FilterSettings {
             rules: state.rules.clone(),
             min_remaining_secs: 123,
         });
-        prop_assert_eq!(after_projection, before_projection, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (全ルール解除で通知射影が変化した)");
+        prop_assert_eq!(after_projection, before_projection, "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (全ルール解除で通知射影が変化した)");
         palette::apply(&mut state, deselect_cand);
-        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定ならR{{n}}、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (全ルール解除が冪等でない)");
+        prop_assert_eq!(state.rules.as_slice(), expected.as_slice(), "SPEC EDT-003 違反: パレットの実行時カタログは各ルールをrule:{{index}}候補(label=ルール名、未設定なら識別子と条件要約を併記した「R{{n}}: 要約」、facet=RULE)として含み、適用は対象ルールのenabledだけを反転して条件・順序・notify・edit indexを変えず、再適用で元に戻る(トグル)。action:toggle-rule候補は編集中(active)ルールのenabledだけを、action:notify-rule候補は編集中ルールのnotifyだけを同様に反転する。action:deselect-all-rules(全ルール解除)は全ルールのenabledだけをfalseにしてnotify・条件・順序・edit indexを保持し、再適用しても同じ状態になる (全ルール解除が冪等でない)");
     }
 
     /// CLR-001: クリア操作は1回でルール構成を既定(enabled=trueの全対象ルール1本、ストーム除外、両方モード)に戻す

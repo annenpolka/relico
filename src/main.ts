@@ -6,7 +6,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 if (import.meta.env.VITE_E2E) {
   void import("@wdio/tauri-plugin");
 }
-import { candidateGlyphHtml, glyphHtml, planetForFissure } from "./icons";
+import { candidateGlyphHtml, glyphHtml, planetForFissure, type GlyphKind } from "./icons";
 import {
   applyDocumentTranslations,
   candidateLabel,
@@ -68,6 +68,7 @@ function withFrontendDefaults(next: AppConfig): AppConfig {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const escAttr = (s: string) => esc(s).replace(/"/g, "&quot;");
 
 function railMsg(text: string, kind: "ok" | "err" | "" = "") {
   const el = $("rail-msg");
@@ -203,6 +204,67 @@ function summarize(r: WatchRule): string {
   return s;
 }
 
+/** アイコンチップ。中身はfacet glyph(aria-hidden)で、実名はtitle属性へ持たせる(RND-006) */
+function iconChipHtml(kind: GlyphKind, value: string, title: string): string {
+  return `<span class="rule-chip" title="${escAttr(title)}">${glyphHtml(kind, value)}</span>`;
+}
+
+/** テキストのみのチップ。残数「+n」と名前ありルールの「+n軸」だけがこの形を使う */
+function textChipHtml(text: string, more = false): string {
+  return `<span class="rule-chip${more ? " more" : ""}">${esc(text)}</span>`;
+}
+
+/** ルール行本体(.rule-summary)のfacetアイコンチップ列。絞っている軸だけを1チップずつ返す(RND-006) */
+function ruleAxisChipsHtml(r: WatchRule): { html: string[]; axisCount: number } {
+  const html: string[] = [];
+  let axisCount = 0;
+  if (r.tiers.length) {
+    axisCount++;
+    for (const tier of r.tiers) html.push(iconChipHtml("tier", tier, tier.toUpperCase()));
+  }
+  if (r.mode !== "Both") {
+    axisCount++;
+    const title = r.mode === "SteelPath" ? t("rules.modeSteel") : t("rules.modeNormal");
+    html.push(iconChipHtml("difficulty", r.mode === "SteelPath" ? "steelpath" : "normal", title));
+  }
+  if (r.storms !== "Exclude") {
+    axisCount++;
+    const title = r.storms === "Include" ? t("rules.stormInclude") : t("rules.stormOnly");
+    html.push(iconChipHtml("storm", r.storms === "Include" ? "include" : "only", title));
+  }
+  const groups: ReadonlyArray<readonly [GlyphKind, string[]]> = [
+    ["mission", r.missionTypes],
+    ["planet", r.planets],
+    ["faction", r.factions],
+  ];
+  for (const [kind, values] of groups) {
+    if (!values.length) continue;
+    axisCount++;
+    if (values.length <= 2) {
+      for (const value of values) html.push(iconChipHtml(kind, value, value));
+    } else {
+      html.push(iconChipHtml(kind, values[0], values[0]));
+      html.push(textChipHtml(`+${values.length - 1}`, true));
+    }
+  }
+  return { html, axisCount };
+}
+
+/** ルール行本体のinnerHTML。名前ありは名前+絞り込み軸数チップ、名前なしは軸別アイコンチップ、
+    無条件(名前なし・軸0)はdimテキスト「すべての亀裂」を表示する。tooltip/aria-labelは
+    表示に関わらずsummarize()の全要約を使い続ける(呼出側で別途設定) */
+function ruleSummaryHtml(r: WatchRule): string {
+  const { html, axisCount } = ruleAxisChipsHtml(r);
+  if (r.name) {
+    const nameHtml = esc(r.name);
+    return axisCount === 0 ? nameHtml : `${nameHtml} ${textChipHtml(t("rules.chipAxes", { count: axisCount }))}`;
+  }
+  if (axisCount === 0) {
+    return `<span class="rule-summary-all">${esc(t("rules.summaryAll"))}</span>`;
+  }
+  return html.join("");
+}
+
 function renderRules() {
   const box = $("rules-list");
   const rules = config?.rules ?? [];
@@ -245,8 +307,8 @@ function renderRules() {
       const edit = document.createElement("button");
       edit.className = "rule-edit";
       edit.type = "button";
-      // 名前があれば要約より優先して表示する(要約はtooltipに残す)
-      edit.innerHTML = `<span class="rno">R${i + 1}</span><span class="rule-summary">${esc(r.name ?? summarize(r))}</span>`;
+      // ルール行本体はfacetチップ(または名前+軸数チップ/dimの無条件表示)。tooltip/aria-labelは全要約(summarize)のまま
+      edit.innerHTML = `<span class="rno">R${i + 1}</span><span class="rule-summary">${ruleSummaryHtml(r)}</span>`;
       if (focused) edit.setAttribute("aria-current", "true");
       edit.setAttribute(
         "aria-label",

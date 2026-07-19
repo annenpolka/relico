@@ -4,7 +4,9 @@ import type { Facet } from "./types";
  * UI専用の小型SVGグリフ。
  *
  * フィルタ意味論はRust側にだけ置き、ここではAPI/カタログ値を視覚表現へ写像する。
- * 文字ラベルは常に併記するため、アイコンは装飾扱い(aria-hidden)にする。
+ * 多くの用途では文字ラベルを併記するため、アイコンは装飾扱い(aria-hidden)にする。
+ * ルール行のfacetチップ(.rule-chip)のようにアイコン単独で表示する箇所では、
+ * チップのtitle属性と行全体のaria-label(全軸要約)が文字情報を補う。
  */
 export type GlyphKind = "tier" | "planet" | "mission" | "faction" | "difficulty" | "storm" | "action";
 

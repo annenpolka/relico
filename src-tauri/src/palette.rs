@@ -382,7 +382,7 @@ pub fn catalog() -> Vec<Candidate> {
 }
 
 /// 実行時カタログ: 静的語彙 + 現在ルールのenabledトグル候補。
-/// labelはルール名(未設定ならR{n})。SPEC: EDT-003
+/// labelはルール名(未設定なら「R{n}: 要約」で条件を判別できるようにする)。SPEC: EDT-003
 pub fn catalog_with_rules(rules: &[WatchRule]) -> Vec<Candidate> {
     let mut out = catalog();
     for (i, rule) in rules.iter().enumerate() {
@@ -393,7 +393,10 @@ pub fn catalog_with_rules(rules: &[WatchRule]) -> Vec<Candidate> {
         }
         out.push(Candidate {
             id: format!("rule:{i}"),
-            label: rule.name.clone().unwrap_or(fallback),
+            label: rule
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("{fallback}: {}", rule_summary(rule))),
             value: i.to_string(),
             aliases,
             facet: Facet::Rule,

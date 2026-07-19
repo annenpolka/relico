@@ -29,9 +29,9 @@ describe("E2E-001", () => {
     });
     await browser.keys("xi");
     await browser.keys("Enter");
-    // 実apply_candidateのApplyResultがrule summaryへ反映される
+    // 実apply_candidateのApplyResultがrule summaryへ反映される(アイコンチップ+title=実名)
     await browser.waitUntil(
-      async () => (await $(".rule-summary").getText()).includes("AXI"),
+      async () => await $('.rule-summary .rule-chip[title="AXI"]').isExisting(),
       { timeoutMsg: "実IPCのapply_candidate結果がsummaryへ反映されない" },
     );
     await browser.keys("Escape");

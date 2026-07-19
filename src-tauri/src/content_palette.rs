@@ -154,7 +154,11 @@ pub fn catalog(tab: &str, rules: &[ContentWatchRule], query: &str) -> Vec<Candid
         }
         out.push(Candidate {
             id: format!("crule:{index}"),
-            label: rule.name.clone().unwrap_or(fallback),
+            // 名前未設定でも条件を判別できるよう「A{n}: 要約」を表示する。SPEC: CPL-001
+            label: rule
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("{fallback}: {}", content_rule_summary(rule))),
             value: index.to_string(),
             aliases,
             facet: Facet::Rule,
