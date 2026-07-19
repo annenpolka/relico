@@ -98,7 +98,17 @@ function save() {
 
 // ---- パレット候補の適用(ルール編集はすべてこの経路 = SAT-001の解決を通る) ----
 async function refreshCatalog() {
-  catalogView = await invoke<CandView[]>("query_candidates", { q: "", active: editingRuleIndex });
+  // facet launcher表示用の亀裂カタログ。タブ別ピッカーの候補はpaletteQueryが都度取得する
+  catalogView = await invoke<CandView[]>("query_candidates", {
+    q: "",
+    active: editingRuleIndex,
+    tab: "fissures",
+  });
+}
+
+/** パレットが編集する対象タブ。facet launcher経由は常に亀裂ピッカー(RND-016) */
+function paletteTargetTab(): ContentTabId {
+  return paletteFacet ? "fissures" : getActiveContentTab();
 }
 
 /** 亀裂の検索条件(表示に効く条件・VIEW選択)を変更する候補か。RND-015 */
@@ -124,7 +134,11 @@ function revealFissuresTab() {
 
 async function applyCand(id: string) {
   try {
-    const res = await invoke<ApplyResult>("apply_candidate", { id, active: editingRuleIndex });
+    const res = await invoke<ApplyResult>("apply_candidate", {
+      id,
+      active: editingRuleIndex,
+      tab: paletteTargetTab(),
+    });
     config = withFrontendDefaults(res.config);
     editingRuleIndex = res.active;
     await refreshCatalog();
@@ -1444,7 +1458,11 @@ function hl(text: string, indices: number[]): string {
 
 async function paletteQuery() {
   const q = ($("palette-input") as HTMLInputElement).value;
-  const results = await invoke<CandView[]>("query_candidates", { q, active: editingRuleIndex });
+  const results = await invoke<CandView[]>("query_candidates", {
+    q,
+    active: editingRuleIndex,
+    tab: paletteTargetTab(),
+  });
   paletteResults = paletteFacet ? results.filter((candidate) => candidate.facet === paletteFacet) : results;
   if (paletteFacet && q.trim() === "") {
     paletteResults = [
@@ -1457,6 +1475,16 @@ async function paletteQuery() {
 }
 
 function renderPalette() {
+  const targetTab = paletteTargetTab();
+  if (targetTab !== "fissures") {
+    // タブ別ピッカー: 編集対象はそのタブのコンテンツ通知ルール(RND-016)
+    $("palette-rule").textContent = t("palette.contentEdit", {
+      tab: t(TAB_LABEL_KEYS[targetTab as TimedTabId]),
+      count: tabAlertEntries(targetTab as TimedTabId).length,
+    }).toUpperCase();
+    renderPaletteCands();
+    return;
+  }
   const rules = config?.rules ?? [];
   const index = Math.min(editingRuleIndex, rules.length - 1);
   $("palette-rule").textContent = rules.length
@@ -1467,6 +1495,10 @@ function renderPalette() {
         notify: t(rules[index].notify ? "common.on" : "common.off"),
       }).toUpperCase()}${paletteFacet ? ` · ${facetLabel(paletteFacet)}` : ""}`
     : t("palette.noRules");
+  renderPaletteCands();
+}
+
+function renderPaletteCands() {
   const box = $("palette-cands");
   if (!paletteResults.length) {
     box.innerHTML = `<div class="cand none">${esc(t("palette.noMatch"))}</div>`;

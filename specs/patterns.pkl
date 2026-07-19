@@ -318,6 +318,15 @@ class ContentRulesConfig extends Clause {
   label = "example-tested"
 }
 
+/// タブ別コンテンツピッカー: 亀裂以外のコンテンツタブでパレットが出す候補カタログと、
+/// contentRulesへの適用意味論。編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、
+/// kinds未指定の全タブ共通ルールは条件編集の対象にしない。
+class ContentPalette extends Clause {
+  pattern = "content_palette"
+  label = "property-tested"
+  scenario: "picker_catalog" | "picker_apply" | "picker_target"
+}
+
 /// 時限コンテンツの外部payloadを固定fixtureで正規化し、source・詳細field・wire shapeを検査する。
 /// network到達性や第三者scheduleの将来正確性はManualへ残す。
 class TimedContentFixture extends Clause {
@@ -376,7 +385,7 @@ class ToolingScenario extends Clause {
 class RendererScenario extends Clause {
   pattern = "renderer_scenario"
   label = "example-tested"
-  scenario: "palette_keyboard" | "delivery_flush" | "rule_row_controls" | "sidebar_fit" | "compact_table" | "expiry_cleanup" | "rule_naming" | "table_sort" | "unselected_picker_create" | "content_tabs" | "mute_window" | "locale_display" | "node_levels" | "content_alerts" | "filter_auto_tab"
+  scenario: "palette_keyboard" | "delivery_flush" | "rule_row_controls" | "sidebar_fit" | "compact_table" | "expiry_cleanup" | "rule_naming" | "table_sort" | "unselected_picker_create" | "content_tabs" | "mute_window" | "locale_display" | "node_levels" | "content_alerts" | "filter_auto_tab" | "content_picker"
 }
 
 /// 実アプリ(実IPC・実WKWebView)を通すWDIO Tauri E2E。renderer統合(RendererScenario)が

@@ -11,6 +11,7 @@ use crate::filter::{Mode, StormMode};
 use crate::i18n;
 use crate::model::Fissure;
 use crate::notify;
+use crate::content_palette;
 use crate::palette::{self, Facet};
 use crate::poller::{PollerState, StatusSnapshot};
 
@@ -68,8 +69,36 @@ pub struct CandView {
 }
 
 #[tauri::command]
-pub fn query_candidates(state: State<AppState>, q: String, active: usize) -> Vec<CandView> {
+pub fn query_candidates(
+    state: State<AppState>,
+    q: String,
+    active: usize,
+    tab: Option<String>,
+) -> Vec<CandView> {
     let cfg = state.cfg_tx.borrow().clone();
+    // 亀裂以外のコンテンツタブは、そのタブのcontentRules編集候補を出す。SPEC: CPL-001
+    if let Some(group) = tab.as_deref().and_then(content_palette::tab_kind_group) {
+        let catalog = content_palette::catalog(tab.as_deref().unwrap_or_default(), &cfg.content_rules, &q);
+        return palette::query_catalog(&catalog, &q)
+            .into_iter()
+            .map(|r| {
+                let c = &catalog[r.idx];
+                let on = if c.id == "action:pause" {
+                    cfg.paused
+                } else {
+                    content_palette::candidate_on(&cfg.content_rules, group, c)
+                };
+                CandView {
+                    id: c.id.clone(),
+                    label: c.label.clone(),
+                    facet: c.facet,
+                    on,
+                    indices: r.indices,
+                    via: r.via.map(|ai| c.aliases[ai].clone()),
+                }
+            })
+            .collect();
+    }
     let rule = cfg.rules.get(active.min(cfg.rules.len().saturating_sub(1)));
     let catalog = palette::catalog_with_rules(&cfg.rules);
     palette::query_catalog(&catalog, &q)
@@ -126,14 +155,30 @@ pub struct ApplyResult {
 }
 
 /// パレット候補を適用(アクティブルールの編集/アクション実行)。SPEC: SAT-001
+/// コンテンツ候補(ckeyword/clevel/crule/caction)はタブ文脈のcontentRulesへ適用する。SPEC: CPL-002/003
 #[tauri::command]
 pub fn apply_candidate(
     app: AppHandle,
     state: State<AppState>,
     id: String,
     active: usize,
+    tab: Option<String>,
 ) -> Result<ApplyResult, String> {
     let mut cfg = state.cfg_tx.borrow().clone();
+    if content_palette::is_content_candidate_id(&id) {
+        let applied = tab
+            .as_deref()
+            .and_then(content_palette::tab_kind_group)
+            .is_some_and(|group| content_palette::apply(&mut cfg.content_rules, group, &id));
+        if !applied {
+            return Err(localized_error(cfg.locale, "error.unknownCandidate", "id", &id));
+        }
+        persist(&app, &state, cfg.clone())?;
+        return Ok(ApplyResult {
+            config: cfg,
+            active,
+        });
+    }
     let catalog = palette::catalog_with_rules(&cfg.rules);
     let cand = catalog
         .iter()

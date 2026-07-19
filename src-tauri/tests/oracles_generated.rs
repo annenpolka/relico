@@ -9,6 +9,7 @@ use proptest::prelude::*;
 use relico_lib::backoff::Backoff;
 use relico_lib::config::{AppConfig, AppLocale, ContentWatchRule, DailyMuteWindow};
 use relico_lib::content_filter;
+use relico_lib::content_palette;
 use relico_lib::dedup::NotifiedSet;
 use relico_lib::filter::{self, FilterSettings, Mode, StormMode, WatchRule};
 use relico_lib::model::Fissure;
@@ -1397,6 +1398,355 @@ proptest! {
             content_filter::content_scope_changed(None, &rules),
             "SPEC CNT-003 違反: コンテンツ通知範囲のprojectionはnotify=trueのルールだけを元の順序で保持し、キーワードを正準化して比較する。ルール名の変更・notify=falseルールの追加削除編集ではprojectionは変わらず、notify切替・notify=trueルールのkinds/missionTypes/minEnemyLevel変更では変わる。初回評価とprojection変更後の評価はsilent seedとなり現存合致cardを一括通知しない (初回評価をseedしない)"
         );
+    }
+
+    /// CPL-001: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{n})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空
+    #[test]
+    fn cpl_001(
+        rules in proptest::collection::vec(arb_content_rule(), 0..5),
+        tab_pick in any::<prop::sample::Index>(),
+        query in prop_oneof![
+            Just(String::new()),
+            Just("60".to_string()),
+            Just("lv120".to_string()),
+            Just("netracells".to_string()),
+            Just("防衛".to_string()),
+            "[a-z]{1,6}",
+            "[0-9]{1,4}",
+        ],
+    ) {
+        let (tab, group) = content_palette::TAB_KIND_GROUPS
+            [tab_pick.index(content_palette::TAB_KIND_GROUPS.len())];
+        let catalog = content_palette::catalog(tab, &rules, &query);
+        let has = |id: String| catalog.iter().any(|cand| cand.id == id);
+
+        // ミッションキーワード候補はパレット語彙全件
+        for (label, _) in palette::mission_vocabulary() {
+            prop_assert!(has(format!("ckeyword:{label}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (キーワード候補の欠落: {})", label);
+        }
+        // レベル下限プリセットと解除候補
+        for preset in content_palette::LEVEL_PRESETS {
+            prop_assert!(has(format!("clevel:{preset}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (レベルプリセットの欠落)");
+        }
+        prop_assert!(has("clevel:off".to_string()), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (レベル解除候補の欠落)");
+        // タブに表示されるルール(kinds未指定を含む)のnotifyトグル候補
+        let visible = content_palette::tab_visible_indices(&rules, group);
+        for (index, rule) in rules.iter().enumerate() {
+            let cand = catalog.iter().find(|cand| cand.id == format!("crule:{index}"));
+            if visible.contains(&index) {
+                let cand = cand.expect("crule候補が存在すること");
+                let expected_label = rule
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("A{}", index + 1));
+                prop_assert_eq!(&cand.label, &expected_label, "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (crule labelが名前/A{{n}}でない)");
+                prop_assert_eq!(cand.facet, Facet::Rule, "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (crule facetがRULEでない)");
+            } else {
+                prop_assert!(cand.is_none(), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (タブ対象外ルールの候補を出した)");
+            }
+        }
+        // アクション: NEW/DELETE ALERTと共有のGO TO/PAUSEだけを含む
+        prop_assert!(has("caction:new-content-rule".to_string()), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (NEW ALERT欠落)");
+        prop_assert!(has("caction:delete-content-rule".to_string()), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (DELETE ALERT欠落)");
+        prop_assert!(has("action:pause".to_string()), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (PAUSE欠落)");
+        for tab_id in [
+            "fissures", "arbitration", "sortie", "archon", "syndicates",
+            "area-missions", "circuit", "archimedea", "descendia",
+        ] {
+            prop_assert!(has(format!("action:tab-{tab_id}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (GO TO欠落: {})", tab_id);
+        }
+        // 亀裂専用候補を持ち込まない
+        for cand in &catalog {
+            for forbidden in ["tier:", "mission:", "planet:", "faction:", "mode:", "storm:", "rule:", "action:sort-"] {
+                prop_assert!(!cand.id.starts_with(forbidden), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (亀裂候補の混入: {})", cand.id);
+            }
+            for forbidden in [
+                "action:new-rule", "action:delete-rule", "action:rename-rule", "action:toggle-rule",
+                "action:notify-rule", "action:deselect-all-rules", "action:clear",
+            ] {
+                prop_assert!(cand.id != forbidden, "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (亀裂ルール操作の混入: {})", cand.id);
+            }
+        }
+        // 動的候補: クエリの数字はレベル下限候補になる
+        let trimmed = query.trim();
+        let digits: String = trimmed.chars().filter(|ch| ch.is_ascii_digit()).collect();
+        if let Ok(level) = digits.parse::<u32>() {
+            if (1..=9999).contains(&level) {
+                prop_assert!(has(format!("clevel:{level}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (クエリ数字のレベル候補欠落)");
+            }
+        }
+        // 動的候補: 語彙に解決しない非数字クエリはrawキーワード候補になる
+        if !trimmed.is_empty() && digits != trimmed {
+            let canonical = content_filter::canonical_keyword(trimmed);
+            let vocabulary_hit = palette::mission_vocabulary().any(|(label, _)| label == canonical);
+            if !vocabulary_hit {
+                prop_assert!(has(format!("ckeyword:{trimmed}")), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (rawキーワード候補欠落)");
+            }
+        }
+        // 未知タブ(亀裂含む)のカタログは空
+        prop_assert!(content_palette::catalog("fissures", &rules, &query).is_empty(), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (亀裂タブへ出した)");
+        prop_assert!(content_palette::catalog("nosuch", &rules, &query).is_empty(), "SPEC CPL-001 違反: 亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{{n}})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空 (未知タブへ出した)");
+    }
+
+    /// CPL-002: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない
+    #[test]
+    fn cpl_002(
+        rules in proptest::collection::vec(arb_content_rule(), 0..5),
+        tab_pick in any::<prop::sample::Index>(),
+        keyword in proptest::sample::select(CONTENT_KEYWORDS.to_vec()),
+        level in prop_oneof![proptest::sample::select(vec![30u32, 60, 100, 150, 200]), 1u32..300],
+        rule_pick in any::<prop::sample::Index>(),
+    ) {
+        let (_, group) = content_palette::TAB_KIND_GROUPS
+            [tab_pick.index(content_palette::TAB_KIND_GROUPS.len())];
+        let target = content_palette::content_target(&rules, group);
+        let is_draft = |rule: &ContentWatchRule| {
+            !rule.notify && rule.mission_types.is_empty() && rule.min_enemy_level.is_none()
+        };
+
+        // キーワード候補: 正準同値トグル。編集先の他フィールドと他ルールを保持する
+        let canonical = content_filter::canonical_keyword(keyword);
+        let mut after = rules.clone();
+        prop_assert!(
+            content_palette::apply(&mut after, group, &format!("ckeyword:{keyword}")),
+            "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (キーワード適用が失敗)"
+        );
+        match target {
+            Some(index) => {
+                prop_assert_eq!(after.len(), rules.len(), "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (編集先があるのにルール数が変化)");
+                for (j, rule) in rules.iter().enumerate() {
+                    if j != index {
+                        prop_assert_eq!(&after[j], rule, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (対象外ルールが変化)");
+                    }
+                }
+                let before_rule = &rules[index];
+                let after_rule = &after[index];
+                let had = before_rule
+                    .mission_types
+                    .iter()
+                    .any(|k| content_filter::canonical_keyword(k) == canonical);
+                let has_now = after_rule
+                    .mission_types
+                    .iter()
+                    .any(|k| content_filter::canonical_keyword(k) == canonical);
+                prop_assert_eq!(has_now, !had, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (正準同値トグルでない)");
+                let kept_before: Vec<&String> = before_rule
+                    .mission_types
+                    .iter()
+                    .filter(|k| content_filter::canonical_keyword(k) != canonical)
+                    .collect();
+                let kept_after: Vec<&String> = after_rule
+                    .mission_types
+                    .iter()
+                    .filter(|k| content_filter::canonical_keyword(k) != canonical)
+                    .collect();
+                prop_assert_eq!(kept_after, kept_before, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (対象外キーワードが変化)");
+                prop_assert_eq!(&after_rule.kinds, &before_rule.kinds, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (kindsが変化)");
+                prop_assert_eq!(&after_rule.name, &before_rule.name, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (nameが変化)");
+                prop_assert_eq!(after_rule.min_enemy_level, before_rule.min_enemy_level, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (レベル下限が変化)");
+                let expected_notify = before_rule.notify || is_draft(before_rule);
+                prop_assert_eq!(after_rule.notify, expected_notify, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (notifyの暗黙変更)");
+            }
+            None => {
+                prop_assert_eq!(after.len(), rules.len() + 1, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (編集先なしで新ルールを作らない)");
+                prop_assert_eq!(&after[..rules.len()], rules.as_slice(), "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (既存ルールが変化)");
+                let created = &after[rules.len()];
+                prop_assert!(created.notify, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (新ルールがnotify=OFF)");
+                let expected_kinds: Vec<String> = group.iter().map(|kind| kind.to_string()).collect();
+                prop_assert_eq!(&created.kinds, &expected_kinds, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (新ルールのkindsがタブkind群でない)");
+                prop_assert_eq!(created.mission_types.clone(), vec![canonical.clone()], "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (新ルールのキーワード)");
+                prop_assert_eq!(created.min_enemy_level, None, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (新ルールへレベルを捏造)");
+            }
+        }
+
+        // レベル候補: 設定と、同値再適用での解除(往復)
+        let mut leveled = rules.clone();
+        prop_assert!(
+            content_palette::apply(&mut leveled, group, &format!("clevel:{level}")),
+            "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (レベル適用が失敗)"
+        );
+        match target {
+            Some(index) => {
+                let before_rule = &rules[index];
+                let expected1 = if before_rule.min_enemy_level == Some(level) { None } else { Some(level) };
+                prop_assert_eq!(leveled[index].min_enemy_level, expected1, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (レベル設定/解除でない)");
+                prop_assert_eq!(&leveled[index].mission_types, &before_rule.mission_types, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (レベル適用がキーワードを変えた)");
+                for (j, rule) in rules.iter().enumerate() {
+                    if j != index {
+                        prop_assert_eq!(&leveled[j], rule, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (レベル適用が対象外ルールを変えた)");
+                    }
+                }
+                prop_assert!(
+                    content_palette::apply(&mut leveled, group, &format!("clevel:{level}")),
+                    "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (レベル再適用が失敗)"
+                );
+                let expected2 = if expected1 == Some(level) { None } else { Some(level) };
+                prop_assert_eq!(leveled[index].min_enemy_level, expected2, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (レベル再適用が往復しない)");
+            }
+            None => {
+                prop_assert_eq!(leveled.len(), rules.len() + 1, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (編集先なしのレベル適用で新ルールを作らない)");
+                prop_assert_eq!(leveled[rules.len()].min_enemy_level, Some(level), "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (新ルールのレベル下限)");
+                prop_assert!(leveled[rules.len()].mission_types.is_empty(), "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (新ルールへキーワードを捏造)");
+            }
+        }
+
+        // レベル解除候補: 編集先のminEnemyLevelだけを外す。編集先がなければ何も作らない
+        let mut cleared = rules.clone();
+        prop_assert!(content_palette::apply(&mut cleared, group, "clevel:off"), "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (レベル解除が失敗)");
+        match target {
+            Some(index) => {
+                prop_assert_eq!(cleared[index].min_enemy_level, None, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (レベル解除されない)");
+                prop_assert_eq!(cleared[index].notify, rules[index].notify, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (レベル解除がnotifyを変えた)");
+                prop_assert_eq!(&cleared[index].mission_types, &rules[index].mission_types, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (レベル解除がキーワードを変えた)");
+                for (j, rule) in rules.iter().enumerate() {
+                    if j != index {
+                        prop_assert_eq!(&cleared[j], rule, "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (レベル解除が対象外ルールを変えた)");
+                    }
+                }
+            }
+            None => {
+                prop_assert_eq!(cleared.as_slice(), rules.as_slice(), "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (編集先なしのレベル解除がルールを作った)");
+            }
+        }
+
+        // notifyトグル候補: 対象ルールのnotifyだけを反転し、再適用で元に戻る
+        if !rules.is_empty() {
+            let index = rule_pick.index(rules.len());
+            let mut toggled = rules.clone();
+            prop_assert!(
+                content_palette::apply(&mut toggled, group, &format!("crule:{index}")),
+                "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (notifyトグルが失敗)"
+            );
+            let mut expected = rules.clone();
+            expected[index].notify = !rules[index].notify;
+            prop_assert_eq!(toggled.as_slice(), expected.as_slice(), "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (notify以外が変化)");
+            prop_assert!(
+                content_palette::apply(&mut toggled, group, &format!("crule:{index}")),
+                "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (notify再トグルが失敗)"
+            );
+            prop_assert_eq!(toggled.as_slice(), rules.as_slice(), "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (notifyトグルが往復しない)");
+        }
+        // 範囲外のcrule・未知idは適用失敗し、ルールを変えない
+        let mut unchanged = rules.clone();
+        prop_assert!(!content_palette::apply(&mut unchanged, group, &format!("crule:{}", rules.len())), "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (範囲外cruleを受理)");
+        prop_assert!(!content_palette::apply(&mut unchanged, group, "caction:bogus"), "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (未知cactionを受理)");
+        prop_assert!(!content_palette::apply(&mut unchanged, group, "tier:Axi"), "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (亀裂候補を受理)");
+        prop_assert_eq!(unchanged.as_slice(), rules.as_slice(), "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (失敗適用がルールを変えた)");
+
+        // DELETE ALERT: 編集先ルールだけを除去。編集先がなければ何も変更しない
+        let mut deleted = rules.clone();
+        prop_assert!(
+            content_palette::apply(&mut deleted, group, "caction:delete-content-rule"),
+            "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (DELETE ALERTが失敗)"
+        );
+        match target {
+            Some(index) => {
+                let mut expected = rules.clone();
+                expected.remove(index);
+                prop_assert_eq!(deleted.as_slice(), expected.as_slice(), "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (編集先以外を削除)");
+            }
+            None => {
+                prop_assert_eq!(deleted.as_slice(), rules.as_slice(), "SPEC CPL-002 違反: コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない (編集先なしで削除)");
+            }
+        }
+    }
+
+    /// CPL-003: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない
+    #[test]
+    fn cpl_003(
+        rules in proptest::collection::vec(arb_content_rule(), 0..5),
+        tab_pick in any::<prop::sample::Index>(),
+        keyword in proptest::sample::select(CONTENT_KEYWORDS.to_vec()),
+    ) {
+        let (_, group) = content_palette::TAB_KIND_GROUPS
+            [tab_pick.index(content_palette::TAB_KIND_GROUPS.len())];
+
+        // 編集先 = タブ専用(kinds非空かつ交差)ルールの末尾。kinds未指定は編集先にならない
+        let expected_target = rules
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, rule)| {
+                !rule.kinds.is_empty() && rule.kinds.iter().any(|kind| group.contains(&kind.as_str()))
+            })
+            .map(|(index, _)| index);
+        prop_assert_eq!(content_palette::content_target(&rules, group), expected_target, "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (編集先の選定)");
+
+        // 表示行の集合はkinds未指定を含む(RND-014の行と同じ集合)
+        let expected_visible: Vec<usize> = rules
+            .iter()
+            .enumerate()
+            .filter(|(_, rule)| {
+                rule.kinds.is_empty() || rule.kinds.iter().any(|kind| group.contains(&kind.as_str()))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        prop_assert_eq!(content_palette::tab_visible_indices(&rules, group), expected_visible, "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (表示行の集合)");
+
+        // 編集先なし → キーワード適用は既存を変えずkinds=タブkind群・notify=ONの新ルールを1本作る
+        let unscoped: Vec<ContentWatchRule> = rules
+            .iter()
+            .cloned()
+            .map(|mut rule| {
+                if rule.kinds.iter().any(|kind| group.contains(&kind.as_str())) {
+                    rule.kinds = vec!["__other__".to_string()];
+                }
+                rule
+            })
+            .collect();
+        prop_assert_eq!(content_palette::content_target(&unscoped, group), None, "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (前提: 編集先なし)");
+        let mut created = unscoped.clone();
+        prop_assert!(
+            content_palette::apply(&mut created, group, &format!("ckeyword:{keyword}")),
+            "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (編集先なしのキーワード適用が失敗)"
+        );
+        prop_assert_eq!(created.len(), unscoped.len() + 1, "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (新ルールを1本作らない)");
+        prop_assert_eq!(&created[..unscoped.len()], unscoped.as_slice(), "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (既存ルールが変化)");
+        {
+            let new_rule = created.last().expect("新ルール");
+            prop_assert!(new_rule.notify, "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (新ルールがnotify=OFF)");
+            let expected_kinds: Vec<String> = group.iter().map(|kind| kind.to_string()).collect();
+            prop_assert_eq!(&new_rule.kinds, &expected_kinds, "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (新ルールのkinds)");
+        }
+        // 以後の条件候補は同じ新ルールへ適用され、増殖しない
+        prop_assert!(content_palette::apply(&mut created, group, "clevel:60"), "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (後続レベル適用が失敗)");
+        prop_assert_eq!(created.len(), unscoped.len() + 1, "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (後続適用でルールが増殖)");
+        prop_assert_eq!(created.last().expect("新ルール").min_enemy_level, Some(60), "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (後続レベルが同じルールへ入らない)");
+
+        // NEW ALERT → notify=OFF・条件なしの安全なdraftを末尾へ追加する
+        let mut drafted = rules.clone();
+        prop_assert!(
+            content_palette::apply(&mut drafted, group, "caction:new-content-rule"),
+            "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (NEW ALERTが失敗)"
+        );
+        prop_assert_eq!(drafted.len(), rules.len() + 1, "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (draftを追加しない)");
+        prop_assert_eq!(&drafted[..rules.len()], rules.as_slice(), "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (NEW ALERTが既存ルールを変えた)");
+        {
+            let draft = drafted.last().expect("draft");
+            prop_assert!(!draft.notify, "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (draftがnotify=ON)");
+            prop_assert!(draft.mission_types.is_empty() && draft.min_enemy_level.is_none(), "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (draftへ条件を捏造)");
+            let expected_kinds: Vec<String> = group.iter().map(|kind| kind.to_string()).collect();
+            prop_assert_eq!(&draft.kinds, &expected_kinds, "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (draftのkinds)");
+        }
+        // draftへの最初の条件適用はnotify=ONへ確定し、draftを再利用する
+        prop_assert!(
+            content_palette::apply(&mut drafted, group, &format!("ckeyword:{keyword}")),
+            "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (draftへの適用が失敗)"
+        );
+        prop_assert_eq!(drafted.len(), rules.len() + 1, "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (draftを再利用しない)");
+        prop_assert!(drafted.last().expect("draft").notify, "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (draftをnotify=ONへ確定しない)");
+
+        // 条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない
+        let mut established = rules.clone();
+        established.push(ContentWatchRule {
+            notify: false,
+            name: None,
+            kinds: group.iter().map(|kind| kind.to_string()).collect(),
+            mission_types: vec!["Survival".to_string()],
+            min_enemy_level: None,
+        });
+        prop_assert!(content_palette::apply(&mut established, group, "clevel:100"), "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (確立済みルールへの適用が失敗)");
+        prop_assert!(!established.last().expect("確立済みルール").notify, "SPEC CPL-003 違反: 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない (確立済みルールのnotifyを暗黙変更)");
     }
 
     /// NTY-001: 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない

@@ -57,6 +57,10 @@ type Clause = {
     | "node_levels"
     | "content_alerts"
     | "filter_auto_tab"
+    | "content_picker"
+    | "picker_catalog"
+    | "picker_apply"
+    | "picker_target"
     | "palette_apply_ipc"
     | "delivery_error_surface"
     | "locale_config_roundtrip";
@@ -533,6 +537,363 @@ ${indent(c.fissureOverride ?? "", 8)}
             "${msg} (初回評価をseedしない)"
         );
     }`;
+    case "content_palette":
+      switch (c.scenario) {
+        case "picker_catalog":
+          return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(
+        rules in proptest::collection::vec(arb_content_rule(), 0..5),
+        tab_pick in any::<prop::sample::Index>(),
+        query in prop_oneof![
+            Just(String::new()),
+            Just("60".to_string()),
+            Just("lv120".to_string()),
+            Just("netracells".to_string()),
+            Just("防衛".to_string()),
+            "[a-z]{1,6}",
+            "[0-9]{1,4}",
+        ],
+    ) {
+        let (tab, group) = content_palette::TAB_KIND_GROUPS
+            [tab_pick.index(content_palette::TAB_KIND_GROUPS.len())];
+        let catalog = content_palette::catalog(tab, &rules, &query);
+        let has = |id: String| catalog.iter().any(|cand| cand.id == id);
+
+        // ミッションキーワード候補はパレット語彙全件
+        for (label, _) in palette::mission_vocabulary() {
+            prop_assert!(has(format!("ckeyword:{label}")), "${msg} (キーワード候補の欠落: {})", label);
+        }
+        // レベル下限プリセットと解除候補
+        for preset in content_palette::LEVEL_PRESETS {
+            prop_assert!(has(format!("clevel:{preset}")), "${msg} (レベルプリセットの欠落)");
+        }
+        prop_assert!(has("clevel:off".to_string()), "${msg} (レベル解除候補の欠落)");
+        // タブに表示されるルール(kinds未指定を含む)のnotifyトグル候補
+        let visible = content_palette::tab_visible_indices(&rules, group);
+        for (index, rule) in rules.iter().enumerate() {
+            let cand = catalog.iter().find(|cand| cand.id == format!("crule:{index}"));
+            if visible.contains(&index) {
+                let cand = cand.expect("crule候補が存在すること");
+                let expected_label = rule
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("A{}", index + 1));
+                prop_assert_eq!(&cand.label, &expected_label, "${msg} (crule labelが名前/A{{n}}でない)");
+                prop_assert_eq!(cand.facet, Facet::Rule, "${msg} (crule facetがRULEでない)");
+            } else {
+                prop_assert!(cand.is_none(), "${msg} (タブ対象外ルールの候補を出した)");
+            }
+        }
+        // アクション: NEW/DELETE ALERTと共有のGO TO/PAUSEだけを含む
+        prop_assert!(has("caction:new-content-rule".to_string()), "${msg} (NEW ALERT欠落)");
+        prop_assert!(has("caction:delete-content-rule".to_string()), "${msg} (DELETE ALERT欠落)");
+        prop_assert!(has("action:pause".to_string()), "${msg} (PAUSE欠落)");
+        for tab_id in [
+            "fissures", "arbitration", "sortie", "archon", "syndicates",
+            "area-missions", "circuit", "archimedea", "descendia",
+        ] {
+            prop_assert!(has(format!("action:tab-{tab_id}")), "${msg} (GO TO欠落: {})", tab_id);
+        }
+        // 亀裂専用候補を持ち込まない
+        for cand in &catalog {
+            for forbidden in ["tier:", "mission:", "planet:", "faction:", "mode:", "storm:", "rule:", "action:sort-"] {
+                prop_assert!(!cand.id.starts_with(forbidden), "${msg} (亀裂候補の混入: {})", cand.id);
+            }
+            for forbidden in [
+                "action:new-rule", "action:delete-rule", "action:rename-rule", "action:toggle-rule",
+                "action:notify-rule", "action:deselect-all-rules", "action:clear",
+            ] {
+                prop_assert!(cand.id != forbidden, "${msg} (亀裂ルール操作の混入: {})", cand.id);
+            }
+        }
+        // 動的候補: クエリの数字はレベル下限候補になる
+        let trimmed = query.trim();
+        let digits: String = trimmed.chars().filter(|ch| ch.is_ascii_digit()).collect();
+        if let Ok(level) = digits.parse::<u32>() {
+            if (1..=9999).contains(&level) {
+                prop_assert!(has(format!("clevel:{level}")), "${msg} (クエリ数字のレベル候補欠落)");
+            }
+        }
+        // 動的候補: 語彙に解決しない非数字クエリはrawキーワード候補になる
+        if !trimmed.is_empty() && digits != trimmed {
+            let canonical = content_filter::canonical_keyword(trimmed);
+            let vocabulary_hit = palette::mission_vocabulary().any(|(label, _)| label == canonical);
+            if !vocabulary_hit {
+                prop_assert!(has(format!("ckeyword:{trimmed}")), "${msg} (rawキーワード候補欠落)");
+            }
+        }
+        // 未知タブ(亀裂含む)のカタログは空
+        prop_assert!(content_palette::catalog("fissures", &rules, &query).is_empty(), "${msg} (亀裂タブへ出した)");
+        prop_assert!(content_palette::catalog("nosuch", &rules, &query).is_empty(), "${msg} (未知タブへ出した)");
+    }`;
+        case "picker_apply":
+          return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(
+        rules in proptest::collection::vec(arb_content_rule(), 0..5),
+        tab_pick in any::<prop::sample::Index>(),
+        keyword in proptest::sample::select(CONTENT_KEYWORDS.to_vec()),
+        level in prop_oneof![proptest::sample::select(vec![30u32, 60, 100, 150, 200]), 1u32..300],
+        rule_pick in any::<prop::sample::Index>(),
+    ) {
+        let (_, group) = content_palette::TAB_KIND_GROUPS
+            [tab_pick.index(content_palette::TAB_KIND_GROUPS.len())];
+        let target = content_palette::content_target(&rules, group);
+        let is_draft = |rule: &ContentWatchRule| {
+            !rule.notify && rule.mission_types.is_empty() && rule.min_enemy_level.is_none()
+        };
+
+        // キーワード候補: 正準同値トグル。編集先の他フィールドと他ルールを保持する
+        let canonical = content_filter::canonical_keyword(keyword);
+        let mut after = rules.clone();
+        prop_assert!(
+            content_palette::apply(&mut after, group, &format!("ckeyword:{keyword}")),
+            "${msg} (キーワード適用が失敗)"
+        );
+        match target {
+            Some(index) => {
+                prop_assert_eq!(after.len(), rules.len(), "${msg} (編集先があるのにルール数が変化)");
+                for (j, rule) in rules.iter().enumerate() {
+                    if j != index {
+                        prop_assert_eq!(&after[j], rule, "${msg} (対象外ルールが変化)");
+                    }
+                }
+                let before_rule = &rules[index];
+                let after_rule = &after[index];
+                let had = before_rule
+                    .mission_types
+                    .iter()
+                    .any(|k| content_filter::canonical_keyword(k) == canonical);
+                let has_now = after_rule
+                    .mission_types
+                    .iter()
+                    .any(|k| content_filter::canonical_keyword(k) == canonical);
+                prop_assert_eq!(has_now, !had, "${msg} (正準同値トグルでない)");
+                let kept_before: Vec<&String> = before_rule
+                    .mission_types
+                    .iter()
+                    .filter(|k| content_filter::canonical_keyword(k) != canonical)
+                    .collect();
+                let kept_after: Vec<&String> = after_rule
+                    .mission_types
+                    .iter()
+                    .filter(|k| content_filter::canonical_keyword(k) != canonical)
+                    .collect();
+                prop_assert_eq!(kept_after, kept_before, "${msg} (対象外キーワードが変化)");
+                prop_assert_eq!(&after_rule.kinds, &before_rule.kinds, "${msg} (kindsが変化)");
+                prop_assert_eq!(&after_rule.name, &before_rule.name, "${msg} (nameが変化)");
+                prop_assert_eq!(after_rule.min_enemy_level, before_rule.min_enemy_level, "${msg} (レベル下限が変化)");
+                let expected_notify = before_rule.notify || is_draft(before_rule);
+                prop_assert_eq!(after_rule.notify, expected_notify, "${msg} (notifyの暗黙変更)");
+            }
+            None => {
+                prop_assert_eq!(after.len(), rules.len() + 1, "${msg} (編集先なしで新ルールを作らない)");
+                prop_assert_eq!(&after[..rules.len()], rules.as_slice(), "${msg} (既存ルールが変化)");
+                let created = &after[rules.len()];
+                prop_assert!(created.notify, "${msg} (新ルールがnotify=OFF)");
+                let expected_kinds: Vec<String> = group.iter().map(|kind| kind.to_string()).collect();
+                prop_assert_eq!(&created.kinds, &expected_kinds, "${msg} (新ルールのkindsがタブkind群でない)");
+                prop_assert_eq!(created.mission_types.clone(), vec![canonical.clone()], "${msg} (新ルールのキーワード)");
+                prop_assert_eq!(created.min_enemy_level, None, "${msg} (新ルールへレベルを捏造)");
+            }
+        }
+
+        // レベル候補: 設定と、同値再適用での解除(往復)
+        let mut leveled = rules.clone();
+        prop_assert!(
+            content_palette::apply(&mut leveled, group, &format!("clevel:{level}")),
+            "${msg} (レベル適用が失敗)"
+        );
+        match target {
+            Some(index) => {
+                let before_rule = &rules[index];
+                let expected1 = if before_rule.min_enemy_level == Some(level) { None } else { Some(level) };
+                prop_assert_eq!(leveled[index].min_enemy_level, expected1, "${msg} (レベル設定/解除でない)");
+                prop_assert_eq!(&leveled[index].mission_types, &before_rule.mission_types, "${msg} (レベル適用がキーワードを変えた)");
+                for (j, rule) in rules.iter().enumerate() {
+                    if j != index {
+                        prop_assert_eq!(&leveled[j], rule, "${msg} (レベル適用が対象外ルールを変えた)");
+                    }
+                }
+                prop_assert!(
+                    content_palette::apply(&mut leveled, group, &format!("clevel:{level}")),
+                    "${msg} (レベル再適用が失敗)"
+                );
+                let expected2 = if expected1 == Some(level) { None } else { Some(level) };
+                prop_assert_eq!(leveled[index].min_enemy_level, expected2, "${msg} (レベル再適用が往復しない)");
+            }
+            None => {
+                prop_assert_eq!(leveled.len(), rules.len() + 1, "${msg} (編集先なしのレベル適用で新ルールを作らない)");
+                prop_assert_eq!(leveled[rules.len()].min_enemy_level, Some(level), "${msg} (新ルールのレベル下限)");
+                prop_assert!(leveled[rules.len()].mission_types.is_empty(), "${msg} (新ルールへキーワードを捏造)");
+            }
+        }
+
+        // レベル解除候補: 編集先のminEnemyLevelだけを外す。編集先がなければ何も作らない
+        let mut cleared = rules.clone();
+        prop_assert!(content_palette::apply(&mut cleared, group, "clevel:off"), "${msg} (レベル解除が失敗)");
+        match target {
+            Some(index) => {
+                prop_assert_eq!(cleared[index].min_enemy_level, None, "${msg} (レベル解除されない)");
+                prop_assert_eq!(cleared[index].notify, rules[index].notify, "${msg} (レベル解除がnotifyを変えた)");
+                prop_assert_eq!(&cleared[index].mission_types, &rules[index].mission_types, "${msg} (レベル解除がキーワードを変えた)");
+                for (j, rule) in rules.iter().enumerate() {
+                    if j != index {
+                        prop_assert_eq!(&cleared[j], rule, "${msg} (レベル解除が対象外ルールを変えた)");
+                    }
+                }
+            }
+            None => {
+                prop_assert_eq!(cleared.as_slice(), rules.as_slice(), "${msg} (編集先なしのレベル解除がルールを作った)");
+            }
+        }
+
+        // notifyトグル候補: 対象ルールのnotifyだけを反転し、再適用で元に戻る
+        if !rules.is_empty() {
+            let index = rule_pick.index(rules.len());
+            let mut toggled = rules.clone();
+            prop_assert!(
+                content_palette::apply(&mut toggled, group, &format!("crule:{index}")),
+                "${msg} (notifyトグルが失敗)"
+            );
+            let mut expected = rules.clone();
+            expected[index].notify = !rules[index].notify;
+            prop_assert_eq!(toggled.as_slice(), expected.as_slice(), "${msg} (notify以外が変化)");
+            prop_assert!(
+                content_palette::apply(&mut toggled, group, &format!("crule:{index}")),
+                "${msg} (notify再トグルが失敗)"
+            );
+            prop_assert_eq!(toggled.as_slice(), rules.as_slice(), "${msg} (notifyトグルが往復しない)");
+        }
+        // 範囲外のcrule・未知idは適用失敗し、ルールを変えない
+        let mut unchanged = rules.clone();
+        prop_assert!(!content_palette::apply(&mut unchanged, group, &format!("crule:{}", rules.len())), "${msg} (範囲外cruleを受理)");
+        prop_assert!(!content_palette::apply(&mut unchanged, group, "caction:bogus"), "${msg} (未知cactionを受理)");
+        prop_assert!(!content_palette::apply(&mut unchanged, group, "tier:Axi"), "${msg} (亀裂候補を受理)");
+        prop_assert_eq!(unchanged.as_slice(), rules.as_slice(), "${msg} (失敗適用がルールを変えた)");
+
+        // DELETE ALERT: 編集先ルールだけを除去。編集先がなければ何も変更しない
+        let mut deleted = rules.clone();
+        prop_assert!(
+            content_palette::apply(&mut deleted, group, "caction:delete-content-rule"),
+            "${msg} (DELETE ALERTが失敗)"
+        );
+        match target {
+            Some(index) => {
+                let mut expected = rules.clone();
+                expected.remove(index);
+                prop_assert_eq!(deleted.as_slice(), expected.as_slice(), "${msg} (編集先以外を削除)");
+            }
+            None => {
+                prop_assert_eq!(deleted.as_slice(), rules.as_slice(), "${msg} (編集先なしで削除)");
+            }
+        }
+    }`;
+        case "picker_target":
+          return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(
+        rules in proptest::collection::vec(arb_content_rule(), 0..5),
+        tab_pick in any::<prop::sample::Index>(),
+        keyword in proptest::sample::select(CONTENT_KEYWORDS.to_vec()),
+    ) {
+        let (_, group) = content_palette::TAB_KIND_GROUPS
+            [tab_pick.index(content_palette::TAB_KIND_GROUPS.len())];
+
+        // 編集先 = タブ専用(kinds非空かつ交差)ルールの末尾。kinds未指定は編集先にならない
+        let expected_target = rules
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, rule)| {
+                !rule.kinds.is_empty() && rule.kinds.iter().any(|kind| group.contains(&kind.as_str()))
+            })
+            .map(|(index, _)| index);
+        prop_assert_eq!(content_palette::content_target(&rules, group), expected_target, "${msg} (編集先の選定)");
+
+        // 表示行の集合はkinds未指定を含む(RND-014の行と同じ集合)
+        let expected_visible: Vec<usize> = rules
+            .iter()
+            .enumerate()
+            .filter(|(_, rule)| {
+                rule.kinds.is_empty() || rule.kinds.iter().any(|kind| group.contains(&kind.as_str()))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        prop_assert_eq!(content_palette::tab_visible_indices(&rules, group), expected_visible, "${msg} (表示行の集合)");
+
+        // 編集先なし → キーワード適用は既存を変えずkinds=タブkind群・notify=ONの新ルールを1本作る
+        let unscoped: Vec<ContentWatchRule> = rules
+            .iter()
+            .cloned()
+            .map(|mut rule| {
+                if rule.kinds.iter().any(|kind| group.contains(&kind.as_str())) {
+                    rule.kinds = vec!["__other__".to_string()];
+                }
+                rule
+            })
+            .collect();
+        prop_assert_eq!(content_palette::content_target(&unscoped, group), None, "${msg} (前提: 編集先なし)");
+        let mut created = unscoped.clone();
+        prop_assert!(
+            content_palette::apply(&mut created, group, &format!("ckeyword:{keyword}")),
+            "${msg} (編集先なしのキーワード適用が失敗)"
+        );
+        prop_assert_eq!(created.len(), unscoped.len() + 1, "${msg} (新ルールを1本作らない)");
+        prop_assert_eq!(&created[..unscoped.len()], unscoped.as_slice(), "${msg} (既存ルールが変化)");
+        {
+            let new_rule = created.last().expect("新ルール");
+            prop_assert!(new_rule.notify, "${msg} (新ルールがnotify=OFF)");
+            let expected_kinds: Vec<String> = group.iter().map(|kind| kind.to_string()).collect();
+            prop_assert_eq!(&new_rule.kinds, &expected_kinds, "${msg} (新ルールのkinds)");
+        }
+        // 以後の条件候補は同じ新ルールへ適用され、増殖しない
+        prop_assert!(content_palette::apply(&mut created, group, "clevel:60"), "${msg} (後続レベル適用が失敗)");
+        prop_assert_eq!(created.len(), unscoped.len() + 1, "${msg} (後続適用でルールが増殖)");
+        prop_assert_eq!(created.last().expect("新ルール").min_enemy_level, Some(60), "${msg} (後続レベルが同じルールへ入らない)");
+
+        // NEW ALERT → notify=OFF・条件なしの安全なdraftを末尾へ追加する
+        let mut drafted = rules.clone();
+        prop_assert!(
+            content_palette::apply(&mut drafted, group, "caction:new-content-rule"),
+            "${msg} (NEW ALERTが失敗)"
+        );
+        prop_assert_eq!(drafted.len(), rules.len() + 1, "${msg} (draftを追加しない)");
+        prop_assert_eq!(&drafted[..rules.len()], rules.as_slice(), "${msg} (NEW ALERTが既存ルールを変えた)");
+        {
+            let draft = drafted.last().expect("draft");
+            prop_assert!(!draft.notify, "${msg} (draftがnotify=ON)");
+            prop_assert!(draft.mission_types.is_empty() && draft.min_enemy_level.is_none(), "${msg} (draftへ条件を捏造)");
+            let expected_kinds: Vec<String> = group.iter().map(|kind| kind.to_string()).collect();
+            prop_assert_eq!(&draft.kinds, &expected_kinds, "${msg} (draftのkinds)");
+        }
+        // draftへの最初の条件適用はnotify=ONへ確定し、draftを再利用する
+        prop_assert!(
+            content_palette::apply(&mut drafted, group, &format!("ckeyword:{keyword}")),
+            "${msg} (draftへの適用が失敗)"
+        );
+        prop_assert_eq!(drafted.len(), rules.len() + 1, "${msg} (draftを再利用しない)");
+        prop_assert!(drafted.last().expect("draft").notify, "${msg} (draftをnotify=ONへ確定しない)");
+
+        // 条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない
+        let mut established = rules.clone();
+        established.push(ContentWatchRule {
+            notify: false,
+            name: None,
+            kinds: group.iter().map(|kind| kind.to_string()).collect(),
+            mission_types: vec!["Survival".to_string()],
+            min_enemy_level: None,
+        });
+        prop_assert!(content_palette::apply(&mut established, group, "clevel:100"), "${msg} (確立済みルールへの適用が失敗)");
+        prop_assert!(!established.last().expect("確立済みルール").notify, "${msg} (確立済みルールのnotifyを暗黙変更)");
+    }`;
+        default:
+          throw new Error(`未知のcontent_paletteシナリオ: ${c.scenario} (${c.id})`);
+      }
     case "notification_projection":
       return `
     /// ${c.id}: ${c.desc}
@@ -4268,7 +4629,7 @@ test("${c.id} unselected picker creates a view rule", async ({ page }) => {
   expect(after.slice(0, 2)).toEqual(before);
   expect(after[2]).toMatchObject({ enabled: true, notify: false, tiers: ["Requiem"] });
   const applied = (await calls(page)).filter((entry) => entry.cmd === "apply_candidate");
-  expect(applied[applied.length - 1].args).toEqual({ id: "tier:Requiem", active: 1 });
+  expect(applied[applied.length - 1].args).toEqual({ id: "tier:Requiem", active: 1, tab: "fissures" });
 });
 
 // ${c.id}: ${c.desc} (NEW RULE応答中の後続候補を旧ルールへ適用しない)
@@ -4659,24 +5020,36 @@ test("${c.id} per-tab rule management", async ({ page }) => {
 test("${c.id} filter change reveals fissures tab", async ({ page }) => {
   await bootConsole(page);
   const activeTab = () => page.locator('#content-tabs [role="tab"][aria-selected="true"]');
-  // 亀裂以外のタブでfilter候補を適用すると亀裂タブへ自動で切り替わり、パレットは開いたまま
+  // 亀裂以外のタブではfacet launcherが亀裂ピッカーを開き、filter候補の適用で亀裂タブへ
+  // 自動で切り替わる。パレットは開いたまま
   await page.keyboard.press("Meta+2");
   await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
-  await page.keyboard.press("a");
+  await page.locator("#tier-checks").click();
   await page.locator("#palette-input").fill("axi");
   await page.keyboard.press("Enter");
   await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
   await expect(page.locator("#palette-overlay")).toBeVisible();
   await page.keyboard.press("Escape");
-  // 通知トグル(TOGGLE NOTIFY)は検索条件ではないので切り替えない
+  // タブ別ピッカーのコンテンツ候補適用(contentRules編集)は切り替えない
   await page.keyboard.press("Meta+2");
-  await page.keyboard.press("t");
-  await page.locator("#palette-input").fill("toggle notify");
+  await page.keyboard.press("s");
+  await page.locator("#palette-input").fill("survival");
   await page.keyboard.press("Enter");
   await expect
     .poll(async () =>
       (await calls(page)).some(
-        (entry) => entry.cmd === "apply_candidate" && entry.args.id === "action:notify-rule",
+        (entry) => entry.cmd === "apply_candidate" && entry.args.id === "ckeyword:Survival",
+      ),
+    )
+    .toBe(true);
+  await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
+  // コンテンツルールのnotifyトグル(crule候補)も検索条件ではないので切り替えない
+  await page.locator("#palette-input").fill("a1");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (entry) => entry.cmd === "apply_candidate" && entry.args.id === "crule:0",
       ),
     )
     .toBe(true);
@@ -4685,19 +5058,94 @@ test("${c.id} filter change reveals fissures tab", async ({ page }) => {
   // Space(編集中ルールのVIEW選択トグル)は切り替える
   await page.keyboard.press(" ");
   await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
-  // SORTコマンドは表示のみで検索条件ではないので切り替えない
+});`;
+    case "content_picker":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} content tab picker", async ({ page }) => {
+  await bootConsole(page, { locale: "en" });
+  const activeTab = () => page.locator('#content-tabs [role="tab"][aria-selected="true"]');
+  const contentRules = async () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { __MOCK_STATE__: { config: { contentRules: unknown } } })
+          .__MOCK_STATE__.config.contentRules,
+    );
+  const fissureRulesJson = async () =>
+    page.evaluate(() =>
+      JSON.stringify(
+        (window as unknown as { __MOCK_STATE__: { config: { rules: unknown } } }).__MOCK_STATE__
+          .config.rules,
+      ),
+    );
+  const rulesBefore = await fissureRulesJson();
+
+  // 仲裁タブの打鍵パレットはそのタブのコンテンツ候補を出し、queryへtabを渡す
   await page.keyboard.press("Meta+2");
   await page.keyboard.press("s");
-  await page.locator("#palette-input").fill("sort by node");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await page.locator("#palette-input").fill("survival");
+  await expect(page.locator("#palette-cands .cand", { hasText: "Survival" })).toHaveCount(1);
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (entry) => entry.cmd === "query_candidates" && entry.args.tab === "arbitration",
+      ),
+    )
+    .toBe(true);
   await page.keyboard.press("Enter");
+  // 適用はタブを切り替えず、パレットは開いたまま連続入力できる
   await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await expect(page.locator("#palette-input")).toHaveValue("");
+  await expect
+    .poll(contentRules)
+    .toEqual([
+      { notify: true, name: null, kinds: ["arbitration"], missionTypes: ["Survival"], minEnemyLevel: null },
+    ]);
+  expect(
+    (await calls(page)).some(
+      (entry) =>
+        entry.cmd === "apply_candidate" &&
+        entry.args.id === "ckeyword:Survival" &&
+        entry.args.tab === "arbitration",
+    ),
+  ).toBe(true);
+  // rail上部のタブ通知ルール行が適用結果へ追従する
+  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(1);
+
+  // クエリの数字はレベル下限候補になり、同じルールへ適用される
+  await page.locator("#palette-input").fill("120");
+  await expect(page.locator("#palette-cands .cand", { hasText: "MIN LV 120+" })).toHaveCount(1);
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(async () =>
+      ((await contentRules()) as Array<{ minEnemyLevel: number | null }>).map(
+        (rule) => rule.minEnemyLevel,
+      ),
+    )
+    .toEqual([120]);
+
+  // コンテンツ候補の適用は亀裂WatchRule・edit focusを変更しない
+  expect(await fissureRulesJson()).toBe(rulesBefore);
+  await expect(page.locator("#editing-meta")).toHaveText("R1/2");
+
+  // facet launcherは亀裂以外のタブでも亀裂ピッカー(tab=fissures)を開き、
+  // filter候補の適用は従来どおり亀裂タブへ自動切替する
   await page.keyboard.press("Escape");
-  // パレットのCLEARは切り替える
-  await page.keyboard.press("c");
-  await page.locator("#palette-input").fill("clear filters");
+  await page.locator("#tier-checks").click();
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (entry) => entry.cmd === "query_candidates" && entry.args.tab === "fissures",
+      ),
+    )
+    .toBe(true);
+  await page.locator("#palette-input").fill("axi");
   await page.keyboard.press("Enter");
   await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
-  await page.keyboard.press("Escape");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
 });`;
     case "mute_window":
       return `
@@ -5054,6 +5502,7 @@ use proptest::prelude::*;
 use relico_lib::backoff::Backoff;
 use relico_lib::config::{AppConfig, AppLocale, ContentWatchRule, DailyMuteWindow};
 use relico_lib::content_filter;
+use relico_lib::content_palette;
 use relico_lib::dedup::NotifiedSet;
 use relico_lib::filter::{self, FilterSettings, Mode, StormMode, WatchRule};
 use relico_lib::model::Fissure;

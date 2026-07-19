@@ -75,6 +75,13 @@ function installMock({
     mode: string;
     storms: string;
   };
+  type ContentRule = {
+    notify: boolean;
+    name: string | null;
+    kinds: string[];
+    missionTypes: string[];
+    minEnemyLevel: number | null;
+  };
 
   const iso = (offsetSecs: number) => new Date(Date.now() + offsetSecs * 1000).toISOString();
   const sourceStatus = (source: string, validUntil: string | null = null) => ({
@@ -151,6 +158,7 @@ function installMock({
         Object.assign(rule(!allRulesDisabled)),
         Object.assign(rule(false), { tiers: ["Axi"] }),
       ],
+      contentRules: [] as ContentRule[],
       minRemainingSecs: 300,
       pollIntervalSecs: 60,
       desktopNotification: true,
@@ -666,6 +674,123 @@ function installMock({
     else list.push(value);
   };
 
+  // ---- タブ別コンテンツピッカー(RND-016)。判定意味論はRust側(content_palette.rs)が正本で、
+  // ここではDOM結線に必要な最小のカタログとcontentRules更新だけを模す ----
+  const CONTENT_KIND_GROUPS: Record<string, string[]> = {
+    arbitration: ["arbitration"],
+    sortie: ["sortie"],
+    archon: ["archon"],
+    syndicates: ["syndicate"],
+    "area-missions": ["area-mission", "area-objective", "bounty"],
+    circuit: ["circuit"],
+    archimedea: ["archimedea"],
+    descendia: ["descendia"],
+  };
+  const contentTargetIndex = (group: string[]): number => {
+    const rules = state.config.contentRules;
+    for (let i = rules.length - 1; i >= 0; i--) {
+      if (rules[i].kinds.length && rules[i].kinds.some((kind) => group.includes(kind))) return i;
+    }
+    return -1;
+  };
+  const ensureContentTarget = (group: string[]): ContentRule => {
+    const rules = state.config.contentRules;
+    const at = contentTargetIndex(group);
+    if (at >= 0) {
+      const target = rules[at];
+      // NEW ALERT直後の空draftは最初の条件適用で通知ONへ確定する
+      if (!target.notify && !target.missionTypes.length && target.minEnemyLevel === null) {
+        target.notify = true;
+      }
+      return target;
+    }
+    const created: ContentRule = {
+      notify: true,
+      name: null,
+      kinds: [...group],
+      missionTypes: [],
+      minEnemyLevel: null,
+    };
+    rules.push(created);
+    return created;
+  };
+  const contentCandView = (tab: string, q: string) => {
+    const group = CONTENT_KIND_GROUPS[tab] ?? [];
+    const query = q.trim().toLowerCase();
+    const statics: Array<Cand & { on?: boolean }> = [
+      { id: "ckeyword:Survival", label: "Survival", facet: "mission" },
+      { id: "ckeyword:Capture", label: "Capture", facet: "mission" },
+      { id: "clevel:60", label: "MIN LV 60+", facet: "action" },
+      { id: "clevel:off", label: "NO LV LIMIT", facet: "action" },
+      { id: "caction:new-content-rule", label: "NEW ALERT", facet: "action" },
+      { id: "caction:delete-content-rule", label: "DELETE ALERT", facet: "action" },
+      ...state.config.contentRules
+        .map((contentRule, index) => ({ contentRule, index }))
+        .filter(
+          ({ contentRule }) =>
+            !contentRule.kinds.length || contentRule.kinds.some((kind) => group.includes(kind)),
+        )
+        .map(({ contentRule, index }) => ({
+          id: "crule:" + index,
+          label: contentRule.name ?? "A" + (index + 1),
+          facet: "rule",
+          on: contentRule.notify,
+        })),
+      ...catalog.filter((cand) => cand.id === "action:pause" || cand.id.startsWith("action:tab-")),
+    ];
+    const out = statics.filter(
+      (cand) => query === "" || cand.label.toLowerCase().includes(query),
+    );
+    const digits = q.trim().replace(/[^0-9]/g, "");
+    if (digits !== "" && Number(digits) >= 1) {
+      const dynamicId = "clevel:" + Number(digits);
+      if (!out.some((cand) => cand.id === dynamicId)) {
+        out.push({ id: dynamicId, label: "MIN LV " + Number(digits) + "+", facet: "action" });
+      }
+    } else if (query !== "" && out.length === 0) {
+      out.push({ id: "ckeyword:" + q.trim(), label: 'KEYWORD "' + q.trim() + '"', facet: "mission" });
+    }
+    return out.map((cand) => ({
+      id: cand.id,
+      label: cand.label,
+      facet: cand.facet,
+      on: cand.on ?? false,
+      indices: [],
+      via: null,
+    }));
+  };
+  const applyContentCandidate = (id: string, tab: string): void => {
+    const group = CONTENT_KIND_GROUPS[tab];
+    const payload = id.slice(id.indexOf(":") + 1);
+    if (id.startsWith("crule:")) {
+      const target = state.config.contentRules[Number(payload)];
+      if (target) target.notify = !target.notify;
+      return;
+    }
+    if (!group) return;
+    if (id.startsWith("ckeyword:")) {
+      toggle(ensureContentTarget(group).missionTypes, payload);
+    } else if (id === "clevel:off") {
+      const at = contentTargetIndex(group);
+      if (at >= 0) state.config.contentRules[at].minEnemyLevel = null;
+    } else if (id.startsWith("clevel:")) {
+      const target = ensureContentTarget(group);
+      const level = Number(payload);
+      target.minEnemyLevel = target.minEnemyLevel === level ? null : level;
+    } else if (id === "caction:new-content-rule") {
+      state.config.contentRules.push({
+        notify: false,
+        name: null,
+        kinds: [...group],
+        missionTypes: [],
+        minEnemyLevel: null,
+      });
+    } else if (id === "caction:delete-content-rule") {
+      const at = contentTargetIndex(group);
+      if (at >= 0) state.config.contentRules.splice(at, 1);
+    }
+  };
+
   const handlers: Record<string, (args: Record<string, unknown>) => unknown | Promise<unknown>> = {
     get_config: () => state.config,
     get_status: () => state.status,
@@ -676,6 +801,10 @@ function installMock({
     },
     query_candidates: (args) => {
       state.active = Number(args.active ?? 0);
+      const tab = typeof args.tab === "string" ? args.tab : "fissures";
+      if (tab !== "fissures" && CONTENT_KIND_GROUPS[tab]) {
+        return contentCandView(tab, String(args.q ?? ""));
+      }
       return candView(String(args.q ?? ""));
     },
     apply_candidate: async (args) => {
@@ -684,6 +813,10 @@ function installMock({
       }
       state.active = Number(args.active ?? 0);
       const id = String(args.id);
+      if (/^(ckeyword|clevel|crule|caction):/.test(id)) {
+        applyContentCandidate(id, typeof args.tab === "string" ? args.tab : "fissures");
+        return { config: state.config, active: state.active };
+      }
       const value = id.slice(id.indexOf(":") + 1);
       if (id === "action:new-rule") {
         state.config.rules.push(rule(false, false));

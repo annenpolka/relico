@@ -166,6 +166,21 @@ clauses: Listing<patterns.Clause> = new {
     id = "CNT-004"
     desc = "コンテンツ監視ルールのキーワードは前後空白を除去し、パレットのミッション語彙(label or alias、大文字小文字無視)へ一致すれば正準ミッション名(防衛→Defense、確保→Capture、md→Mobile Defense等)に解決し、一致しなければrawのまま使う"
   }
+  new patterns.ContentPalette {
+    id = "CPL-001"
+    desc = "亀裂以外の各コンテンツタブのピッカーカタログは、ミッションキーワード候補(パレット語彙全件)、レベル下限プリセット(30/60/100/150/200)と解除候補、タブに表示されるcontentRules(kinds未指定を含む)のnotifyトグル候補(label=ルール名、未設定ならA{n})、NEW ALERT/DELETE ALERT、共有のGO TO/PAUSEだけを含み、亀裂専用候補(tier/planet/faction/mode/storm/SORT/亀裂rule/亀裂ルール操作)を含まない。クエリに数字があればその値のレベル下限候補を、語彙に解決しない非数字クエリはrawキーワード候補を動的に加える。未知タブのカタログは空"
+    scenario = "picker_catalog"
+  }
+  new patterns.ContentPalette {
+    id = "CPL-002"
+    desc = "コンテンツ候補の適用はcontentRulesだけを変更する: キーワード候補は編集先ルールのmissionTypesを正準化キーワードの同値でトグルし(防衛とDefenseは同じ)、他のキーワード・kinds・name・レベル下限を保持する。レベル候補は編集先のminEnemyLevelを設定し、同値の再適用で解除へ往復する。レベル解除候補は編集先のminEnemyLevelだけを外し、編集先がなければ何も作らない。notifyトグル候補は対象ルールのnotifyだけを反転して再適用で元に戻る。DELETE ALERTは編集先ルールだけを除去し、編集先がなければ何も変更しない。どの適用も対象外のルールと並び順を変えない"
+    scenario = "picker_apply"
+  }
+  new patterns.ContentPalette {
+    id = "CPL-003"
+    desc = "条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない"
+    scenario = "picker_target"
+  }
   new patterns.ContentRulesConfig {
     id = "CFG-006"
     desc = "AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる"
@@ -402,8 +417,13 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-015"
-    desc = "亀裂の検索条件を変更する操作が成功したとき、コンテンツタブが亀裂以外なら亀裂タブへ自動で切り替える。対象はfilter候補(tier/mission/planet/faction/mode/storm)の適用、RULE候補とルール行・SpaceによるVIEW選択トグル、DESELECT ALL RULES、DELETE RULE、CLEAR。パレット経由の適用では自動切替してもパレットを閉じず連続入力を妨げない。通知トグル・改名・NEW RULEの空draft追加・SORT/GO TOコマンド・contentRules編集・配送設定では切り替えない(renderer統合)"
+    desc = "亀裂の検索条件を変更する操作が成功したとき、コンテンツタブが亀裂以外なら亀裂タブへ自動で切り替える。対象はfilter候補(tier/mission/planet/faction/mode/storm)の適用(亀裂以外のタブではfacet launcherが開く亀裂ピッカー経由)、RULE候補とルール行・SpaceによるVIEW選択トグル、DESELECT ALL RULES、DELETE RULE、CLEAR。パレット経由の適用では自動切替してもパレットを閉じず連続入力を妨げない。通知トグル・改名・NEW RULEの空draft追加・SORT/GO TOコマンド・contentRules編集(タブ別ピッカーのコンテンツ候補適用を含む)・配送設定では切り替えない(renderer統合)"
     scenario = "filter_auto_tab"
+  }
+  new patterns.RendererScenario {
+    id = "RND-016"
+    desc = "亀裂以外のコンテンツタブで打鍵起動したパレットはそのタブのコンテンツ候補を出し、query_candidates/apply_candidateへtabを渡す。キーワード・レベル候補の適用はタブを切り替えずパレットを開いたまま連続入力でき、rail上部のタブ通知ルール行が適用結果へ追従する。クエリの数字はレベル下限候補として適用できる。コンテンツ候補の適用は亀裂WatchRule・VIEW/NOTIFY・edit focusを変更しない。facet launcherは亀裂以外のタブでも亀裂ピッカー(tab=fissures)を開き、その適用は従来どおり亀裂タブへ自動切替する(renderer統合)"
+    scenario = "content_picker"
   }
   new patterns.RendererScenario {
     id = "RND-014"

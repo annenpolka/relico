@@ -444,7 +444,7 @@ test("RND-009 unselected picker creates a view rule", async ({ page }) => {
   expect(after.slice(0, 2)).toEqual(before);
   expect(after[2]).toMatchObject({ enabled: true, notify: false, tiers: ["Requiem"] });
   const applied = (await calls(page)).filter((entry) => entry.cmd === "apply_candidate");
-  expect(applied[applied.length - 1].args).toEqual({ id: "tier:Requiem", active: 1 });
+  expect(applied[applied.length - 1].args).toEqual({ id: "tier:Requiem", active: 1, tab: "fissures" });
 });
 
 // RND-009: VIEW選択0本からピッカーでfilter候補を適用すると既存ルールを変更せずVIEW ON・NOTIFY OFFの新ルールを作り、edit focusを新ルールへ移す。NEW RULE適用中に別のfilter候補を素早く確定しても操作を直列化し、旧edit対象を変更せず同じ新ルールへ適用する(renderer統合) (NEW RULE応答中の後続候補を旧ルールへ適用しない)
@@ -719,28 +719,40 @@ test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   await expect(page.locator(".timed-progress-note")).toHaveCount(0);
 });
 
-// RND-015: 亀裂の検索条件を変更する操作が成功したとき、コンテンツタブが亀裂以外なら亀裂タブへ自動で切り替える。対象はfilter候補(tier/mission/planet/faction/mode/storm)の適用、RULE候補とルール行・SpaceによるVIEW選択トグル、DESELECT ALL RULES、DELETE RULE、CLEAR。パレット経由の適用では自動切替してもパレットを閉じず連続入力を妨げない。通知トグル・改名・NEW RULEの空draft追加・SORT/GO TOコマンド・contentRules編集・配送設定では切り替えない(renderer統合)
+// RND-015: 亀裂の検索条件を変更する操作が成功したとき、コンテンツタブが亀裂以外なら亀裂タブへ自動で切り替える。対象はfilter候補(tier/mission/planet/faction/mode/storm)の適用(亀裂以外のタブではfacet launcherが開く亀裂ピッカー経由)、RULE候補とルール行・SpaceによるVIEW選択トグル、DESELECT ALL RULES、DELETE RULE、CLEAR。パレット経由の適用では自動切替してもパレットを閉じず連続入力を妨げない。通知トグル・改名・NEW RULEの空draft追加・SORT/GO TOコマンド・contentRules編集(タブ別ピッカーのコンテンツ候補適用を含む)・配送設定では切り替えない(renderer統合)
 test("RND-015 filter change reveals fissures tab", async ({ page }) => {
   await bootConsole(page);
   const activeTab = () => page.locator('#content-tabs [role="tab"][aria-selected="true"]');
-  // 亀裂以外のタブでfilter候補を適用すると亀裂タブへ自動で切り替わり、パレットは開いたまま
+  // 亀裂以外のタブではfacet launcherが亀裂ピッカーを開き、filter候補の適用で亀裂タブへ
+  // 自動で切り替わる。パレットは開いたまま
   await page.keyboard.press("Meta+2");
   await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
-  await page.keyboard.press("a");
+  await page.locator("#tier-checks").click();
   await page.locator("#palette-input").fill("axi");
   await page.keyboard.press("Enter");
   await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
   await expect(page.locator("#palette-overlay")).toBeVisible();
   await page.keyboard.press("Escape");
-  // 通知トグル(TOGGLE NOTIFY)は検索条件ではないので切り替えない
+  // タブ別ピッカーのコンテンツ候補適用(contentRules編集)は切り替えない
   await page.keyboard.press("Meta+2");
-  await page.keyboard.press("t");
-  await page.locator("#palette-input").fill("toggle notify");
+  await page.keyboard.press("s");
+  await page.locator("#palette-input").fill("survival");
   await page.keyboard.press("Enter");
   await expect
     .poll(async () =>
       (await calls(page)).some(
-        (entry) => entry.cmd === "apply_candidate" && entry.args.id === "action:notify-rule",
+        (entry) => entry.cmd === "apply_candidate" && entry.args.id === "ckeyword:Survival",
+      ),
+    )
+    .toBe(true);
+  await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
+  // コンテンツルールのnotifyトグル(crule候補)も検索条件ではないので切り替えない
+  await page.locator("#palette-input").fill("a1");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (entry) => entry.cmd === "apply_candidate" && entry.args.id === "crule:0",
       ),
     )
     .toBe(true);
@@ -749,19 +761,93 @@ test("RND-015 filter change reveals fissures tab", async ({ page }) => {
   // Space(編集中ルールのVIEW選択トグル)は切り替える
   await page.keyboard.press(" ");
   await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
-  // SORTコマンドは表示のみで検索条件ではないので切り替えない
+});
+
+// RND-016: 亀裂以外のコンテンツタブで打鍵起動したパレットはそのタブのコンテンツ候補を出し、query_candidates/apply_candidateへtabを渡す。キーワード・レベル候補の適用はタブを切り替えずパレットを開いたまま連続入力でき、rail上部のタブ通知ルール行が適用結果へ追従する。クエリの数字はレベル下限候補として適用できる。コンテンツ候補の適用は亀裂WatchRule・VIEW/NOTIFY・edit focusを変更しない。facet launcherは亀裂以外のタブでも亀裂ピッカー(tab=fissures)を開き、その適用は従来どおり亀裂タブへ自動切替する(renderer統合)
+test("RND-016 content tab picker", async ({ page }) => {
+  await bootConsole(page, { locale: "en" });
+  const activeTab = () => page.locator('#content-tabs [role="tab"][aria-selected="true"]');
+  const contentRules = async () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { __MOCK_STATE__: { config: { contentRules: unknown } } })
+          .__MOCK_STATE__.config.contentRules,
+    );
+  const fissureRulesJson = async () =>
+    page.evaluate(() =>
+      JSON.stringify(
+        (window as unknown as { __MOCK_STATE__: { config: { rules: unknown } } }).__MOCK_STATE__
+          .config.rules,
+      ),
+    );
+  const rulesBefore = await fissureRulesJson();
+
+  // 仲裁タブの打鍵パレットはそのタブのコンテンツ候補を出し、queryへtabを渡す
   await page.keyboard.press("Meta+2");
   await page.keyboard.press("s");
-  await page.locator("#palette-input").fill("sort by node");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await page.locator("#palette-input").fill("survival");
+  await expect(page.locator("#palette-cands .cand", { hasText: "Survival" })).toHaveCount(1);
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (entry) => entry.cmd === "query_candidates" && entry.args.tab === "arbitration",
+      ),
+    )
+    .toBe(true);
   await page.keyboard.press("Enter");
+  // 適用はタブを切り替えず、パレットは開いたまま連続入力できる
   await expect(activeTab()).toHaveAttribute("data-tab-id", "arbitration");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await expect(page.locator("#palette-input")).toHaveValue("");
+  await expect
+    .poll(contentRules)
+    .toEqual([
+      { notify: true, name: null, kinds: ["arbitration"], missionTypes: ["Survival"], minEnemyLevel: null },
+    ]);
+  expect(
+    (await calls(page)).some(
+      (entry) =>
+        entry.cmd === "apply_candidate" &&
+        entry.args.id === "ckeyword:Survival" &&
+        entry.args.tab === "arbitration",
+    ),
+  ).toBe(true);
+  // rail上部のタブ通知ルール行が適用結果へ追従する
+  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(1);
+
+  // クエリの数字はレベル下限候補になり、同じルールへ適用される
+  await page.locator("#palette-input").fill("120");
+  await expect(page.locator("#palette-cands .cand", { hasText: "MIN LV 120+" })).toHaveCount(1);
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(async () =>
+      ((await contentRules()) as Array<{ minEnemyLevel: number | null }>).map(
+        (rule) => rule.minEnemyLevel,
+      ),
+    )
+    .toEqual([120]);
+
+  // コンテンツ候補の適用は亀裂WatchRule・edit focusを変更しない
+  expect(await fissureRulesJson()).toBe(rulesBefore);
+  await expect(page.locator("#editing-meta")).toHaveText("R1/2");
+
+  // facet launcherは亀裂以外のタブでも亀裂ピッカー(tab=fissures)を開き、
+  // filter候補の適用は従来どおり亀裂タブへ自動切替する
   await page.keyboard.press("Escape");
-  // パレットのCLEARは切り替える
-  await page.keyboard.press("c");
-  await page.locator("#palette-input").fill("clear filters");
+  await page.locator("#tier-checks").click();
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (entry) => entry.cmd === "query_candidates" && entry.args.tab === "fissures",
+      ),
+    )
+    .toBe(true);
+  await page.locator("#palette-input").fill("axi");
   await page.keyboard.press("Enter");
   await expect(activeTab()).toHaveAttribute("data-tab-id", "fissures");
-  await page.keyboard.press("Escape");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
 });
 
 // RND-014: ルール管理はコンテンツタブごとに分かれる: 亀裂タブではrail上部のルール一覧が亀裂WatchRuleを表示し、それ以外のタブでは同じ位置がそのタブ対象のコンテンツ通知ルール管理UI(タブ名入りheading・行リスト・キーワード+LV下限の追加フォーム)へ切り替わる。行はkindsがタブのkind群(エリアはarea-mission/area-objective/bounty、シンジケートはsyndicate)と交差するルールに加えkinds未指定(すべて)のルールも含み、追加はそのタブのkind群へ展開して保存される。行の通知トグルは元のcontentRulesの該当ルールのnotifyだけを、削除ボタンは該当ルールの除去だけをset_config(contentRules)へ保存する。これらの操作は亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュート設定を変更しない(renderer統合)

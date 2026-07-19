@@ -12,6 +12,7 @@ pub mod backoff;
 pub mod commands;
 pub mod config;
 pub mod content_filter;
+pub mod content_palette;
 pub mod dedup;
 pub mod filter;
 pub mod i18n;
