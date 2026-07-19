@@ -23,6 +23,22 @@ const CANDIDATE_KEYS: Partial<Record<string, MessageKey>> = {
   "action:deselect-all-rules": "candidate.action.deselectAll",
   "action:clear": "candidate.action.clear",
   "action:pause": "candidate.action.pause",
+  "action:sort-tier": "candidate.action.sortTier",
+  "action:sort-node": "candidate.action.sortNode",
+  "action:sort-mission": "candidate.action.sortMission",
+  "action:sort-faction": "candidate.action.sortFaction",
+  "action:sort-timer": "candidate.action.sortTimer",
+  "action:sort-mode": "candidate.action.sortMode",
+  "action:sort-storm": "candidate.action.sortStorm",
+  "action:tab-fissures": "candidate.action.tabFissures",
+  "action:tab-arbitration": "candidate.action.tabArbitration",
+  "action:tab-sortie": "candidate.action.tabSortie",
+  "action:tab-archon": "candidate.action.tabArchon",
+  "action:tab-syndicates": "candidate.action.tabSyndicates",
+  "action:tab-area-missions": "candidate.action.tabAreaMissions",
+  "action:tab-circuit": "candidate.action.tabCircuit",
+  "action:tab-archimedea": "candidate.action.tabArchimedea",
+  "action:tab-descendia": "candidate.action.tabDescendia",
 };
 
 const PLACEHOLDER = /\{([A-Za-z][A-Za-z0-9_]*)\}/g;

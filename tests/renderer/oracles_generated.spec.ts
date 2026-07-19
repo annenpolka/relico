@@ -292,7 +292,7 @@ test("RND-006 rule naming and palette toggle", async ({ page }) => {
   await expect(page.locator("#palette-input")).toHaveValue("");
 });
 
-// RND-005: 亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持する一方でFACTIONのTHE MURMURは950pxでも省略せず全文表示し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合)
+// RND-005: 亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持する一方でFACTIONのTHE MURMURと既知の最長ミッション種別INFESTED SALVAGEは950pxでも省略せず全文表示し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合)
 test("RND-005 compact table breakpoints", async ({ page }) => {
   await page.setViewportSize({ width: 950, height: 620 });
   await bootConsole(page);
@@ -316,7 +316,7 @@ test("RND-005 compact table breakpoints", async ({ page }) => {
   await expect(stormRow.locator(".col-storm .flag")).toHaveText(/STORM/);
   // 長い値はellipsisしてもDOM上の全文と行tooltipを保持する
   const longRow = page.locator("#fissure-rows tr", { hasText: "Taveuni" });
-  await expect(longRow.locator(".col-node .icon-label > span:last-child")).toHaveText(
+  await expect(longRow.locator(".col-node .t-node")).toHaveText(
     "Taveuni (Kuva Fortress)",
   );
   expect(await longRow.getAttribute("title")).toContain("Taveuni (Kuva Fortress)");
@@ -324,9 +324,14 @@ test("RND-005 compact table breakpoints", async ({ page }) => {
   const murmur = longRow.locator(".col-faction .icon-label > span:last-child");
   await expect(murmur).toHaveText("THE MURMUR");
   expect(await murmur.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  // 既知の最長ミッション種別INFESTED SALVAGEは950pxの7列1段でも省略しない
+  await page.setViewportSize({ width: 950, height: 620 });
+  const longestMission = longRow.locator(".col-mission .icon-label > span:last-child");
+  await expect(longestMission).toHaveText("INFESTED SALVAGE");
+  expect(await longestMission.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 });
 
-// RND-005: 亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持する一方でFACTIONのTHE MURMURは950pxでも省略せず全文表示し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合) (empty rowの全幅表示)
+// RND-005: 亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持する一方でFACTIONのTHE MURMURと既知の最長ミッション種別INFESTED SALVAGEは950pxでも省略せず全文表示し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合) (empty rowの全幅表示)
 test("RND-005 empty row spans full width", async ({ page }) => {
   await page.setViewportSize({ width: 720, height: 480 });
   await bootConsole(page, { noFissures: true });
@@ -357,7 +362,7 @@ test("RND-008 expiry cleanup", async ({ page }) => {
   ).toBe(0);
 });
 
-// RND-007: 亀裂表のヘッダクリックで項目別ソートでき、同じ列の再クリックで昇順/降順をトグルし、ソート中の列にaria-sortが付く。既定はT-REMAIN昇順で、ソートは表示のみ(設定・通知の変更を呼ばない)(renderer統合)
+// RND-007: 亀裂表のヘッダクリックで項目別ソートでき、同じ列の再クリックで昇順/降順をトグルし、ソート中の列にaria-sortが付く。既定はT-REMAIN昇順で、パレットのSORT BY {列}候補もヘッダクリックと同じソートを適用し、同じ列への再適用は降順へトグルし、適用後もパレットは開いたまま連続入力できる。ヘッダ・パレットのどちらのソートも表示のみ(設定・通知の変更を呼ばない)(renderer統合)
 test("RND-007 table sort by column", async ({ page }) => {
   await bootConsole(page);
   const firstRow = () => page.locator("#fissure-rows tr").first();
@@ -377,7 +382,24 @@ test("RND-007 table sort by column", async ({ page }) => {
   await page.locator("th.col-mission").click();
   await expect(page.locator("th.col-mission")).toHaveAttribute("aria-sort", "ascending");
   await expect(firstRow().locator(".col-mission")).toContainText("CAPTURE");
-  // ソートは表示のみ: 設定・通知の変更を呼ばない
+  // パレットのSORT BY {列}候補はヘッダクリックと同じソートを適用する
+  await page.keyboard.press("s");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await page.locator("#palette-input").fill("sort by node");
+  await expect(page.locator("#palette-cands .cand", { hasText: "SORT BY NODE" })).toHaveCount(1);
+  await page.keyboard.press("Enter");
+  await expect(page.locator("th.col-node")).toHaveAttribute("aria-sort", "ascending");
+  await expect(page.locator("th.col-mission")).not.toHaveAttribute("aria-sort");
+  await expect(firstRow().locator(".col-node")).toContainText("Hepit");
+  // 同じ列への再適用は降順へトグルし、パレットは開いたまま連続入力できる
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await expect(page.locator("#palette-input")).toHaveValue("");
+  await page.locator("#palette-input").fill("sort by node");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("th.col-node")).toHaveAttribute("aria-sort", "descending");
+  await expect(firstRow().locator(".col-node")).toContainText("Taveuni");
+  await page.keyboard.press("Escape");
+  // ヘッダ・パレットのどちらのソートも表示のみ: 設定・通知の変更を呼ばない
   expect(
     (await calls(page)).filter((entry) =>
       ["set_config", "set_rule_enabled", "set_rule_notify", "apply_candidate"].includes(entry.cmd),
@@ -468,7 +490,7 @@ test("RND-009 serializes rapid new rule and filter apply", async ({ page }) => {
   expect(after[2]).toMatchObject({ enabled: true, notify: false, tiers: ["Axi"] });
 });
 
-// RND-010: コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁cardはcommunity schedule・browse.wf出典で絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示し、将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)
+// RND-010: コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁cardはcommunity schedule・browse.wf出典で絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示し、将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。DescendiaのSpecs/Aurasは生のLotus pathを本文へ表示せず、path leafを人間可読ラベル(CoH接頭辞とSpec/Aura接尾辞を除去しcamelCaseを分かち書き)へ整形して表示し、整形前のraw識別子はtooltipへ保持する。Descendiaのactive cardはupcoming行と同じくpanel全幅の単一列で表示し、multi-card gridの分割幅で細長く積まない。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。パレットのGO TO {タブ}候補は対応タブへ切り替えてパレットを閉じ、ルール・設定を変更しない。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)
 test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 620 });
   await bootConsole(page, { locale: "en" });
@@ -538,6 +560,20 @@ test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   await page.keyboard.press("Control+2");
   await expect(page.locator("#editing-meta")).toHaveText("R2/2");
   await assertActive("descendia");
+
+  // パレットのGO TO {タブ}候補は対応タブへ切り替えてパレットを閉じ、ルール・設定を変更しない。
+  await page.keyboard.press("g");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await page.locator("#palette-input").fill("go to syndicates");
+  await expect(page.locator("#palette-cands .cand", { hasText: "GO TO SYNDICATES" })).toHaveCount(1);
+  await page.keyboard.press("Enter");
+  await assertActive("syndicates");
+  await expect(page.locator("#palette-overlay")).toBeHidden();
+  expect(
+    (await calls(page)).filter((entry) =>
+      ["set_config", "set_rule_enabled", "set_rule_notify", "apply_candidate"].includes(entry.cmd),
+    ).length,
+  ).toBe(0);
 
   // ARIA roving focusは矢印/Home/Endでactive tabと共に移動する。
   await page.locator("#tab-fissures").focus();
@@ -614,6 +650,29 @@ test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
 
   await page.keyboard.press("Meta+9");
   await expect(page.locator('#panel-descendia .timed-card[data-temporal-status="active"]')).toBeVisible();
+  // Specs/Aurasは生のLotus pathを本文表示せず、人間可読ラベル+raw tooltipで表示する
+  expect(await page.locator("#panel-descendia").textContent()).not.toContain("/Lotus/");
+  const activeDescendia = page.locator('#panel-descendia .timed-card[data-temporal-status="active"]');
+  // active cardはupcoming行と同じくpanel全幅の単一列(multi-card gridの分割幅にしない)
+  expect(
+    await activeDescendia.evaluate((card) => {
+      const panel = card.closest(".timed-cards");
+      if (!panel) return 0;
+      return card.getBoundingClientRect().width / panel.getBoundingClientRect().width;
+    }),
+  ).toBeGreaterThan(0.9);
+  const descendiaSpec = activeDescendia.locator(".timed-value-group li", { hasText: "Roller" }).first();
+  await expect(descendiaSpec).toHaveText("Roller");
+  await expect(descendiaSpec).toHaveAttribute(
+    "title",
+    "/Lotus/Types/Game/EnemySpecs/Tau/CoHRollerSpec",
+  );
+  const descendiaAura = activeDescendia.locator(".timed-value-group li", { hasText: "Rocket Spawn" }).first();
+  await expect(descendiaAura).toHaveText("Rocket Spawn");
+  await expect(descendiaAura).toHaveAttribute(
+    "title",
+    "/Lotus/Types/Scripts/Tau/CoH/Complications/RocketSpawnAura",
+  );
   await expect(
     page.locator('#panel-descendia details.timed-upcoming[data-card-id="descendia-next"]'),
   ).toBeVisible();
@@ -625,6 +684,98 @@ test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   ).toHaveCount(1);
   // 個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。
   await expect(page.locator(".timed-progress-note")).toHaveCount(0);
+});
+
+// RND-014: DELIVERYパネルのCONTENT ALERTS UIは、種別選択(すべて/仲裁/ソーティー/アルコン/エリア/サーキット/アルキメデア/ディセンディア)・キーワード・LV下限の追加フォームからcontentRulesの行を追加し、行の通知トグルはそのルールのnotifyだけを、削除ボタンはそのルールの除去だけをset_config(contentRules)へ保存する。エリア選択はkinds=[area-mission, area-objective, bounty]へ展開される。これらの操作は亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュート設定を変更しない(renderer統合)
+test("RND-014 content alerts", async ({ page }) => {
+  await bootConsole(page, { locale: "en" });
+  await page.locator("#delivery-tab").click();
+  await expect(page.locator("#content-alert-rows .content-alert-empty")).toHaveCount(1);
+  const rulesBefore = await page.locator("#rules-list .rule-row").count();
+  const editingBefore = await page.locator("#editing-meta").textContent();
+  const contentRules = async () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { __MOCK_STATE__: { config: { contentRules?: unknown } } })
+          .__MOCK_STATE__.config.contentRules,
+    );
+
+  // 追加フォーム: 仲裁 × 防衛 × LV60
+  await page.locator("#content-kind-select").selectOption("arbitration");
+  await page.locator("#content-keyword-input").fill("防衛");
+  await page.locator("#content-level-input").fill("60");
+  await page.locator("#content-add-btn").click();
+  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(1);
+  await expect
+    .poll(contentRules)
+    .toEqual([
+      { notify: true, name: null, kinds: ["arbitration"], missionTypes: ["防衛"], minEnemyLevel: 60 },
+    ]);
+
+  // エリア選択はkinds=[area-mission, area-objective, bounty]へ展開される
+  await page.locator("#content-kind-select").selectOption("area");
+  await page.locator("#content-keyword-input").fill("Capture");
+  await page.locator("#content-add-btn").click();
+  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(2);
+  await expect
+    .poll(async () => ((await contentRules()) as Array<{ kinds: string[]; minEnemyLevel: number | null }>)[1])
+    .toEqual({
+      notify: true,
+      name: null,
+      kinds: ["area-mission", "area-objective", "bounty"],
+      missionTypes: ["Capture"],
+      minEnemyLevel: null,
+    });
+
+  // 行の通知トグルはそのルールのnotifyだけを反転する
+  await page.locator("#content-alert-rows .content-alert-toggle").first().click();
+  await expect
+    .poll(async () =>
+      ((await contentRules()) as Array<{ notify: boolean }>).map((rule) => rule.notify),
+    )
+    .toEqual([false, true]);
+
+  // 削除ボタンはそのルールだけを除去する
+  await page.locator("#content-alert-rows .content-alert-del").first().click();
+  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(1);
+  await expect
+    .poll(async () =>
+      ((await contentRules()) as Array<{ missionTypes: string[] }>).map((rule) => rule.missionTypes),
+    )
+    .toEqual([["Capture"]]);
+
+  // 亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュートへ波及しない
+  await expect(page.locator("#rules-list .rule-row")).toHaveCount(rulesBefore);
+  await expect(page.locator("#editing-meta")).toHaveText(editingBefore ?? "");
+  await expect(page.locator("#mute-check")).toHaveAttribute("aria-pressed", "false");
+  expect(
+    (await calls(page)).filter((entry) =>
+      ["set_rule_enabled", "set_rule_notify", "apply_candidate", "clear_filter"].includes(entry.cmd),
+    ),
+  ).toHaveLength(0);
+});
+
+// RND-013: 亀裂表のNODE列はbackend snapshotのnodeLevels(ExportRegions由来)に表示名が一致するnodeへLV {min}-{max}を併記し、行tooltipにも含める。lookupにないnodeへはlevelを表示せず捏造しない。level表示は表示のみで設定・通知を変えない(renderer統合)
+test("RND-013 node levels in fissure table", async ({ page }) => {
+  await bootConsole(page);
+  // snapshotのnodeLevelsに一致するnodeはLV {min}-{max}を併記する
+  const kuva = page.locator("#fissure-rows tr", { hasText: "Taveuni" });
+  await expect(kuva.locator(".col-node .t-level")).toHaveText("LV 32-37");
+  const storm = page.locator("#fissure-rows tr", { hasText: "Nsu Grid" });
+  await expect(storm.locator(".col-node .t-level")).toHaveText("LV 80-90");
+  // 行tooltipにもlevelを含める
+  expect(await kuva.getAttribute("title")).toContain("LV 32-37");
+  // lookupにないnodeへはlevelを表示しない(捏造しない)
+  const unknown = page.locator("#fissure-rows tr", { hasText: "Hepit" });
+  await expect(unknown.locator(".col-node .t-node")).toHaveText("Hepit (Void)");
+  await expect(unknown.locator(".col-node .t-level")).toHaveCount(0);
+  expect(await unknown.getAttribute("title")).not.toContain("LV");
+  // level表示は表示のみ: 設定・通知の変更を呼ばない
+  expect(
+    (await calls(page)).filter((entry) =>
+      ["set_config", "set_rule_enabled", "set_rule_notify", "apply_candidate"].includes(entry.cmd),
+    ).length,
+  ).toBe(0);
 });
 
 // RND-011: DELIVERYの通知ミュートUIはON/OFFと開始・終了時刻をAppConfig.notificationMute(enabled/startMinute/endMinute)へ保存し、backend snapshotのnotificationsMuted=trueを独自判定せず状態表示する。設定操作はルール・VIEW・NOTIFYを変えず、TEST DELIVERYはミュート表示中でも実行経路へ進む(renderer統合)

@@ -144,6 +144,26 @@ clauses: Listing<patterns.Clause> = new {
     id = "BNT-001"
     desc = "browse.wf Oracle bounty-cycleはexpiryが変換可能なミリ秒時刻で、同一の取得後nowより厳密に未来の場合だけfreshとする。expiry欠落・変換不能・now以下の期限切れpayloadは成功扱いせず、last-known-good Bountyを上書きしない"
   }
+  new patterns.ContentRuleMatch {
+    id = "CNT-001"
+    desc = "コンテンツ監視ルールは時限cardへ合致する: kindsが空なら全kind、非空ならcard.kindの完全一致を要求する。missionTypesとminEnemyLevelの両方が未指定ならkind条件だけで合致し、どちらかを指定したルールは「キーワード条件とレベル条件を同時に満たすstageが1つ以上ある」場合だけ合致する。キーワード条件は正準化キーワードがstage titleまたはchoicesに大文字小文字を無視して部分一致すること(未指定なら常に真)、レベル条件はstageのenemy levelsが存在してその最小値がminEnemyLevel以上であること。enemy levelsを持たないstageへレベル条件は合致しない(レベルを捏造しない)"
+  }
+  new patterns.ContentNotifyOnce {
+    id = "CNT-002"
+    desc = "コンテンツ通知の選択はexpiryを持つ合致cardだけを対象にし、seed評価・ミュート評価では通知済みとしてmarkするが配送対象を返さない。どんな評価列でも同一card idの配送は高々1回で、配送対象は常にその評価の合致集合の部分集合であり、非合致cardをmarkも配送もしない"
+  }
+  new patterns.ContentScopeChange {
+    id = "CNT-003"
+    desc = "コンテンツ通知範囲のprojectionはnotify=trueのルールだけを元の順序で保持し、キーワードを正準化して比較する。ルール名の変更・notify=falseルールの追加削除編集ではprojectionは変わらず、notify切替・notify=trueルールのkinds/missionTypes/minEnemyLevel変更では変わる。初回評価とprojection変更後の評価はsilent seedとなり現存合致cardを一括通知しない"
+  }
+  new patterns.ContentKeywordCanonical {
+    id = "CNT-004"
+    desc = "コンテンツ監視ルールのキーワードは前後空白を除去し、パレットのミッション語彙(label or alias、大文字小文字無視)へ一致すれば正準ミッション名(防衛→Defense、確保→Capture、md→Mobile Defense等)に解決し、一致しなければrawのまま使う"
+  }
+  new patterns.ContentRulesConfig {
+    id = "CFG-006"
+    desc = "AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる"
+  }
   new patterns.NotifyCandidates {
     id = "NTY-001"
     desc = "通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない"
@@ -238,6 +258,11 @@ clauses: Listing<patterns.Clause> = new {
     scenario = "rich_details"
   }
   new patterns.TimedContentFixture {
+    id = "TMD-007"
+    desc = "ExportRegionsと英語辞書のfixtureから、亀裂表示用のnode表示名→enemy level範囲lookupを構築する。表示名は仲裁cardと同じ「Name (System)」でsystem欠落時はNameのみ、min/maxのlevelが欠落・逆転したentryはlookupへ含めずlevelを捏造しない。lookupはStatusSnapshotのnodeLevelsとしてcamelCaseでserializeされる"
+    scenario = "node_level_index"
+  }
+  new patterns.TimedContentFixture {
     id = "TMD-006"
     desc = "AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない"
     scenario = "area_sources"
@@ -261,6 +286,11 @@ clauses: Listing<patterns.Clause> = new {
     id = "NTF-004"
     desc = "Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する"
     scenario = "discord_receipt"
+  }
+  new patterns.NotificationExample {
+    id = "NTF-006"
+    desc = "コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する"
+    scenario = "content_payload"
   }
   new patterns.NotificationExample {
     id = "NTF-005"
@@ -341,7 +371,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-005"
-    desc = "亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持する一方でFACTIONのTHE MURMURは950pxでも省略せず全文表示し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合)"
+    desc = "亀裂表はviewport 950pxで7列1段、949px以下で2段gridへ切り替わり、720/800/949pxで横スクロールを生まず、MODEとSTORMは独立セル、長い値はellipsisしてもDOM全文と行tooltipを保持する一方でFACTIONのTHE MURMURと既知の最長ミッション種別INFESTED SALVAGEは950pxでも省略せず全文表示し、empty rowは全幅、ヘッダはsticky、th[scope=col]は7個(renderer統合)"
     scenario = "compact_table"
   }
   new patterns.RendererScenario {
@@ -351,7 +381,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-007"
-    desc = "亀裂表のヘッダクリックで項目別ソートでき、同じ列の再クリックで昇順/降順をトグルし、ソート中の列にaria-sortが付く。既定はT-REMAIN昇順で、ソートは表示のみ(設定・通知の変更を呼ばない)(renderer統合)"
+    desc = "亀裂表のヘッダクリックで項目別ソートでき、同じ列の再クリックで昇順/降順をトグルし、ソート中の列にaria-sortが付く。既定はT-REMAIN昇順で、パレットのSORT BY {列}候補もヘッダクリックと同じソートを適用し、同じ列への再適用は降順へトグルし、適用後もパレットは開いたまま連続入力できる。ヘッダ・パレットのどちらのソートも表示のみ(設定・通知の変更を呼ばない)(renderer統合)"
     scenario = "table_sort"
   }
   new patterns.RendererScenario {
@@ -361,8 +391,18 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-010"
-    desc = "コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁cardはcommunity schedule・browse.wf出典で絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示し、将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)"
+    desc = "コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁cardはcommunity schedule・browse.wf出典で絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示し、将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。DescendiaのSpecs/Aurasは生のLotus pathを本文へ表示せず、path leafを人間可読ラベル(CoH接頭辞とSpec/Aura接尾辞を除去しcamelCaseを分かち書き)へ整形して表示し、整形前のraw識別子はtooltipへ保持する。Descendiaのactive cardはupcoming行と同じくpanel全幅の単一列で表示し、multi-card gridの分割幅で細長く積まない。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。パレットのGO TO {タブ}候補は対応タブへ切り替えてパレットを閉じ、ルール・設定を変更しない。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)"
     scenario = "content_tabs"
+  }
+  new patterns.RendererScenario {
+    id = "RND-014"
+    desc = "DELIVERYパネルのCONTENT ALERTS UIは、種別選択(すべて/仲裁/ソーティー/アルコン/エリア/サーキット/アルキメデア/ディセンディア)・キーワード・LV下限の追加フォームからcontentRulesの行を追加し、行の通知トグルはそのルールのnotifyだけを、削除ボタンはそのルールの除去だけをset_config(contentRules)へ保存する。エリア選択はkinds=[area-mission, area-objective, bounty]へ展開される。これらの操作は亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュート設定を変更しない(renderer統合)"
+    scenario = "content_alerts"
+  }
+  new patterns.RendererScenario {
+    id = "RND-013"
+    desc = "亀裂表のNODE列はbackend snapshotのnodeLevels(ExportRegions由来)に表示名が一致するnodeへLV {min}-{max}を併記し、行tooltipにも含める。lookupにないnodeへはlevelを表示せず捏造しない。level表示は表示のみで設定・通知を変えない(renderer統合)"
+    scenario = "node_levels"
   }
   new patterns.RendererScenario {
     id = "RND-011"

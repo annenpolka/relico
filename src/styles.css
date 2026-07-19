@@ -418,6 +418,11 @@ body {
   display: none;
 }
 
+/* Descendiaは1 active + 複数upcomingの縦積み。activeカードもupcoming行と同じ全幅に揃える。RND-010 */
+#timed-descendia.timed-cards {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .timed-upcoming {
   min-width: 0;
   grid-column: 1 / -1;
@@ -483,12 +488,13 @@ col.col-tier {
 }
 
 col.col-mission {
-  width: 132px;
+  /* グリフ込みで既知の最長ミッション種別 "INFESTED SALVAGE" を省略しない。RND-005 */
+  width: 156px;
 }
 
 col.col-faction {
   /* グリフ込みで実API値 "THE MURMUR" を標準幅でも省略しない。RND-005 */
-  width: 120px;
+  width: 112px;
 }
 
 /* ソートマーク込みでT-REMAINが折り返さない幅 */
@@ -549,11 +555,22 @@ td .flag {
   overflow: hidden;
 }
 
-td .icon-label > span:last-child,
+td .icon-label > span:last-child:not(.t-level),
+td .icon-label > .t-node,
 td .flag > span:last-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* NODE列のlevel併記。ノード名がellipsisしてもlevelは常に読める。RND-013 */
+td .icon-label > .t-level {
+  flex: 0 0 auto;
+  min-width: max-content;
+  color: var(--dim);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
   white-space: nowrap;
 }
 
@@ -611,11 +628,12 @@ td .flag > span:last-child {
   }
 
   /* 2段が同じ4トラックを共有し、全列を上下ペアで揃える:
-     左=TIER/MISSION 中=NODE/FACTION(1frでellipsis) 旗=MODE/STORM縦積み 右端=T-REMAIN(2段中央) */
+     左=TIER/MISSION 中=NODE/FACTION(1frでellipsis) 旗=MODE/STORM縦積み 右端=T-REMAIN(2段中央)
+     左トラックは11pxのミッション種別 "INFESTED SALVAGE" が収まる幅 */
   thead tr,
   tbody tr {
     display: grid;
-    grid-template-columns: 128px minmax(0, 1fr) 76px 84px;
+    grid-template-columns: 148px minmax(0, 1fr) 76px 84px;
     grid-template-areas:
       "tier node mode timer"
       "mission faction storm timer";
@@ -702,7 +720,8 @@ td .flag > span:last-child {
     overflow: hidden;
   }
 
-  tbody td .icon-label > span:last-child,
+  tbody td .icon-label > span:last-child:not(.t-level),
+  tbody td .icon-label > .t-node,
   tbody td .flag > span:last-child {
     min-width: 0;
     overflow: hidden;
@@ -1010,6 +1029,96 @@ input:focus-visible {
 
 .locale-row select {
   width: 96px;
+}
+
+/* ---- コンテンツ通知(contentRules)。RND-014 ---- */
+.content-alerts {
+  margin-top: 4px;
+  padding-top: 3px;
+  border-top: 1px solid var(--rowline);
+}
+
+.content-alerts-heading {
+  margin: 0 0 2px;
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  color: var(--dim);
+  text-transform: uppercase;
+}
+
+.content-alert-form {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr) 40px auto;
+  gap: 3px;
+  align-items: stretch;
+}
+
+.content-alert-form select,
+.content-alert-form input {
+  min-width: 0;
+  font-size: 9.5px;
+  padding: 2px 3px;
+}
+
+.content-alert-form .action {
+  padding: 2px 6px;
+  font-size: 9.5px;
+}
+
+#content-alert-rows {
+  max-height: 46px;
+  overflow-y: auto;
+  margin-top: 2px;
+}
+
+.content-alert-empty {
+  margin: 1px 0 0;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.content-alert-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 0;
+  font-size: 10px;
+}
+
+.content-alert-row.off .content-alert-summary {
+  color: var(--dim);
+}
+
+.content-alert-row button {
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.content-alert-toggle .box {
+  color: var(--amber);
+}
+
+.content-alert-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content-alert-del {
+  flex: 0 0 auto;
+  color: var(--dim);
+}
+
+.content-alert-del:hover {
+  color: var(--red);
 }
 
 .mute-settings {

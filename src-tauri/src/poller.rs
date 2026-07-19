@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -79,6 +79,8 @@ pub struct StatusSnapshot {
     pub notifications_muted: bool,
     /// quiet-hours中に既知扱いとして破棄した新規通知数。
     pub suppressed_today: u32,
+    /// 亀裂NODE表示用のnode表示名→enemy level範囲(ExportRegions由来)。SPEC: TMD-007
+    pub node_levels: BTreeMap<String, [u32; 2]>,
     /// 亀裂とは独立した5分周期の時限コンテンツsnapshot。
     pub timed_content: TimedContentSnapshot,
     pub paused: bool,
@@ -87,11 +89,13 @@ pub struct StatusSnapshot {
 pub struct PollerState {
     pub snapshot: StatusSnapshot,
     pub notified: NotifiedSet,
+    /// contentRules用の通知済みcard id集合(亀裂のdedupとは独立)。SPEC: CNT-002
+    pub content_notified: NotifiedSet,
     counter_date: NaiveDate,
 }
 
 impl PollerState {
-    pub fn new(notified: NotifiedSet, cfg: &AppConfig) -> Self {
+    pub fn new(notified: NotifiedSet, content_notified: NotifiedSet, cfg: &AppConfig) -> Self {
         let now = Local::now();
         let snapshot = StatusSnapshot {
             notifications_muted: cfg.notifications_muted_at(now),
@@ -106,6 +110,7 @@ impl PollerState {
         Self {
             snapshot,
             notified,
+            content_notified,
             counter_date: now.date_naive(),
         }
     }

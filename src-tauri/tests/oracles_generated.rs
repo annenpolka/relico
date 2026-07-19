@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use proptest::prelude::*;
 use relico_lib::backoff::Backoff;
-use relico_lib::config::{AppConfig, AppLocale, DailyMuteWindow};
+use relico_lib::config::{AppConfig, AppLocale, ContentWatchRule, DailyMuteWindow};
+use relico_lib::content_filter;
 use relico_lib::dedup::NotifiedSet;
 use relico_lib::filter::{self, FilterSettings, Mode, StormMode, WatchRule};
 use relico_lib::model::Fissure;
@@ -19,6 +20,9 @@ use relico_lib::timed;
 const TIERS: &[&str] = &["Lith", "Meso", "Neo", "Axi", "Requiem", "Omnia"];
 const MISSIONS: &[&str] = &["Defense", "Survival", "Capture", "Extermination", "Rescue", "Disruption", "Mobile Defense", "Void Flood", "Void Cascade", "Volatile"];
 const PLANETS: &[&str] = &["Mars", "Ceres", "Sedna", "Void", "Saturn", "Phobos", "Zariman", "Veil Proxima", "Kuva Fortress", "Lua"];
+const CONTENT_KINDS: &[&str] = &["arbitration", "sortie", "archon", "area-mission", "area-objective", "bounty", "circuit", "archimedea", "descendia"];
+const CONTENT_KEYWORDS: &[&str] = &["Defense", "防衛", "Capture", "確保", "Survival", "md", "Netracells", "Vault"];
+const CONTENT_STAGE_TITLES: &[&str] = &["Defense", "Survival", "Excavation", "Mobile Defense", "Netracells", "Capture the Grineer Commander", "Isolation Vault", "Liberation"];
 
 /// オラクルは純粋関数を対象とするため、現在時刻は固定値でよい
 fn base_now() -> DateTime<Utc> {
@@ -135,6 +139,64 @@ fn arb_fissure() -> impl Strategy<Value = Fissure> {
                 is_storm,
                 is_hard,
             }
+        })
+}
+
+fn arb_content_rule() -> impl Strategy<Value = ContentWatchRule> {
+    (
+        any::<bool>(),
+        arb_rule_name(),
+        arb_subset(CONTENT_KINDS),
+        arb_subset(CONTENT_KEYWORDS),
+        proptest::option::of(0u32..120),
+    )
+        .prop_map(|(notify, name, kinds, mission_types, min_enemy_level)| ContentWatchRule {
+            notify,
+            name,
+            kinds,
+            mission_types,
+            min_enemy_level,
+        })
+}
+
+fn arb_content_stage() -> impl Strategy<Value = timed::TimedStage> {
+    (
+        proptest::sample::select(CONTENT_STAGE_TITLES.to_vec()),
+        proptest::option::of((5u32..80, 0u32..40)),
+        arb_subset(CONTENT_STAGE_TITLES),
+    )
+        .prop_map(|(title, levels, choices)| {
+            let mut stage = timed::TimedStage::new(1, title.to_string());
+            stage.enemy_levels = levels
+                .map(|(minimum, span)| vec![minimum, minimum + span])
+                .unwrap_or_default();
+            stage.choices = choices;
+            stage
+        })
+}
+
+fn arb_content_card() -> impl Strategy<Value = timed::TimedContent> {
+    (
+        "[a-f0-9]{8}",
+        proptest::sample::select(CONTENT_KINDS.to_vec()),
+        proptest::collection::vec(arb_content_stage(), 0..4),
+        proptest::option::of(-600i64..7200),
+    )
+        .prop_map(|(id, kind, stages, expiry_off)| {
+            let mut card = mk_timed_card(
+                &id,
+                expiry_off.map(|off| base_now() + Duration::seconds(off)),
+            );
+            card.kind = kind.to_string();
+            card.stages = stages
+                .into_iter()
+                .enumerate()
+                .map(|(index, mut stage)| {
+                    stage.order = index as u32 + 1;
+                    stage
+                })
+                .collect();
+            card
         })
 }
 
@@ -1078,6 +1140,243 @@ proptest! {
         }
     }
 
+    /// CNT-001: コンテンツ監視ルールは時限cardへ合致する: kindsが空なら全kind、非空ならcard.kindの完全一致を要求する。missionTypesとminEnemyLevelの両方が未指定ならkind条件だけで合致し、どちらかを指定したルールは「キーワード条件とレベル条件を同時に満たすstageが1つ以上ある」場合だけ合致する。キーワード条件は正準化キーワードがstage titleまたはchoicesに大文字小文字を無視して部分一致すること(未指定なら常に真)、レベル条件はstageのenemy levelsが存在してその最小値がminEnemyLevel以上であること。enemy levelsを持たないstageへレベル条件は合致しない(レベルを捏造しない)
+    #[test]
+    fn cnt_001(rule in arb_content_rule(), card in arb_content_card()) {
+        // 条項の意味論をテスト側で独立に再構成し、実装と突き合わせる
+        let keyword_ok = |stage: &timed::TimedStage, keyword: &str| {
+            let canonical = content_filter::canonical_keyword(keyword).to_lowercase();
+            stage.title.to_lowercase().contains(&canonical)
+                || stage
+                    .choices
+                    .iter()
+                    .any(|choice| choice.to_lowercase().contains(&canonical))
+        };
+        let level_ok = |stage: &timed::TimedStage| match rule.min_enemy_level {
+            None => true,
+            Some(threshold) => stage
+                .enemy_levels
+                .iter()
+                .min()
+                .is_some_and(|minimum| *minimum >= threshold),
+        };
+        let kind_ok = rule.kinds.is_empty() || rule.kinds.iter().any(|kind| kind == &card.kind);
+        let stage_conditions = !rule.mission_types.is_empty() || rule.min_enemy_level.is_some();
+        let stage_ok = |stage: &timed::TimedStage| {
+            (rule.mission_types.is_empty()
+                || rule
+                    .mission_types
+                    .iter()
+                    .any(|keyword| keyword_ok(stage, keyword)))
+                && level_ok(stage)
+        };
+        let expected = kind_ok && (!stage_conditions || card.stages.iter().any(stage_ok));
+        prop_assert_eq!(
+            content_filter::rule_matches(&rule, &card),
+            expected,
+            "SPEC CNT-001 違反: コンテンツ監視ルールは時限cardへ合致する: kindsが空なら全kind、非空ならcard.kindの完全一致を要求する。missionTypesとminEnemyLevelの両方が未指定ならkind条件だけで合致し、どちらかを指定したルールは「キーワード条件とレベル条件を同時に満たすstageが1つ以上ある」場合だけ合致する。キーワード条件は正準化キーワードがstage titleまたはchoicesに大文字小文字を無視して部分一致すること(未指定なら常に真)、レベル条件はstageのenemy levelsが存在してその最小値がminEnemyLevel以上であること。enemy levelsを持たないstageへレベル条件は合致しない(レベルを捏造しない) (意味論の再構成と一致しない)"
+        );
+
+        // レベル条件はenemy levelsを持たないstageに合致しない(捏造しない)
+        if rule.min_enemy_level.is_some() {
+            let mut leveled_rule = rule.clone();
+            leveled_rule.kinds = vec![];
+            let mut unleveled = card.clone();
+            for stage in &mut unleveled.stages {
+                stage.enemy_levels.clear();
+            }
+            prop_assert!(
+                !content_filter::rule_matches(&leveled_rule, &unleveled),
+                "SPEC CNT-001 違反: コンテンツ監視ルールは時限cardへ合致する: kindsが空なら全kind、非空ならcard.kindの完全一致を要求する。missionTypesとminEnemyLevelの両方が未指定ならkind条件だけで合致し、どちらかを指定したルールは「キーワード条件とレベル条件を同時に満たすstageが1つ以上ある」場合だけ合致する。キーワード条件は正準化キーワードがstage titleまたはchoicesに大文字小文字を無視して部分一致すること(未指定なら常に真)、レベル条件はstageのenemy levelsが存在してその最小値がminEnemyLevel以上であること。enemy levelsを持たないstageへレベル条件は合致しない(レベルを捏造しない) (レベルなしstageへレベル条件が合致した)"
+            );
+        }
+
+        // 空ルール(全軸未指定)はkindだけで合致する
+        let empty_rule = ContentWatchRule {
+            notify: rule.notify,
+            name: None,
+            kinds: vec![],
+            mission_types: vec![],
+            min_enemy_level: None,
+        };
+        prop_assert!(
+            content_filter::rule_matches(&empty_rule, &card),
+            "SPEC CNT-001 違反: コンテンツ監視ルールは時限cardへ合致する: kindsが空なら全kind、非空ならcard.kindの完全一致を要求する。missionTypesとminEnemyLevelの両方が未指定ならkind条件だけで合致し、どちらかを指定したルールは「キーワード条件とレベル条件を同時に満たすstageが1つ以上ある」場合だけ合致する。キーワード条件は正準化キーワードがstage titleまたはchoicesに大文字小文字を無視して部分一致すること(未指定なら常に真)、レベル条件はstageのenemy levelsが存在してその最小値がminEnemyLevel以上であること。enemy levelsを持たないstageへレベル条件は合致しない(レベルを捏造しない) (空ルールが合致しない)"
+        );
+    }
+
+    /// CNT-002: コンテンツ通知の選択はexpiryを持つ合致cardだけを対象にし、seed評価・ミュート評価では通知済みとしてmarkするが配送対象を返さない。どんな評価列でも同一card idの配送は高々1回で、配送対象は常にその評価の合致集合の部分集合であり、非合致cardをmarkも配送もしない
+    #[test]
+    fn cnt_002(
+        rules in proptest::collection::vec(arb_content_rule(), 0..3),
+        evaluations in proptest::collection::vec(
+            (proptest::collection::vec(arb_content_card(), 0..5), any::<bool>(), any::<bool>()),
+            1..6,
+        ),
+    ) {
+        let mut notified = NotifiedSet::default();
+        let mut delivered_ids: Vec<String> = vec![];
+        let mut ever_matched: std::collections::HashSet<String> = Default::default();
+        for (cards, seed_only, muted) in evaluations {
+            let matching = content_filter::matching_cards(&rules, cards.iter());
+            // 合致集合の健全性/完全性(card id単位のdedupを許す)
+            for card in &matching {
+                prop_assert!(
+                    rules
+                        .iter()
+                        .any(|rule| rule.notify && content_filter::rule_matches(rule, card)),
+                    "SPEC CNT-002 違反: コンテンツ通知の選択はexpiryを持つ合致cardだけを対象にし、seed評価・ミュート評価では通知済みとしてmarkするが配送対象を返さない。どんな評価列でも同一card idの配送は高々1回で、配送対象は常にその評価の合致集合の部分集合であり、非合致cardをmarkも配送もしない (notify=trueルールに合致しないcardを合致集合へ入れた)"
+                );
+            }
+            let matching_ids: Vec<String> =
+                matching.iter().map(|card| card.id.clone()).collect();
+            for card in &cards {
+                if rules
+                    .iter()
+                    .any(|rule| rule.notify && content_filter::rule_matches(rule, card))
+                {
+                    prop_assert!(
+                        matching_ids.contains(&card.id),
+                        "SPEC CNT-002 違反: コンテンツ通知の選択はexpiryを持つ合致cardだけを対象にし、seed評価・ミュート評価では通知済みとしてmarkするが配送対象を返さない。どんな評価列でも同一card idの配送は高々1回で、配送対象は常にその評価の合致集合の部分集合であり、非合致cardをmarkも配送もしない (合致cardを取りこぼした)"
+                    );
+                }
+            }
+
+            let delivered = content_filter::select_content_notifications(
+                &mut notified,
+                matching.into_iter().cloned().collect(),
+                seed_only,
+                muted,
+            );
+            if seed_only || muted {
+                prop_assert!(delivered.is_empty(), "SPEC CNT-002 違反: コンテンツ通知の選択はexpiryを持つ合致cardだけを対象にし、seed評価・ミュート評価では通知済みとしてmarkするが配送対象を返さない。どんな評価列でも同一card idの配送は高々1回で、配送対象は常にその評価の合致集合の部分集合であり、非合致cardをmarkも配送もしない (seed/ミュート中に配送した)");
+            }
+            for card in &delivered {
+                prop_assert!(
+                    matching_ids.contains(&card.id),
+                    "SPEC CNT-002 違反: コンテンツ通知の選択はexpiryを持つ合致cardだけを対象にし、seed評価・ミュート評価では通知済みとしてmarkするが配送対象を返さない。どんな評価列でも同一card idの配送は高々1回で、配送対象は常にその評価の合致集合の部分集合であり、非合致cardをmarkも配送もしない (合致集合外を配送した)"
+                );
+                prop_assert!(
+                    card.expiry.is_some(),
+                    "SPEC CNT-002 違反: コンテンツ通知の選択はexpiryを持つ合致cardだけを対象にし、seed評価・ミュート評価では通知済みとしてmarkするが配送対象を返さない。どんな評価列でも同一card idの配送は高々1回で、配送対象は常にその評価の合致集合の部分集合であり、非合致cardをmarkも配送もしない (expiryなしcardを配送した)"
+                );
+                prop_assert!(
+                    !delivered_ids.contains(&card.id),
+                    "SPEC CNT-002 違反: コンテンツ通知の選択はexpiryを持つ合致cardだけを対象にし、seed評価・ミュート評価では通知済みとしてmarkするが配送対象を返さない。どんな評価列でも同一card idの配送は高々1回で、配送対象は常にその評価の合致集合の部分集合であり、非合致cardをmarkも配送もしない (同一card idを2回配送した)"
+                );
+                delivered_ids.push(card.id.clone());
+            }
+            ever_matched.extend(matching_ids.iter().cloned());
+            // 非合致cardはmarkされない(過去に合致したidは除く)
+            for card in &cards {
+                if !ever_matched.contains(&card.id) {
+                    prop_assert!(
+                        !notified.contains(&card.id),
+                        "SPEC CNT-002 違反: コンテンツ通知の選択はexpiryを持つ合致cardだけを対象にし、seed評価・ミュート評価では通知済みとしてmarkするが配送対象を返さない。どんな評価列でも同一card idの配送は高々1回で、配送対象は常にその評価の合致集合の部分集合であり、非合致cardをmarkも配送もしない (非合致cardをmarkした)"
+                    );
+                }
+            }
+        }
+    }
+
+    /// CNT-003: コンテンツ通知範囲のprojectionはnotify=trueのルールだけを元の順序で保持し、キーワードを正準化して比較する。ルール名の変更・notify=falseルールの追加削除編集ではprojectionは変わらず、notify切替・notify=trueルールのkinds/missionTypes/minEnemyLevel変更では変わる。初回評価とprojection変更後の評価はsilent seedとなり現存合致cardを一括通知しない
+    #[test]
+    fn cnt_003(
+        rules in proptest::collection::vec(arb_content_rule(), 0..4),
+        mut muted_rule in arb_content_rule(),
+    ) {
+        let base = content_filter::content_projection(&rules);
+        let expected: Vec<_> = rules
+            .iter()
+            .filter(|rule| rule.notify)
+            .map(|rule| {
+                let mut normalized = rule.clone();
+                normalized.name = None;
+                normalized.mission_types = normalized
+                    .mission_types
+                    .iter()
+                    .map(|keyword| content_filter::canonical_keyword(keyword))
+                    .collect();
+                normalized
+            })
+            .collect();
+        prop_assert_eq!(&base, &expected, "SPEC CNT-003 違反: コンテンツ通知範囲のprojectionはnotify=trueのルールだけを元の順序で保持し、キーワードを正準化して比較する。ルール名の変更・notify=falseルールの追加削除編集ではprojectionは変わらず、notify切替・notify=trueルールのkinds/missionTypes/minEnemyLevel変更では変わる。初回評価とprojection変更後の評価はsilent seedとなり現存合致cardを一括通知しない (notify=trueルールの正規化列と一致しない)");
+
+        // 名前変更ではprojectionは変わらない
+        let mut renamed = rules.clone();
+        for rule in &mut renamed {
+            rule.name = Some("renamed".to_string());
+        }
+        prop_assert_eq!(
+            content_filter::content_projection(&renamed),
+            base.clone(),
+            "SPEC CNT-003 違反: コンテンツ通知範囲のprojectionはnotify=trueのルールだけを元の順序で保持し、キーワードを正準化して比較する。ルール名の変更・notify=falseルールの追加削除編集ではprojectionは変わらず、notify切替・notify=trueルールのkinds/missionTypes/minEnemyLevel変更では変わる。初回評価とprojection変更後の評価はsilent seedとなり現存合致cardを一括通知しない (名前変更でprojectionが変化した)"
+        );
+        prop_assert!(
+            !content_filter::content_scope_changed(Some(&base), &renamed),
+            "SPEC CNT-003 違反: コンテンツ通知範囲のprojectionはnotify=trueのルールだけを元の順序で保持し、キーワードを正準化して比較する。ルール名の変更・notify=falseルールの追加削除編集ではprojectionは変わらず、notify切替・notify=trueルールのkinds/missionTypes/minEnemyLevel変更では変わる。初回評価とprojection変更後の評価はsilent seedとなり現存合致cardを一括通知しない (名前変更を範囲変更と誤判定した)"
+        );
+
+        // notify=falseルールの追加・編集ではprojectionは変わらない
+        muted_rule.notify = false;
+        let mut with_muted = rules.clone();
+        with_muted.push(muted_rule);
+        prop_assert_eq!(
+            content_filter::content_projection(&with_muted),
+            base.clone(),
+            "SPEC CNT-003 違反: コンテンツ通知範囲のprojectionはnotify=trueのルールだけを元の順序で保持し、キーワードを正準化して比較する。ルール名の変更・notify=falseルールの追加削除編集ではprojectionは変わらず、notify切替・notify=trueルールのkinds/missionTypes/minEnemyLevel変更では変わる。初回評価とprojection変更後の評価はsilent seedとなり現存合致cardを一括通知しない (notify=false追加でprojectionが変化した)"
+        );
+
+        // notify切替は範囲変更になる
+        let mut toggled = rules.clone();
+        if let Some(rule) = toggled.first_mut() {
+            rule.notify = !rule.notify;
+            prop_assert!(
+                content_filter::content_scope_changed(Some(&base), &toggled),
+                "SPEC CNT-003 違反: コンテンツ通知範囲のprojectionはnotify=trueのルールだけを元の順序で保持し、キーワードを正準化して比較する。ルール名の変更・notify=falseルールの追加削除編集ではprojectionは変わらず、notify切替・notify=trueルールのkinds/missionTypes/minEnemyLevel変更では変わる。初回評価とprojection変更後の評価はsilent seedとなり現存合致cardを一括通知しない (notify切替を範囲変更と判定しない)"
+            );
+        }
+
+        // notify=trueルールの条件変更は範囲変更になる
+        let mut edited = rules.clone();
+        if let Some(rule) = edited.iter_mut().find(|rule| rule.notify) {
+            rule.min_enemy_level = Some(rule.min_enemy_level.map_or(1, |level| level + 1));
+            prop_assert!(
+                content_filter::content_scope_changed(Some(&base), &edited),
+                "SPEC CNT-003 違反: コンテンツ通知範囲のprojectionはnotify=trueのルールだけを元の順序で保持し、キーワードを正準化して比較する。ルール名の変更・notify=falseルールの追加削除編集ではprojectionは変わらず、notify切替・notify=trueルールのkinds/missionTypes/minEnemyLevel変更では変わる。初回評価とprojection変更後の評価はsilent seedとなり現存合致cardを一括通知しない (条件変更を範囲変更と判定しない)"
+            );
+        }
+
+        // キーワードは正準化して比較する(防衛とDefenseは同じ範囲)
+        let alias_rules = vec![ContentWatchRule {
+            notify: true,
+            name: None,
+            kinds: vec!["arbitration".to_string()],
+            mission_types: vec!["防衛".to_string()],
+            min_enemy_level: None,
+        }];
+        let canonical_rules = vec![ContentWatchRule {
+            notify: true,
+            name: None,
+            kinds: vec!["arbitration".to_string()],
+            mission_types: vec!["Defense".to_string()],
+            min_enemy_level: None,
+        }];
+        prop_assert!(
+            !content_filter::content_scope_changed(
+                Some(&content_filter::content_projection(&alias_rules)),
+                &canonical_rules,
+            ),
+            "SPEC CNT-003 違反: コンテンツ通知範囲のprojectionはnotify=trueのルールだけを元の順序で保持し、キーワードを正準化して比較する。ルール名の変更・notify=falseルールの追加削除編集ではprojectionは変わらず、notify切替・notify=trueルールのkinds/missionTypes/minEnemyLevel変更では変わる。初回評価とprojection変更後の評価はsilent seedとなり現存合致cardを一括通知しない (aliasキーワードを正準化せず範囲変更と誤判定した)"
+        );
+
+        // 初回評価は常にseed対象
+        prop_assert!(
+            content_filter::content_scope_changed(None, &rules),
+            "SPEC CNT-003 違反: コンテンツ通知範囲のprojectionはnotify=trueのルールだけを元の順序で保持し、キーワードを正準化して比較する。ルール名の変更・notify=falseルールの追加削除編集ではprojectionは変わらず、notify切替・notify=trueルールのkinds/missionTypes/minEnemyLevel変更では変わる。初回評価とprojection変更後の評価はsilent seedとなり現存合致cardを一括通知しない (初回評価をseedしない)"
+        );
+    }
+
     /// NTY-001: 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない
     #[test]
     fn nty_001(
@@ -1546,6 +1845,69 @@ proptest! {
     }
 }
 
+
+/// CNT-004: コンテンツ監視ルールのキーワードは前後空白を除去し、パレットのミッション語彙(label or alias、大文字小文字無視)へ一致すれば正準ミッション名(防衛→Defense、確保→Capture、md→Mobile Defense等)に解決し、一致しなければrawのまま使う
+#[test]
+fn cnt_004() {
+    for (input, expected) in [
+        ("防衛", "Defense"),
+        ("確保", "Capture"),
+        ("defense", "Defense"),
+        ("SURVIVAL", "Survival"),
+        ("md", "Mobile Defense"),
+        ("  防衛  ", "Defense"),
+        ("Netracells", "Netracells"),
+        ("", ""),
+    ] {
+        assert_eq!(
+            content_filter::canonical_keyword(input),
+            expected,
+            "SPEC CNT-004 違反: コンテンツ監視ルールのキーワードは前後空白を除去し、パレットのミッション語彙(label or alias、大文字小文字無視)へ一致すれば正準ミッション名(防衛→Defense、確保→Capture、md→Mobile Defense等)に解決し、一致しなければrawのまま使う (input={input:?})",
+        );
+    }
+}
+
+/// CFG-006: AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる
+#[test]
+fn cfg_006() {
+    let legacy: AppConfig = serde_json::from_str(r#"{"rules": []}"#).expect("旧JSONを読めること");
+    assert!(legacy.content_rules.is_empty(), "SPEC CFG-006 違反: AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる (旧JSONで空リストにならない)");
+
+    let json = r#"{
+        "rules": [],
+        "contentRules": [
+            {"kinds": ["arbitration"], "missionTypes": ["防衛"], "minEnemyLevel": 60},
+            {"notify": false, "name": "area capture", "kinds": ["area-mission", "bounty"], "missionTypes": ["Capture"]}
+        ]
+    }"#;
+    let cfg: AppConfig = serde_json::from_str(json).expect("contentRules入りJSONを読めること");
+    assert_eq!(cfg.content_rules.len(), 2, "SPEC CFG-006 違反: AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる (件数)");
+    assert!(cfg.content_rules[0].notify, "SPEC CFG-006 違反: AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる (notify欠落がtrueにならない)");
+    assert_eq!(
+        cfg.content_rules[0].kinds,
+        vec!["arbitration".to_string()],
+        "SPEC CFG-006 違反: AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる (kinds)",
+    );
+    assert_eq!(
+        cfg.content_rules[0].mission_types,
+        vec!["防衛".to_string()],
+        "SPEC CFG-006 違反: AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる (missionTypes)",
+    );
+    assert_eq!(cfg.content_rules[0].min_enemy_level, Some(60), "SPEC CFG-006 違反: AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる (minEnemyLevel)");
+    assert!(!cfg.content_rules[1].notify, "SPEC CFG-006 違反: AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる (明示notify=falseを保持しない)");
+    assert_eq!(
+        cfg.content_rules[1].name.as_deref(),
+        Some("area capture"),
+        "SPEC CFG-006 違反: AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる (name)",
+    );
+    assert_eq!(cfg.content_rules[1].min_enemy_level, None, "SPEC CFG-006 違反: AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる (level未指定)");
+
+    let encoded = serde_json::to_string(&cfg).expect("serializeできること");
+    let reread: AppConfig = serde_json::from_str(&encoded).expect("round-tripできること");
+    assert_eq!(reread.content_rules, cfg.content_rules, "SPEC CFG-006 違反: AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる (round-trip)");
+    assert!(encoded.contains("\"contentRules\""), "SPEC CFG-006 違反: AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる (camelCase contentRules)");
+    assert!(encoded.contains("\"minEnemyLevel\""), "SPEC CFG-006 違反: AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる (camelCase minEnemyLevel)");
+}
 
 /// CFG-002: enabledを持たない既存WatchRule JSONはenabled=true(一覧表示へ参加)として読み込み、明示したenabled=falseはserialize/deserialize後もfalseのまま保持する
 #[test]
@@ -2409,6 +2771,115 @@ fn tmd_005() {
     }
 }
 
+/// TMD-007: ExportRegionsと英語辞書のfixtureから、亀裂表示用のnode表示名→enemy level範囲lookupを構築する。表示名は仲裁cardと同じ「Name (System)」でsystem欠落時はNameのみ、min/maxのlevelが欠落・逆転したentryはlookupへ含めずlevelを捏造しない。lookupはStatusSnapshotのnodeLevelsとしてcamelCaseでserializeされる
+#[test]
+fn tmd_007() {
+    let now = base_now();
+    let schedule = format!(
+        "{},ClanNode7\n{},ClanNode8\n",
+        now.timestamp(),
+        (now + Duration::hours(1)).timestamp(),
+    );
+    let regions = serde_json::json!({
+        "ClanNode7": {
+            "name": "/node/Cholistan",
+            "systemName": "/system/Europa",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION",
+            "minEnemyLevel": 23,
+            "maxEnemyLevel": 33
+        },
+        "ClanNode8": {
+            "name": "/node/Cholistan",
+            "systemName": "/system/Europa",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION",
+            "minEnemyLevel": 23,
+            "maxEnemyLevel": 33
+        },
+        "SolNode900": {
+            "name": "/node/NoLevels",
+            "systemName": "/system/Europa",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION"
+        },
+        "SolNode901": {
+            "name": "/node/Inverted",
+            "systemName": "/system/Europa",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION",
+            "minEnemyLevel": 30,
+            "maxEnemyLevel": 20
+        },
+        "SolNode902": {
+            "name": "/node/Solo",
+            "systemName": "",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION",
+            "minEnemyLevel": 5,
+            "maxEnemyLevel": 9
+        }
+    });
+    let challenges = serde_json::json!({
+        "/challenge/kill": {
+            "name": "/challenge/name",
+            "description": "/challenge/description",
+            "requiredCount": 10
+        }
+    });
+    let dictionary = serde_json::json!({
+        "/node/Cholistan": "Cholistan",
+        "/node/NoLevels": "No Levels",
+        "/node/Inverted": "Inverted",
+        "/node/Solo": "Solo",
+        "/system/Europa": "Europa",
+        "/mission/Excavation": "EXCAVATION",
+        "/challenge/name": "Operator",
+        "/challenge/description": "Kill |COUNT| enemies",
+        "/faction/infested": "INFESTED"
+    });
+    let factions = serde_json::json!({
+        "FC_INFESTATION": { "index": 2, "name": "/faction/infested" }
+    });
+    let assets = timed::parse_community_assets(
+        &schedule,
+        &regions.to_string(),
+        &challenges.to_string(),
+        &dictionary.to_string(),
+        &factions.to_string(),
+    )
+    .expect("Public Export fixtureを結合できること");
+
+    let levels = timed::node_level_index(&assets);
+    assert_eq!(
+        levels.get("Cholistan (Europa)"),
+        Some(&[23u32, 33u32]),
+        "SPEC TMD-007 違反: ExportRegionsと英語辞書のfixtureから、亀裂表示用のnode表示名→enemy level範囲lookupを構築する。表示名は仲裁cardと同じ「Name (System)」でsystem欠落時はNameのみ、min/maxのlevelが欠落・逆転したentryはlookupへ含めずlevelを捏造しない。lookupはStatusSnapshotのnodeLevelsとしてcamelCaseでserializeされる (Name (System)表示名でのlookup)",
+    );
+    assert_eq!(
+        levels.get("Solo"),
+        Some(&[5u32, 9u32]),
+        "SPEC TMD-007 違反: ExportRegionsと英語辞書のfixtureから、亀裂表示用のnode表示名→enemy level範囲lookupを構築する。表示名は仲裁cardと同じ「Name (System)」でsystem欠落時はNameのみ、min/maxのlevelが欠落・逆転したentryはlookupへ含めずlevelを捏造しない。lookupはStatusSnapshotのnodeLevelsとしてcamelCaseでserializeされる (system欠落時はNameのみ)",
+    );
+    assert!(
+        !levels.keys().any(|key| key.contains("No Levels")),
+        "SPEC TMD-007 違反: ExportRegionsと英語辞書のfixtureから、亀裂表示用のnode表示名→enemy level範囲lookupを構築する。表示名は仲裁cardと同じ「Name (System)」でsystem欠落時はNameのみ、min/maxのlevelが欠落・逆転したentryはlookupへ含めずlevelを捏造しない。lookupはStatusSnapshotのnodeLevelsとしてcamelCaseでserializeされる (level欠落entryを捏造した)",
+    );
+    assert!(
+        !levels.keys().any(|key| key.contains("Inverted")),
+        "SPEC TMD-007 違反: ExportRegionsと英語辞書のfixtureから、亀裂表示用のnode表示名→enemy level範囲lookupを構築する。表示名は仲裁cardと同じ「Name (System)」でsystem欠落時はNameのみ、min/maxのlevelが欠落・逆転したentryはlookupへ含めずlevelを捏造しない。lookupはStatusSnapshotのnodeLevelsとしてcamelCaseでserializeされる (逆転level entryを含めた)",
+    );
+
+    let mut snapshot = poller::StatusSnapshot::default();
+    snapshot.node_levels = levels;
+    let value = serde_json::to_value(&snapshot).expect("StatusSnapshotをserializeできること");
+    assert_eq!(
+        value["nodeLevels"]["Cholistan (Europa)"],
+        serde_json::json!([23, 33]),
+        "SPEC TMD-007 違反: ExportRegionsと英語辞書のfixtureから、亀裂表示用のnode表示名→enemy level範囲lookupを構築する。表示名は仲裁cardと同じ「Name (System)」でsystem欠落時はNameのみ、min/maxのlevelが欠落・逆転したentryはlookupへ含めずlevelを捏造しない。lookupはStatusSnapshotのnodeLevelsとしてcamelCaseでserializeされる (camelCase nodeLevels wire)",
+    );
+}
+
 /// TMD-006: AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない
 #[test]
 fn tmd_006() {
@@ -2848,6 +3319,61 @@ fn ntf_004() {
             "SPEC NTF-004 違反: Discord Webhook URLは既存queryを保持しながらwait=trueをちょうど1つに正規化し、レスポンスが非空Message IDを含むJSONのときだけ要求受付と判定する。ID欠落・空文字・不正JSONは失敗する (ID欠落・空文字・不正JSONを成功扱いした)"
         );
     }
+}
+
+/// NTF-006: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する
+#[test]
+fn ntf_006() {
+    let now = base_now();
+    let mut card = mk_timed_card("arbitration:1700000000:SolNode1", Some(now + Duration::minutes(45)));
+    card.kind = "arbitration".to_string();
+    card.title = "Arbitration".to_string();
+    let mut stage = timed::TimedStage::new(1, "Survival".to_string());
+    stage.node = Some("Zeugma (Phobos)".to_string());
+    stage.enemy_levels = vec![15, 25];
+    card.stages = vec![stage];
+
+    for locale in [AppLocale::Ja, AppLocale::En, AppLocale::ZhHans] {
+        let payload = notify::content_desktop_payload_for_locale(&card, now, locale);
+        assert!(
+            !payload.title.contains("[[") && !payload.body.contains("[["),
+            "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (missing-key marker: {locale:?})",
+        );
+        assert!(payload.title.contains("Survival"), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (stage title: {locale:?})");
+        assert!(
+            payload.body.contains("Zeugma (Phobos)"),
+            "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (node: {locale:?})",
+        );
+        assert!(payload.body.contains("15-25"), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (enemy level: {locale:?})");
+        assert!(payload.body.contains("45"), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (残り分数: {locale:?})");
+
+        let description = notify::content_discord_description_for_locale(&card, locale);
+        assert!(
+            description.contains("Zeugma (Phobos)"),
+            "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (discord node: {locale:?})",
+        );
+        assert!(
+            description.contains(&format!(
+                "<t:{}:R>",
+                card.expiry.expect("fixture expiry").timestamp()
+            )),
+            "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (discord動的タイムスタンプ: {locale:?})",
+        );
+    }
+
+    let ja = notify::content_desktop_payload_for_locale(&card, now, AppLocale::Ja);
+    assert!(ja.title.contains("仲裁"), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (ja kindラベル)");
+    let en = notify::content_desktop_payload_for_locale(&card, now, AppLocale::En);
+    assert!(en.title.contains("Arbitration"), "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (en kindラベル)");
+
+    // 未知kindはラベルを捏造せずrawを保持する
+    let mut unknown = card.clone();
+    unknown.kind = "mystery-kind".to_string();
+    let unknown_payload = notify::content_desktop_payload_for_locale(&unknown, now, AppLocale::Ja);
+    assert!(
+        unknown_payload.title.contains("mystery-kind") && !unknown_payload.title.contains("[["),
+        "SPEC NTF-006 違反: コンテンツ通知payloadはcardのkindを選択言語のラベルへ解決し(未知kindはrawを保持)、先頭stageのtitle・node・enemy level範囲と、呼出側から渡した同一nowで計算した残り分数をdesktop本文へ含める。Discord embedはdescriptionへnodeとDiscord動的タイムスタンプ(<t:unix:R>)を含める。ja/en/zh-Hansでmissing-key markerを含まず、API固有名詞は原文を保持する (未知kindのfallback)",
+    );
 }
 
 /// NTF-005: ja/en/zh-Hansの各localeで、デスクトップ通知title/body・通知テスト要求受付文・Storm Include/Onlyを含む単一ルールのtray監視行・候補ID/ルールindex検証エラーは同じ選択言語となり、missing-key markerを含まない。API固有名詞と通知先identifierは原文を保持する

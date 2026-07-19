@@ -25,6 +25,7 @@ type Clause = {
     | "desktop_unavailable"
     | "discord_receipt"
     | "localized_backend"
+    | "content_payload"
     | "bundle_identity"
     | "tray_template_icon"
     | "autostart_bundle_icon"
@@ -37,6 +38,7 @@ type Clause = {
     | "circuit"
     | "rich_details"
     | "area_sources"
+    | "node_level_index"
     | "glyph_known_values"
     | "planet_proxima_view"
     | "e2e_targeted_cleanup"
@@ -52,6 +54,8 @@ type Clause = {
     | "content_tabs"
     | "mute_window"
     | "locale_display"
+    | "node_levels"
+    | "content_alerts"
     | "palette_apply_ipc"
     | "delivery_error_surface"
     | "locale_config_roundtrip";
@@ -85,6 +89,18 @@ const ACTION_POOL = [
   "pause",
 ];
 const PROXIMA_PLANETS = ["Earth", "Venus", "Saturn", "Neptune", "Pluto", "Veil"];
+// 時限コンテンツ監視ルールの生成プール(kindはwire上のTimedContent.kind語彙)
+const CONTENT_KIND_POOL = [
+  "arbitration", "sortie", "archon", "area-mission",
+  "area-objective", "bounty", "circuit", "archimedea", "descendia",
+];
+const CONTENT_KEYWORD_POOL = [
+  "Defense", "防衛", "Capture", "確保", "Survival", "md", "Netracells", "Vault",
+];
+const CONTENT_STAGE_TITLE_POOL = [
+  "Defense", "Survival", "Excavation", "Mobile Defense", "Netracells",
+  "Capture the Grineer Commander", "Isolation Vault", "Liberation",
+];
 
 const rustStrArray = (pool: string[]) => pool.map((s) => `"${s}"`).join(", ");
 const tsStrArray = (pool: string[]) => JSON.stringify(pool);
@@ -274,6 +290,246 @@ ${indent(c.fissureOverride ?? "", 8)}
         prop_assert!(
             !filter::matches(&empty, &valid_fissure, now),
             "${msg} (ルールなしなのに合致した)"
+        );
+    }`;
+    case "content_rule_match":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(rule in arb_content_rule(), card in arb_content_card()) {
+        // 条項の意味論をテスト側で独立に再構成し、実装と突き合わせる
+        let keyword_ok = |stage: &timed::TimedStage, keyword: &str| {
+            let canonical = content_filter::canonical_keyword(keyword).to_lowercase();
+            stage.title.to_lowercase().contains(&canonical)
+                || stage
+                    .choices
+                    .iter()
+                    .any(|choice| choice.to_lowercase().contains(&canonical))
+        };
+        let level_ok = |stage: &timed::TimedStage| match rule.min_enemy_level {
+            None => true,
+            Some(threshold) => stage
+                .enemy_levels
+                .iter()
+                .min()
+                .is_some_and(|minimum| *minimum >= threshold),
+        };
+        let kind_ok = rule.kinds.is_empty() || rule.kinds.iter().any(|kind| kind == &card.kind);
+        let stage_conditions = !rule.mission_types.is_empty() || rule.min_enemy_level.is_some();
+        let stage_ok = |stage: &timed::TimedStage| {
+            (rule.mission_types.is_empty()
+                || rule
+                    .mission_types
+                    .iter()
+                    .any(|keyword| keyword_ok(stage, keyword)))
+                && level_ok(stage)
+        };
+        let expected = kind_ok && (!stage_conditions || card.stages.iter().any(stage_ok));
+        prop_assert_eq!(
+            content_filter::rule_matches(&rule, &card),
+            expected,
+            "${msg} (意味論の再構成と一致しない)"
+        );
+
+        // レベル条件はenemy levelsを持たないstageに合致しない(捏造しない)
+        if rule.min_enemy_level.is_some() {
+            let mut leveled_rule = rule.clone();
+            leveled_rule.kinds = vec![];
+            let mut unleveled = card.clone();
+            for stage in &mut unleveled.stages {
+                stage.enemy_levels.clear();
+            }
+            prop_assert!(
+                !content_filter::rule_matches(&leveled_rule, &unleveled),
+                "${msg} (レベルなしstageへレベル条件が合致した)"
+            );
+        }
+
+        // 空ルール(全軸未指定)はkindだけで合致する
+        let empty_rule = ContentWatchRule {
+            notify: rule.notify,
+            name: None,
+            kinds: vec![],
+            mission_types: vec![],
+            min_enemy_level: None,
+        };
+        prop_assert!(
+            content_filter::rule_matches(&empty_rule, &card),
+            "${msg} (空ルールが合致しない)"
+        );
+    }`;
+    case "content_notify_once":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(
+        rules in proptest::collection::vec(arb_content_rule(), 0..3),
+        evaluations in proptest::collection::vec(
+            (proptest::collection::vec(arb_content_card(), 0..5), any::<bool>(), any::<bool>()),
+            1..6,
+        ),
+    ) {
+        let mut notified = NotifiedSet::default();
+        let mut delivered_ids: Vec<String> = vec![];
+        let mut ever_matched: std::collections::HashSet<String> = Default::default();
+        for (cards, seed_only, muted) in evaluations {
+            let matching = content_filter::matching_cards(&rules, cards.iter());
+            // 合致集合の健全性/完全性(card id単位のdedupを許す)
+            for card in &matching {
+                prop_assert!(
+                    rules
+                        .iter()
+                        .any(|rule| rule.notify && content_filter::rule_matches(rule, card)),
+                    "${msg} (notify=trueルールに合致しないcardを合致集合へ入れた)"
+                );
+            }
+            let matching_ids: Vec<String> =
+                matching.iter().map(|card| card.id.clone()).collect();
+            for card in &cards {
+                if rules
+                    .iter()
+                    .any(|rule| rule.notify && content_filter::rule_matches(rule, card))
+                {
+                    prop_assert!(
+                        matching_ids.contains(&card.id),
+                        "${msg} (合致cardを取りこぼした)"
+                    );
+                }
+            }
+
+            let delivered = content_filter::select_content_notifications(
+                &mut notified,
+                matching.into_iter().cloned().collect(),
+                seed_only,
+                muted,
+            );
+            if seed_only || muted {
+                prop_assert!(delivered.is_empty(), "${msg} (seed/ミュート中に配送した)");
+            }
+            for card in &delivered {
+                prop_assert!(
+                    matching_ids.contains(&card.id),
+                    "${msg} (合致集合外を配送した)"
+                );
+                prop_assert!(
+                    card.expiry.is_some(),
+                    "${msg} (expiryなしcardを配送した)"
+                );
+                prop_assert!(
+                    !delivered_ids.contains(&card.id),
+                    "${msg} (同一card idを2回配送した)"
+                );
+                delivered_ids.push(card.id.clone());
+            }
+            ever_matched.extend(matching_ids.iter().cloned());
+            // 非合致cardはmarkされない(過去に合致したidは除く)
+            for card in &cards {
+                if !ever_matched.contains(&card.id) {
+                    prop_assert!(
+                        !notified.contains(&card.id),
+                        "${msg} (非合致cardをmarkした)"
+                    );
+                }
+            }
+        }
+    }`;
+    case "content_scope_change":
+      return `
+    /// ${c.id}: ${c.desc}
+    #[test]
+    fn ${name}(
+        rules in proptest::collection::vec(arb_content_rule(), 0..4),
+        mut muted_rule in arb_content_rule(),
+    ) {
+        let base = content_filter::content_projection(&rules);
+        let expected: Vec<_> = rules
+            .iter()
+            .filter(|rule| rule.notify)
+            .map(|rule| {
+                let mut normalized = rule.clone();
+                normalized.name = None;
+                normalized.mission_types = normalized
+                    .mission_types
+                    .iter()
+                    .map(|keyword| content_filter::canonical_keyword(keyword))
+                    .collect();
+                normalized
+            })
+            .collect();
+        prop_assert_eq!(&base, &expected, "${msg} (notify=trueルールの正規化列と一致しない)");
+
+        // 名前変更ではprojectionは変わらない
+        let mut renamed = rules.clone();
+        for rule in &mut renamed {
+            rule.name = Some("renamed".to_string());
+        }
+        prop_assert_eq!(
+            content_filter::content_projection(&renamed),
+            base.clone(),
+            "${msg} (名前変更でprojectionが変化した)"
+        );
+        prop_assert!(
+            !content_filter::content_scope_changed(Some(&base), &renamed),
+            "${msg} (名前変更を範囲変更と誤判定した)"
+        );
+
+        // notify=falseルールの追加・編集ではprojectionは変わらない
+        muted_rule.notify = false;
+        let mut with_muted = rules.clone();
+        with_muted.push(muted_rule);
+        prop_assert_eq!(
+            content_filter::content_projection(&with_muted),
+            base.clone(),
+            "${msg} (notify=false追加でprojectionが変化した)"
+        );
+
+        // notify切替は範囲変更になる
+        let mut toggled = rules.clone();
+        if let Some(rule) = toggled.first_mut() {
+            rule.notify = !rule.notify;
+            prop_assert!(
+                content_filter::content_scope_changed(Some(&base), &toggled),
+                "${msg} (notify切替を範囲変更と判定しない)"
+            );
+        }
+
+        // notify=trueルールの条件変更は範囲変更になる
+        let mut edited = rules.clone();
+        if let Some(rule) = edited.iter_mut().find(|rule| rule.notify) {
+            rule.min_enemy_level = Some(rule.min_enemy_level.map_or(1, |level| level + 1));
+            prop_assert!(
+                content_filter::content_scope_changed(Some(&base), &edited),
+                "${msg} (条件変更を範囲変更と判定しない)"
+            );
+        }
+
+        // キーワードは正準化して比較する(防衛とDefenseは同じ範囲)
+        let alias_rules = vec![ContentWatchRule {
+            notify: true,
+            name: None,
+            kinds: vec!["arbitration".to_string()],
+            mission_types: vec!["防衛".to_string()],
+            min_enemy_level: None,
+        }];
+        let canonical_rules = vec![ContentWatchRule {
+            notify: true,
+            name: None,
+            kinds: vec!["arbitration".to_string()],
+            mission_types: vec!["Defense".to_string()],
+            min_enemy_level: None,
+        }];
+        prop_assert!(
+            !content_filter::content_scope_changed(
+                Some(&content_filter::content_projection(&alias_rules)),
+                &canonical_rules,
+            ),
+            "${msg} (aliasキーワードを正準化せず範囲変更と誤判定した)"
+        );
+
+        // 初回評価は常にseed対象
+        prop_assert!(
+            content_filter::content_scope_changed(None, &rules),
+            "${msg} (初回評価をseedしない)"
         );
     }`;
     case "notification_projection":
@@ -1654,6 +1910,73 @@ fn ${name}() {
     );
 }`;
   }
+  if (c.pattern === "content_keyword_canonical") {
+    return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    for (input, expected) in [
+        ("防衛", "Defense"),
+        ("確保", "Capture"),
+        ("defense", "Defense"),
+        ("SURVIVAL", "Survival"),
+        ("md", "Mobile Defense"),
+        ("  防衛  ", "Defense"),
+        ("Netracells", "Netracells"),
+        ("", ""),
+    ] {
+        assert_eq!(
+            content_filter::canonical_keyword(input),
+            expected,
+            "${msg} (input={input:?})",
+        );
+    }
+}`;
+  }
+  if (c.pattern === "content_rules_config") {
+    return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let legacy: AppConfig = serde_json::from_str(r#"{"rules": []}"#).expect("旧JSONを読めること");
+    assert!(legacy.content_rules.is_empty(), "${msg} (旧JSONで空リストにならない)");
+
+    let json = r#"{
+        "rules": [],
+        "contentRules": [
+            {"kinds": ["arbitration"], "missionTypes": ["防衛"], "minEnemyLevel": 60},
+            {"notify": false, "name": "area capture", "kinds": ["area-mission", "bounty"], "missionTypes": ["Capture"]}
+        ]
+    }"#;
+    let cfg: AppConfig = serde_json::from_str(json).expect("contentRules入りJSONを読めること");
+    assert_eq!(cfg.content_rules.len(), 2, "${msg} (件数)");
+    assert!(cfg.content_rules[0].notify, "${msg} (notify欠落がtrueにならない)");
+    assert_eq!(
+        cfg.content_rules[0].kinds,
+        vec!["arbitration".to_string()],
+        "${msg} (kinds)",
+    );
+    assert_eq!(
+        cfg.content_rules[0].mission_types,
+        vec!["防衛".to_string()],
+        "${msg} (missionTypes)",
+    );
+    assert_eq!(cfg.content_rules[0].min_enemy_level, Some(60), "${msg} (minEnemyLevel)");
+    assert!(!cfg.content_rules[1].notify, "${msg} (明示notify=falseを保持しない)");
+    assert_eq!(
+        cfg.content_rules[1].name.as_deref(),
+        Some("area capture"),
+        "${msg} (name)",
+    );
+    assert_eq!(cfg.content_rules[1].min_enemy_level, None, "${msg} (level未指定)");
+
+    let encoded = serde_json::to_string(&cfg).expect("serializeできること");
+    let reread: AppConfig = serde_json::from_str(&encoded).expect("round-tripできること");
+    assert_eq!(reread.content_rules, cfg.content_rules, "${msg} (round-trip)");
+    assert!(encoded.contains("\\"contentRules\\""), "${msg} (camelCase contentRules)");
+    assert!(encoded.contains("\\"minEnemyLevel\\""), "${msg} (camelCase minEnemyLevel)");
+}`;
+  }
   if (c.pattern === "timed_content_fixture") {
     switch (c.scenario) {
       case "wire_shape":
@@ -1828,6 +2151,116 @@ fn ${name}() {
             "${msg} (Dark Sector {key}={expected})",
         );
     }
+}`;
+      case "node_level_index":
+        return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let now = base_now();
+    let schedule = format!(
+        "{},ClanNode7\\n{},ClanNode8\\n",
+        now.timestamp(),
+        (now + Duration::hours(1)).timestamp(),
+    );
+    let regions = serde_json::json!({
+        "ClanNode7": {
+            "name": "/node/Cholistan",
+            "systemName": "/system/Europa",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION",
+            "minEnemyLevel": 23,
+            "maxEnemyLevel": 33
+        },
+        "ClanNode8": {
+            "name": "/node/Cholistan",
+            "systemName": "/system/Europa",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION",
+            "minEnemyLevel": 23,
+            "maxEnemyLevel": 33
+        },
+        "SolNode900": {
+            "name": "/node/NoLevels",
+            "systemName": "/system/Europa",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION"
+        },
+        "SolNode901": {
+            "name": "/node/Inverted",
+            "systemName": "/system/Europa",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION",
+            "minEnemyLevel": 30,
+            "maxEnemyLevel": 20
+        },
+        "SolNode902": {
+            "name": "/node/Solo",
+            "systemName": "",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION",
+            "minEnemyLevel": 5,
+            "maxEnemyLevel": 9
+        }
+    });
+    let challenges = serde_json::json!({
+        "/challenge/kill": {
+            "name": "/challenge/name",
+            "description": "/challenge/description",
+            "requiredCount": 10
+        }
+    });
+    let dictionary = serde_json::json!({
+        "/node/Cholistan": "Cholistan",
+        "/node/NoLevels": "No Levels",
+        "/node/Inverted": "Inverted",
+        "/node/Solo": "Solo",
+        "/system/Europa": "Europa",
+        "/mission/Excavation": "EXCAVATION",
+        "/challenge/name": "Operator",
+        "/challenge/description": "Kill |COUNT| enemies",
+        "/faction/infested": "INFESTED"
+    });
+    let factions = serde_json::json!({
+        "FC_INFESTATION": { "index": 2, "name": "/faction/infested" }
+    });
+    let assets = timed::parse_community_assets(
+        &schedule,
+        &regions.to_string(),
+        &challenges.to_string(),
+        &dictionary.to_string(),
+        &factions.to_string(),
+    )
+    .expect("Public Export fixtureを結合できること");
+
+    let levels = timed::node_level_index(&assets);
+    assert_eq!(
+        levels.get("Cholistan (Europa)"),
+        Some(&[23u32, 33u32]),
+        "${msg} (Name (System)表示名でのlookup)",
+    );
+    assert_eq!(
+        levels.get("Solo"),
+        Some(&[5u32, 9u32]),
+        "${msg} (system欠落時はNameのみ)",
+    );
+    assert!(
+        !levels.keys().any(|key| key.contains("No Levels")),
+        "${msg} (level欠落entryを捏造した)",
+    );
+    assert!(
+        !levels.keys().any(|key| key.contains("Inverted")),
+        "${msg} (逆転level entryを含めた)",
+    );
+
+    let mut snapshot = poller::StatusSnapshot::default();
+    snapshot.node_levels = levels;
+    let value = serde_json::to_value(&snapshot).expect("StatusSnapshotをserializeできること");
+    assert_eq!(
+        value["nodeLevels"]["Cholistan (Europa)"],
+        serde_json::json!([23, 33]),
+        "${msg} (camelCase nodeLevels wire)",
+    );
 }`;
       case "oracle_bounties":
         return `
@@ -2919,6 +3352,62 @@ fn ${name}() {
         "${msg} (通知先なしを成功扱いした)"
     );
 }`;
+    case "content_payload":
+      return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let now = base_now();
+    let mut card = mk_timed_card("arbitration:1700000000:SolNode1", Some(now + Duration::minutes(45)));
+    card.kind = "arbitration".to_string();
+    card.title = "Arbitration".to_string();
+    let mut stage = timed::TimedStage::new(1, "Survival".to_string());
+    stage.node = Some("Zeugma (Phobos)".to_string());
+    stage.enemy_levels = vec![15, 25];
+    card.stages = vec![stage];
+
+    for locale in [AppLocale::Ja, AppLocale::En, AppLocale::ZhHans] {
+        let payload = notify::content_desktop_payload_for_locale(&card, now, locale);
+        assert!(
+            !payload.title.contains("[[") && !payload.body.contains("[["),
+            "${msg} (missing-key marker: {locale:?})",
+        );
+        assert!(payload.title.contains("Survival"), "${msg} (stage title: {locale:?})");
+        assert!(
+            payload.body.contains("Zeugma (Phobos)"),
+            "${msg} (node: {locale:?})",
+        );
+        assert!(payload.body.contains("15-25"), "${msg} (enemy level: {locale:?})");
+        assert!(payload.body.contains("45"), "${msg} (残り分数: {locale:?})");
+
+        let description = notify::content_discord_description_for_locale(&card, locale);
+        assert!(
+            description.contains("Zeugma (Phobos)"),
+            "${msg} (discord node: {locale:?})",
+        );
+        assert!(
+            description.contains(&format!(
+                "<t:{}:R>",
+                card.expiry.expect("fixture expiry").timestamp()
+            )),
+            "${msg} (discord動的タイムスタンプ: {locale:?})",
+        );
+    }
+
+    let ja = notify::content_desktop_payload_for_locale(&card, now, AppLocale::Ja);
+    assert!(ja.title.contains("仲裁"), "${msg} (ja kindラベル)");
+    let en = notify::content_desktop_payload_for_locale(&card, now, AppLocale::En);
+    assert!(en.title.contains("Arbitration"), "${msg} (en kindラベル)");
+
+    // 未知kindはラベルを捏造せずrawを保持する
+    let mut unknown = card.clone();
+    unknown.kind = "mystery-kind".to_string();
+    let unknown_payload = notify::content_desktop_payload_for_locale(&unknown, now, AppLocale::Ja);
+    assert!(
+        unknown_payload.title.contains("mystery-kind") && !unknown_payload.title.contains("[["),
+        "${msg} (未知kindのfallback)",
+    );
+}`;
     case "desktop_payload":
       return `
 /// ${c.id}: ${c.desc}
@@ -3607,7 +4096,24 @@ test("${c.id} table sort by column", async ({ page }) => {
   await page.locator("th.col-mission").click();
   await expect(page.locator("th.col-mission")).toHaveAttribute("aria-sort", "ascending");
   await expect(firstRow().locator(".col-mission")).toContainText("CAPTURE");
-  // ソートは表示のみ: 設定・通知の変更を呼ばない
+  // パレットのSORT BY {列}候補はヘッダクリックと同じソートを適用する
+  await page.keyboard.press("s");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await page.locator("#palette-input").fill("sort by node");
+  await expect(page.locator("#palette-cands .cand", { hasText: "SORT BY NODE" })).toHaveCount(1);
+  await page.keyboard.press("Enter");
+  await expect(page.locator("th.col-node")).toHaveAttribute("aria-sort", "ascending");
+  await expect(page.locator("th.col-mission")).not.toHaveAttribute("aria-sort");
+  await expect(firstRow().locator(".col-node")).toContainText("Hepit");
+  // 同じ列への再適用は降順へトグルし、パレットは開いたまま連続入力できる
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await expect(page.locator("#palette-input")).toHaveValue("");
+  await page.locator("#palette-input").fill("sort by node");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("th.col-node")).toHaveAttribute("aria-sort", "descending");
+  await expect(firstRow().locator(".col-node")).toContainText("Taveuni");
+  await page.keyboard.press("Escape");
+  // ヘッダ・パレットのどちらのソートも表示のみ: 設定・通知の変更を呼ばない
   expect(
     (await calls(page)).filter((entry) =>
       ["set_config", "set_rule_enabled", "set_rule_notify", "apply_candidate"].includes(entry.cmd),
@@ -3640,7 +4146,7 @@ test("${c.id} compact table breakpoints", async ({ page }) => {
   await expect(stormRow.locator(".col-storm .flag")).toHaveText(/STORM/);
   // 長い値はellipsisしてもDOM上の全文と行tooltipを保持する
   const longRow = page.locator("#fissure-rows tr", { hasText: "Taveuni" });
-  await expect(longRow.locator(".col-node .icon-label > span:last-child")).toHaveText(
+  await expect(longRow.locator(".col-node .t-node")).toHaveText(
     "Taveuni (Kuva Fortress)",
   );
   expect(await longRow.getAttribute("title")).toContain("Taveuni (Kuva Fortress)");
@@ -3648,6 +4154,11 @@ test("${c.id} compact table breakpoints", async ({ page }) => {
   const murmur = longRow.locator(".col-faction .icon-label > span:last-child");
   await expect(murmur).toHaveText("THE MURMUR");
   expect(await murmur.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  // 既知の最長ミッション種別INFESTED SALVAGEは950pxの7列1段でも省略しない
+  await page.setViewportSize({ width: 950, height: 620 });
+  const longestMission = longRow.locator(".col-mission .icon-label > span:last-child");
+  await expect(longestMission).toHaveText("INFESTED SALVAGE");
+  expect(await longestMission.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 });
 
 // ${c.id}: ${c.desc} (empty rowの全幅表示)
@@ -3838,6 +4349,20 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
   await expect(page.locator("#editing-meta")).toHaveText("R2/2");
   await assertActive("descendia");
 
+  // パレットのGO TO {タブ}候補は対応タブへ切り替えてパレットを閉じ、ルール・設定を変更しない。
+  await page.keyboard.press("g");
+  await expect(page.locator("#palette-overlay")).toBeVisible();
+  await page.locator("#palette-input").fill("go to syndicates");
+  await expect(page.locator("#palette-cands .cand", { hasText: "GO TO SYNDICATES" })).toHaveCount(1);
+  await page.keyboard.press("Enter");
+  await assertActive("syndicates");
+  await expect(page.locator("#palette-overlay")).toBeHidden();
+  expect(
+    (await calls(page)).filter((entry) =>
+      ["set_config", "set_rule_enabled", "set_rule_notify", "apply_candidate"].includes(entry.cmd),
+    ).length,
+  ).toBe(0);
+
   // ARIA roving focusは矢印/Home/Endでactive tabと共に移動する。
   await page.locator("#tab-fissures").focus();
   await page.keyboard.press("ArrowRight");
@@ -3913,6 +4438,29 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
 
   await page.keyboard.press("Meta+9");
   await expect(page.locator('#panel-descendia .timed-card[data-temporal-status="active"]')).toBeVisible();
+  // Specs/Aurasは生のLotus pathを本文表示せず、人間可読ラベル+raw tooltipで表示する
+  expect(await page.locator("#panel-descendia").textContent()).not.toContain("/Lotus/");
+  const activeDescendia = page.locator('#panel-descendia .timed-card[data-temporal-status="active"]');
+  // active cardはupcoming行と同じくpanel全幅の単一列(multi-card gridの分割幅にしない)
+  expect(
+    await activeDescendia.evaluate((card) => {
+      const panel = card.closest(".timed-cards");
+      if (!panel) return 0;
+      return card.getBoundingClientRect().width / panel.getBoundingClientRect().width;
+    }),
+  ).toBeGreaterThan(0.9);
+  const descendiaSpec = activeDescendia.locator(".timed-value-group li", { hasText: "Roller" }).first();
+  await expect(descendiaSpec).toHaveText("Roller");
+  await expect(descendiaSpec).toHaveAttribute(
+    "title",
+    "/Lotus/Types/Game/EnemySpecs/Tau/CoHRollerSpec",
+  );
+  const descendiaAura = activeDescendia.locator(".timed-value-group li", { hasText: "Rocket Spawn" }).first();
+  await expect(descendiaAura).toHaveText("Rocket Spawn");
+  await expect(descendiaAura).toHaveAttribute(
+    "title",
+    "/Lotus/Types/Scripts/Tau/CoH/Complications/RocketSpawnAura",
+  );
   await expect(
     page.locator('#panel-descendia details.timed-upcoming[data-card-id="descendia-next"]'),
   ).toBeVisible();
@@ -3924,6 +4472,100 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
   ).toHaveCount(1);
   // 個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。
   await expect(page.locator(".timed-progress-note")).toHaveCount(0);
+});`;
+    case "node_levels":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} node levels in fissure table", async ({ page }) => {
+  await bootConsole(page);
+  // snapshotのnodeLevelsに一致するnodeはLV {min}-{max}を併記する
+  const kuva = page.locator("#fissure-rows tr", { hasText: "Taveuni" });
+  await expect(kuva.locator(".col-node .t-level")).toHaveText("LV 32-37");
+  const storm = page.locator("#fissure-rows tr", { hasText: "Nsu Grid" });
+  await expect(storm.locator(".col-node .t-level")).toHaveText("LV 80-90");
+  // 行tooltipにもlevelを含める
+  expect(await kuva.getAttribute("title")).toContain("LV 32-37");
+  // lookupにないnodeへはlevelを表示しない(捏造しない)
+  const unknown = page.locator("#fissure-rows tr", { hasText: "Hepit" });
+  await expect(unknown.locator(".col-node .t-node")).toHaveText("Hepit (Void)");
+  await expect(unknown.locator(".col-node .t-level")).toHaveCount(0);
+  expect(await unknown.getAttribute("title")).not.toContain("LV");
+  // level表示は表示のみ: 設定・通知の変更を呼ばない
+  expect(
+    (await calls(page)).filter((entry) =>
+      ["set_config", "set_rule_enabled", "set_rule_notify", "apply_candidate"].includes(entry.cmd),
+    ).length,
+  ).toBe(0);
+});`;
+    case "content_alerts":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} content alerts", async ({ page }) => {
+  await bootConsole(page, { locale: "en" });
+  await page.locator("#delivery-tab").click();
+  await expect(page.locator("#content-alert-rows .content-alert-empty")).toHaveCount(1);
+  const rulesBefore = await page.locator("#rules-list .rule-row").count();
+  const editingBefore = await page.locator("#editing-meta").textContent();
+  const contentRules = async () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { __MOCK_STATE__: { config: { contentRules?: unknown } } })
+          .__MOCK_STATE__.config.contentRules,
+    );
+
+  // 追加フォーム: 仲裁 × 防衛 × LV60
+  await page.locator("#content-kind-select").selectOption("arbitration");
+  await page.locator("#content-keyword-input").fill("防衛");
+  await page.locator("#content-level-input").fill("60");
+  await page.locator("#content-add-btn").click();
+  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(1);
+  await expect
+    .poll(contentRules)
+    .toEqual([
+      { notify: true, name: null, kinds: ["arbitration"], missionTypes: ["防衛"], minEnemyLevel: 60 },
+    ]);
+
+  // エリア選択はkinds=[area-mission, area-objective, bounty]へ展開される
+  await page.locator("#content-kind-select").selectOption("area");
+  await page.locator("#content-keyword-input").fill("Capture");
+  await page.locator("#content-add-btn").click();
+  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(2);
+  await expect
+    .poll(async () => ((await contentRules()) as Array<{ kinds: string[]; minEnemyLevel: number | null }>)[1])
+    .toEqual({
+      notify: true,
+      name: null,
+      kinds: ["area-mission", "area-objective", "bounty"],
+      missionTypes: ["Capture"],
+      minEnemyLevel: null,
+    });
+
+  // 行の通知トグルはそのルールのnotifyだけを反転する
+  await page.locator("#content-alert-rows .content-alert-toggle").first().click();
+  await expect
+    .poll(async () =>
+      ((await contentRules()) as Array<{ notify: boolean }>).map((rule) => rule.notify),
+    )
+    .toEqual([false, true]);
+
+  // 削除ボタンはそのルールだけを除去する
+  await page.locator("#content-alert-rows .content-alert-del").first().click();
+  await expect(page.locator("#content-alert-rows .content-alert-row")).toHaveCount(1);
+  await expect
+    .poll(async () =>
+      ((await contentRules()) as Array<{ missionTypes: string[] }>).map((rule) => rule.missionTypes),
+    )
+    .toEqual([["Capture"]]);
+
+  // 亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュートへ波及しない
+  await expect(page.locator("#rules-list .rule-row")).toHaveCount(rulesBefore);
+  await expect(page.locator("#editing-meta")).toHaveText(editingBefore ?? "");
+  await expect(page.locator("#mute-check")).toHaveAttribute("aria-pressed", "false");
+  expect(
+    (await calls(page)).filter((entry) =>
+      ["set_rule_enabled", "set_rule_notify", "apply_candidate", "clear_filter"].includes(entry.cmd),
+    ),
+  ).toHaveLength(0);
 });`;
     case "mute_window":
       return `
@@ -4220,6 +4862,8 @@ const RUST_EXAMPLE_PATTERNS = new Set([
   "rule_name_config",
   "rule_notify_config",
   "app_config_compat",
+  "content_keyword_canonical",
+  "content_rules_config",
   "timed_content_fixture",
   "notification_example",
   "static_check",
@@ -4276,7 +4920,8 @@ use std::collections::HashMap;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use proptest::prelude::*;
 use relico_lib::backoff::Backoff;
-use relico_lib::config::{AppConfig, AppLocale, DailyMuteWindow};
+use relico_lib::config::{AppConfig, AppLocale, ContentWatchRule, DailyMuteWindow};
+use relico_lib::content_filter;
 use relico_lib::dedup::NotifiedSet;
 use relico_lib::filter::{self, FilterSettings, Mode, StormMode, WatchRule};
 use relico_lib::model::Fissure;
@@ -4288,6 +4933,9 @@ use relico_lib::timed;
 const TIERS: &[&str] = &[${rustStrArray(TIER_POOL)}];
 const MISSIONS: &[&str] = &[${rustStrArray(MISSION_POOL)}];
 const PLANETS: &[&str] = &[${rustStrArray(PLANET_POOL)}];
+const CONTENT_KINDS: &[&str] = &[${rustStrArray(CONTENT_KIND_POOL)}];
+const CONTENT_KEYWORDS: &[&str] = &[${rustStrArray(CONTENT_KEYWORD_POOL)}];
+const CONTENT_STAGE_TITLES: &[&str] = &[${rustStrArray(CONTENT_STAGE_TITLE_POOL)}];
 
 /// オラクルは純粋関数を対象とするため、現在時刻は固定値でよい
 fn base_now() -> DateTime<Utc> {
@@ -4404,6 +5052,64 @@ fn arb_fissure() -> impl Strategy<Value = Fissure> {
                 is_storm,
                 is_hard,
             }
+        })
+}
+
+fn arb_content_rule() -> impl Strategy<Value = ContentWatchRule> {
+    (
+        any::<bool>(),
+        arb_rule_name(),
+        arb_subset(CONTENT_KINDS),
+        arb_subset(CONTENT_KEYWORDS),
+        proptest::option::of(0u32..120),
+    )
+        .prop_map(|(notify, name, kinds, mission_types, min_enemy_level)| ContentWatchRule {
+            notify,
+            name,
+            kinds,
+            mission_types,
+            min_enemy_level,
+        })
+}
+
+fn arb_content_stage() -> impl Strategy<Value = timed::TimedStage> {
+    (
+        proptest::sample::select(CONTENT_STAGE_TITLES.to_vec()),
+        proptest::option::of((5u32..80, 0u32..40)),
+        arb_subset(CONTENT_STAGE_TITLES),
+    )
+        .prop_map(|(title, levels, choices)| {
+            let mut stage = timed::TimedStage::new(1, title.to_string());
+            stage.enemy_levels = levels
+                .map(|(minimum, span)| vec![minimum, minimum + span])
+                .unwrap_or_default();
+            stage.choices = choices;
+            stage
+        })
+}
+
+fn arb_content_card() -> impl Strategy<Value = timed::TimedContent> {
+    (
+        "[a-f0-9]{8}",
+        proptest::sample::select(CONTENT_KINDS.to_vec()),
+        proptest::collection::vec(arb_content_stage(), 0..4),
+        proptest::option::of(-600i64..7200),
+    )
+        .prop_map(|(id, kind, stages, expiry_off)| {
+            let mut card = mk_timed_card(
+                &id,
+                expiry_off.map(|off| base_now() + Duration::seconds(off)),
+            );
+            card.kind = kind.to_string();
+            card.stages = stages
+                .into_iter()
+                .enumerate()
+                .map(|(index, mut stage)| {
+                    stage.order = index as u32 + 1;
+                    stage
+                })
+                .collect();
+            card
         })
 }
 

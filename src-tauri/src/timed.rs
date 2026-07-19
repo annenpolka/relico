@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
@@ -5,7 +6,11 @@ use chrono::{DateTime, Duration, Utc};
 use reqwest::header::CACHE_CONTROL;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
+use tokio::sync::watch;
 
+use crate::config::{AppConfig, ContentWatchRule};
+use crate::content_filter;
+use crate::notify;
 use crate::poller::PollerState;
 
 mod browse_wf;
@@ -19,10 +24,10 @@ use browse_wf::{
 };
 
 pub use browse_wf::{
-    arbitration_card, arbitration_slot_at, parse_arbitration_schedule, parse_bounty_cards,
-    parse_bounty_cycle_json, parse_community_assets, parse_location_bounty_assets,
-    parse_location_bounty_cards, ArbitrationSchedule, ArbitrationSlot, CommunityAssets,
-    LocationBountyAssets,
+    arbitration_card, arbitration_slot_at, node_level_index, parse_arbitration_schedule,
+    parse_bounty_cards, parse_bounty_cycle_json, parse_community_assets,
+    parse_location_bounty_assets, parse_location_bounty_cards, ArbitrationSchedule,
+    ArbitrationSlot, CommunityAssets, LocationBountyAssets,
 };
 pub use de::{parse_circuit_json, parse_descents_json};
 pub use wfcd::{parse_wfcd_json, WfcdTimedContent};
@@ -242,7 +247,7 @@ pub struct TimedStage {
 }
 
 impl TimedStage {
-    pub(crate) fn new(order: u32, title: String) -> Self {
+    pub fn new(order: u32, title: String) -> Self {
         Self {
             order,
             title,
@@ -445,6 +450,26 @@ struct TimedAssetDerivationFeedback {
 }
 
 impl TimedContentSnapshot {
+    /// 全sliceのcardを1本のiteratorで返す(contentRulesの合致評価用)。
+    pub fn all_cards(&self) -> impl Iterator<Item = &TimedContent> {
+        [
+            &self.arbitration,
+            &self.sortie,
+            &self.archon,
+            &self.syndicates,
+            &self.area_environments,
+            &self.area_missions,
+            &self.area_objectives,
+            &self.bounties,
+            &self.area_events,
+            &self.circuit,
+            &self.archimedea,
+            &self.descendia,
+        ]
+        .into_iter()
+        .flat_map(|cards| cards.iter())
+    }
+
     pub fn apply_poll(&mut self, now: DateTime<Utc>, results: TimedPollResults) {
         self.apply_poll_with_asset_health(now, results, TimedAssetHealth::default());
     }
@@ -1024,9 +1049,17 @@ fn next_poll_delay(
 }
 
 /// 時限content pollerは亀裂pollerと独立し、source単位でLKGとfreshnessを更新する。
-pub async fn run(app: AppHandle, state: Arc<Mutex<PollerState>>) {
+/// contentRulesの通知評価もこのpoll周期で行う(silent seed・dedup・muteは亀裂と同じ意味論)。
+pub async fn run(
+    app: AppHandle,
+    cfg_rx: watch::Receiver<AppConfig>,
+    state: Arc<Mutex<PollerState>>,
+    content_notified_path: PathBuf,
+) {
     let client = crate::poller::http_client();
     let mut cache = StaticAssetsCache::default();
+    // contentRulesのseed済みprojection。SPEC: CNT-003
+    let mut seeded_scope: Option<Vec<ContentWatchRule>> = None;
     loop {
         let before_fetch = Utc::now();
         let refresh_targets = cache.refresh_targets(before_fetch);
@@ -1071,6 +1104,23 @@ pub async fn run(app: AppHandle, state: Arc<Mutex<PollerState>>) {
         )
         .await;
         cache.record_derivation(now, asset_feedback);
+        // 亀裂NODE表示用のlevel lookup。検証済みasset(LKG)がある間だけ置換し、
+        // asset未取得時は前回値を保持する。SPEC: TMD-007
+        let node_levels = cache
+            .arbitration
+            .value
+            .as_ref()
+            .map(|assets| assets.node_level_index())
+            .or_else(|| {
+                cache
+                    .bounties
+                    .value
+                    .as_ref()
+                    .map(|assets| assets.node_level_index())
+            });
+        // HTTP待機中に保存された最新のcontentRules・ミュート・Pauseで通知を評価する。
+        let cfg = cfg_rx.borrow().clone();
+        let mut to_notify: Vec<TimedContent> = vec![];
         let snapshot = {
             let mut state = state.lock().expect("poller state");
             state.reset_daily_counters(now.with_timezone(&chrono::Local));
@@ -1078,10 +1128,50 @@ pub async fn run(app: AppHandle, state: Arc<Mutex<PollerState>>) {
                 .snapshot
                 .timed_content
                 .apply_poll_with_asset_health(now, results, asset_health);
+            if let Some(node_levels) = node_levels {
+                state.snapshot.node_levels = node_levels;
+            }
+            // PAUSE中は評価もmarkもしない(亀裂pollerのHTTP停止と同じ姿勢)
+            if !cfg.paused {
+                let seed_only =
+                    content_filter::content_scope_changed(seeded_scope.as_ref(), &cfg.content_rules);
+                let muted = cfg.notifications_muted_at(now.with_timezone(&chrono::Local));
+                let matching: Vec<TimedContent> = content_filter::matching_cards(
+                    &cfg.content_rules,
+                    state.snapshot.timed_content.all_cards(),
+                )
+                .into_iter()
+                .cloned()
+                .collect();
+                state.content_notified.prune(now);
+                let suppressed = if muted && !seed_only {
+                    matching
+                        .iter()
+                        .filter(|card| !state.content_notified.contains(&card.id))
+                        .count() as u32
+                } else {
+                    0
+                };
+                to_notify = content_filter::select_content_notifications(
+                    &mut state.content_notified,
+                    matching,
+                    seed_only,
+                    muted,
+                );
+                if let Err(error) = state.content_notified.save(&content_notified_path) {
+                    eprintln!("content notified set save failed: {error}");
+                }
+                state.snapshot.notified_today += to_notify.len() as u32;
+                state.snapshot.suppressed_today += suppressed;
+                seeded_scope = Some(content_filter::content_projection(&cfg.content_rules));
+            }
             state.bump_revision();
             state.snapshot.clone()
         };
         let _ = app.emit("status", &snapshot);
+        for card in &to_notify {
+            notify::send_content(&client, &cfg, card).await;
+        }
         tokio::time::sleep(next_poll_delay(
             &snapshot.timed_content,
             now,

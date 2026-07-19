@@ -90,6 +90,11 @@ const PLANETS: &[(&str, &[&str])] = &[
     ("Veil Proxima", &["ヴェール", "veil"]),
 ];
 
+/// content_filterのキーワード正準化が参照するミッション語彙(label + aliases)。
+pub fn mission_vocabulary() -> impl Iterator<Item = (&'static str, &'static [&'static str])> {
+    MISSIONS.iter().copied()
+}
+
 const RAILJACK_MISSIONS: &[&str] = &["Volatile", "Skirmish", "Orphix"];
 const ZARIMAN_MISSIONS: &[&str] = &["Void Flood", "Void Cascade", "Void Armageddon"];
 
@@ -194,6 +199,72 @@ pub fn catalog() -> Vec<Candidate> {
         ),
         ("CLEAR", "clear", vec!["クリア", "リセット", "reset"]),
         ("PAUSE / RESUME", "pause", vec!["一時停止", "teishi"]),
+        // 亀裂表の項目別ソート(表示のみ。適用はフロント側でRND-007の結線を通る)
+        ("SORT BY TIER", "sort-tier", vec!["ソート", "並べ替え", "ティア順"]),
+        ("SORT BY NODE", "sort-node", vec!["ソート", "並べ替え", "ノード順"]),
+        (
+            "SORT BY MISSION",
+            "sort-mission",
+            vec!["ソート", "並べ替え", "ミッション順"],
+        ),
+        (
+            "SORT BY FACTION",
+            "sort-faction",
+            vec!["ソート", "並べ替え", "勢力順", "ファクション順"],
+        ),
+        (
+            "SORT BY T-REMAIN",
+            "sort-timer",
+            vec!["ソート", "並べ替え", "残り時間順", "時間順"],
+        ),
+        (
+            "SORT BY MODE",
+            "sort-mode",
+            vec!["ソート", "並べ替え", "モード順", "難易度順"],
+        ),
+        (
+            "SORT BY STORM",
+            "sort-storm",
+            vec!["ソート", "並べ替え", "嵐順", "ストーム順"],
+        ),
+        // コンテンツタブ切替(表示のみ。適用はフロント側でRND-010の結線を通る)
+        ("GO TO FISSURES", "tab-fissures", vec!["タブ", "tab", "亀裂"]),
+        (
+            "GO TO ARBITRATION",
+            "tab-arbitration",
+            vec!["タブ", "tab", "仲裁", "アービトレーション"],
+        ),
+        ("GO TO SORTIE", "tab-sortie", vec!["タブ", "tab", "ソーティー"]),
+        (
+            "GO TO ARCHON HUNT",
+            "tab-archon",
+            vec!["タブ", "tab", "アルコン", "討伐戦"],
+        ),
+        (
+            "GO TO SYNDICATES",
+            "tab-syndicates",
+            vec!["タブ", "tab", "シンジケート"],
+        ),
+        (
+            "GO TO AREA MISSIONS",
+            "tab-area-missions",
+            vec!["タブ", "tab", "地位ミッション", "エリア", "依頼"],
+        ),
+        (
+            "GO TO CIRCUIT",
+            "tab-circuit",
+            vec!["タブ", "tab", "サーキット", "回廊"],
+        ),
+        (
+            "GO TO ARCHIMEDEA",
+            "tab-archimedea",
+            vec!["タブ", "tab", "アルキメデア"],
+        ),
+        (
+            "GO TO DESCENDIA",
+            "tab-descendia",
+            vec!["タブ", "tab", "ディセンディア"],
+        ),
     ] {
         out.push(Candidate {
             id: format!("action:{value}"),
@@ -227,12 +298,21 @@ pub fn catalog_with_rules(rules: &[WatchRule]) -> Vec<Candidate> {
     out
 }
 
+/// フロント側だけで完結する表示系アクション(ソート・タブ切替・改名モード・pause)。
+/// ルール構成を変更しないため、SAT-001の操作空間から除外する。
+fn is_view_only_action(cand: &Candidate) -> bool {
+    cand.facet == Facet::Action
+        && (cand.value == "pause"
+            || cand.value == "rename-rule"
+            || cand.value.starts_with("sort-")
+            || cand.value.starts_with("tab-"))
+}
+
 /// SAT-001の操作空間: ルール構成に影響する候補のみ
-/// (pauseと、フロント側で改名モードへ切り替えるだけのrename-ruleを除く)
 pub fn filter_catalog() -> Vec<Candidate> {
     catalog()
         .into_iter()
-        .filter(|c| c.id != "action:pause" && c.id != "action:rename-rule")
+        .filter(|c| !is_view_only_action(c))
         .collect()
 }
 

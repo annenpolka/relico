@@ -11,6 +11,7 @@ pub mod autostart;
 pub mod backoff;
 pub mod commands;
 pub mod config;
+pub mod content_filter;
 pub mod dedup;
 pub mod filter;
 pub mod i18n;
@@ -201,12 +202,14 @@ pub fn run() {
             let config_dir = app.path().app_config_dir()?;
             let config_path = config_dir.join("config.json");
             let notified_path = config_dir.join("notified.json");
+            let content_notified_path = config_dir.join("content_notified.json");
 
             let cfg = AppConfig::load(&config_path);
             sync_window_title(app.handle(), &cfg);
             let (cfg_tx, cfg_rx) = watch::channel(cfg.clone());
             let poller_state = Arc::new(Mutex::new(PollerState::new(
                 NotifiedSet::load(&notified_path),
+                NotifiedSet::load(&content_notified_path),
                 &cfg,
             )));
 
@@ -294,7 +297,12 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            tauri::async_runtime::spawn(timed::run(app.handle().clone(), poller_state.clone()));
+            tauri::async_runtime::spawn(timed::run(
+                app.handle().clone(),
+                cfg_rx.clone(),
+                poller_state.clone(),
+                content_notified_path,
+            ));
             tauri::async_runtime::spawn(poller::run(
                 app.handle().clone(),
                 cfg_rx,

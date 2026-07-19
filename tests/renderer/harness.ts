@@ -105,7 +105,7 @@ function installMock({
           activation: iso(-3600),
           expiry: iso(firstExpirySecs),
           node: "Taveuni (Kuva Fortress)",
-          missionType: "Mobile Defense",
+          missionType: "Infested Salvage",
           enemy: "The Murmur",
           tier: "Requiem",
           tierNum: 5,
@@ -173,6 +173,12 @@ function installMock({
       paused: false,
       notificationsMuted,
       suppressedToday: notificationsMuted ? 2 : 0,
+      // ExportRegions由来のnode level lookup。Hepit (Void)は意図的に欠落させ、
+      // lookupにないnodeへlevelを捏造しないこと(RND-013)の検査に使う
+      nodeLevels: {
+        "Taveuni (Kuva Fortress)": [32, 37],
+        "Nsu Grid (Veil Proxima)": [80, 90],
+      } as Record<string, [number, number]>,
       timedContent: {
         arbitration: [
           {
@@ -502,8 +508,9 @@ function installMock({
                 title: "Survival",
                 node: "Floor 1",
                 detail: "Complete the floor challenge",
-                specs: ["No Gear"],
-                auras: ["Enemy Damage"],
+                // 実DE worldstateはSpecs/Aurasを生のLotus pathで返す
+                specs: ["/Lotus/Types/Game/EnemySpecs/Tau/CoHRollerSpec"],
+                auras: ["/Lotus/Types/Scripts/Tau/CoH/Complications/RocketSpawnAura"],
               },
             ],
           })),
@@ -563,6 +570,23 @@ function installMock({
     { id: "action:notify-rule", label: "TOGGLE NOTIFY", facet: "action" },
     { id: "action:clear", label: "CLEAR FILTERS", facet: "action" },
     { id: "action:pause", label: "PAUSE WATCH", facet: "action" },
+    // 表示のみのSORT/タブ切替コマンド(フロント側でinterceptされbackendへ届かない)
+    { id: "action:sort-tier", label: "SORT BY TIER", facet: "action" },
+    { id: "action:sort-node", label: "SORT BY NODE", facet: "action" },
+    { id: "action:sort-mission", label: "SORT BY MISSION", facet: "action" },
+    { id: "action:sort-faction", label: "SORT BY FACTION", facet: "action" },
+    { id: "action:sort-timer", label: "SORT BY T-REMAIN", facet: "action" },
+    { id: "action:sort-mode", label: "SORT BY MODE", facet: "action" },
+    { id: "action:sort-storm", label: "SORT BY STORM", facet: "action" },
+    { id: "action:tab-fissures", label: "GO TO FISSURES", facet: "action" },
+    { id: "action:tab-arbitration", label: "GO TO ARBITRATION", facet: "action" },
+    { id: "action:tab-sortie", label: "GO TO SORTIE", facet: "action" },
+    { id: "action:tab-archon", label: "GO TO ARCHON HUNT", facet: "action" },
+    { id: "action:tab-syndicates", label: "GO TO SYNDICATES", facet: "action" },
+    { id: "action:tab-area-missions", label: "GO TO AREA MISSIONS", facet: "action" },
+    { id: "action:tab-circuit", label: "GO TO CIRCUIT", facet: "action" },
+    { id: "action:tab-archimedea", label: "GO TO ARCHIMEDEA", facet: "action" },
+    { id: "action:tab-descendia", label: "GO TO DESCENDIA", facet: "action" },
   ];
 
   const activeRule = (): Rule => state.config.rules[state.active] ?? state.config.rules[0];

@@ -16,12 +16,19 @@ import {
   t,
   type MessageKey,
 } from "./i18n";
-import { handleContentTabShortcut, initContentTabs, type ContentTabId } from "./tabs";
+import {
+  activateContentTab,
+  CONTENT_TAB_IDS,
+  handleContentTabShortcut,
+  initContentTabs,
+  type ContentTabId,
+} from "./tabs";
 import type {
   AppLocale,
   AppConfig,
   ApplyResult,
   CandView,
+  ContentWatchRule,
   Facet,
   Fissure,
   StatusSnapshot,
@@ -49,6 +56,7 @@ function withFrontendDefaults(next: AppConfig): AppConfig {
   return {
     ...next,
     locale: normalizeLocale(next.locale),
+    contentRules: next.contentRules ?? [],
     notificationMute: next.notificationMute ?? {
       enabled: false,
       startMinute: 22 * 60,
@@ -374,6 +382,7 @@ function renderRail() {
   ($("minremain-input") as HTMLInputElement).value = String(config.minRemainingSecs);
   ($("poll-input") as HTMLInputElement).value = String(config.pollIntervalSecs);
   $<HTMLSelectElement>("locale-select").value = config.locale;
+  renderContentAlerts();
   renderMuteSettings();
 
   const pauseBtn = $("pause-btn");
@@ -383,6 +392,122 @@ function renderRail() {
 
   renderRailTabs();
   renderWatchLine();
+}
+
+// ---- コンテンツ通知(contentRules)のDELIVERY UI。合致・通知判定はRust側 ----
+const CONTENT_KIND_GROUPS: Record<string, string[]> = {
+  "": [],
+  arbitration: ["arbitration"],
+  sortie: ["sortie"],
+  archon: ["archon"],
+  // エリア選択は3 kindへ展開する(RND-014)
+  area: ["area-mission", "area-objective", "bounty"],
+  circuit: ["circuit"],
+  archimedea: ["archimedea"],
+  descendia: ["descendia"],
+};
+
+const CONTENT_KIND_LABEL_KEYS: Record<string, MessageKey> = {
+  "": "delivery.contentKindAll",
+  arbitration: "tabs.arbitration",
+  sortie: "tabs.sortie",
+  archon: "tabs.archon",
+  area: "delivery.contentKindArea",
+  circuit: "tabs.circuit",
+  archimedea: "tabs.archimedea",
+  descendia: "tabs.descendia",
+};
+
+function contentKindLabel(kinds: string[]): string {
+  const encoded = JSON.stringify(kinds);
+  for (const [value, group] of Object.entries(CONTENT_KIND_GROUPS)) {
+    if (JSON.stringify(group) === encoded) return t(CONTENT_KIND_LABEL_KEYS[value]);
+  }
+  return kinds.join("+");
+}
+
+function saveContentRules(mutate: (rules: ContentWatchRule[]) => void) {
+  if (!config) return;
+  mutate(config.contentRules);
+  save();
+  renderContentAlerts();
+}
+
+function renderContentAlerts() {
+  if (!config) return;
+  const box = $("content-alert-rows");
+  const rules = config.contentRules;
+  if (!rules.length) {
+    const empty = document.createElement("p");
+    empty.className = "content-alert-empty";
+    empty.textContent = t("delivery.contentEmpty");
+    box.replaceChildren(empty);
+    return;
+  }
+  box.replaceChildren(
+    ...rules.map((rule, index) => {
+      const row = document.createElement("div");
+      row.className = `content-alert-row${rule.notify ? "" : " off"}`;
+
+      const toggle = document.createElement("button");
+      toggle.className = "content-alert-toggle";
+      toggle.type = "button";
+      toggle.innerHTML = `<span class="box">[${rule.notify ? "x" : " "}]</span>`;
+      toggle.setAttribute("aria-pressed", String(rule.notify));
+      toggle.setAttribute("aria-label", t("delivery.contentToggleAria", { index: index + 1 }));
+      toggle.addEventListener("click", () =>
+        saveContentRules((current) => {
+          const target = current[index];
+          if (target) target.notify = !target.notify;
+        }),
+      );
+
+      const summary = document.createElement("span");
+      summary.className = "content-alert-summary";
+      const parts = [
+        contentKindLabel(rule.kinds),
+        rule.missionTypes.length ? rule.missionTypes.join("+") : t("delivery.contentKindAll"),
+      ];
+      if (rule.minEnemyLevel !== null) parts.push(`LV${rule.minEnemyLevel}+`);
+      summary.textContent = parts.join(" / ");
+      summary.title = summary.textContent;
+
+      const remove = document.createElement("button");
+      remove.className = "content-alert-del";
+      remove.type = "button";
+      remove.innerHTML = glyphHtml("action", "delete-rule");
+      remove.setAttribute("aria-label", t("delivery.contentRemoveAria", { index: index + 1 }));
+      remove.addEventListener("click", () =>
+        saveContentRules((current) => {
+          current.splice(index, 1);
+        }),
+      );
+
+      row.replaceChildren(toggle, summary, remove);
+      return row;
+    }),
+  );
+}
+
+function addContentAlertFromForm() {
+  if (!config) return;
+  const kindValue = $<HTMLSelectElement>("content-kind-select").value;
+  const keywordInput = $<HTMLInputElement>("content-keyword-input");
+  const levelInput = $<HTMLInputElement>("content-level-input");
+  const keyword = keywordInput.value.trim();
+  const levelRaw = levelInput.value.trim();
+  const level = levelRaw === "" ? null : Math.max(0, Math.floor(Number(levelRaw)) || 0);
+  saveContentRules((current) => {
+    current.push({
+      notify: true,
+      name: null,
+      kinds: [...(CONTENT_KIND_GROUPS[kindValue] ?? [])],
+      missionTypes: keyword === "" ? [] : [keyword],
+      minEnemyLevel: level,
+    });
+  });
+  keywordInput.value = "";
+  levelInput.value = "";
 }
 
 function renderRailTabs() {
@@ -449,20 +574,23 @@ function renderSortHeaders() {
   });
 }
 
+/** ヘッダクリックとパレットのSORTコマンドが共有する結線。表示のみでbackendを呼ばない(RND-007) */
+function applySort(key: SortKey) {
+  if (sortKey === key) {
+    sortDir = sortDir === 1 ? -1 : 1;
+  } else {
+    sortKey = key;
+    sortDir = 1;
+  }
+  renderSortHeaders();
+  renderTable();
+}
+
 function initSortHeaders() {
   document.querySelectorAll<HTMLTableCellElement>("#fissure-table thead th[scope=col]").forEach((th) => {
     const key = thSortKey(th);
     if (!key) return;
-    th.addEventListener("click", () => {
-      if (sortKey === key) {
-        sortDir = sortDir === 1 ? -1 : 1;
-      } else {
-        sortKey = key;
-        sortDir = 1;
-      }
-      renderSortHeaders();
-      renderTable();
-    });
+    th.addEventListener("click", () => applySort(key));
   });
   renderSortHeaders();
 }
@@ -491,17 +619,23 @@ function renderTable() {
         ? `<span class="flag t-storm">${glyphHtml("storm", "Only")}<span>${esc(t("table.stormValue").toUpperCase())}</span></span>`
         : `<span class="t-no-storm">—</span>`;
       const planet = planetForFissure(f.planet, f.isStorm);
+      // backend snapshotのnodeLevelsにあるnodeだけLVを併記する(捏造しない)。RND-013
+      const levels = status?.nodeLevels?.[f.node];
+      const levelText = levels ? t("table.level", { min: levels[0], max: levels[1] }) : null;
       tr.title = [
         f.tier.toUpperCase(),
         f.node,
+        levelText,
         f.missionType.toUpperCase(),
         f.enemy.toUpperCase(),
         modeLabel,
         f.isStorm ? t("table.stormValue") : t("table.noStorm"),
-      ].join(" · ");
+      ]
+        .filter(Boolean)
+        .join(" · ");
       tr.innerHTML = `
         <td class="col-tier t-tier"><span class="icon-label">${glyphHtml("tier", f.tier)}<span>${esc(f.tier.toUpperCase())}</span></span></td>
-        <td class="col-node"><span class="icon-label">${glyphHtml("planet", planet)}<span>${esc(f.node)}</span></span></td>
+        <td class="col-node"><span class="icon-label">${glyphHtml("planet", planet)}<span class="t-node">${esc(f.node)}</span>${levelText ? `<span class="t-level">${esc(levelText)}</span>` : ""}</span></td>
         <td class="col-mission"><span class="icon-label">${glyphHtml("mission", f.missionType)}<span>${esc(f.missionType.toUpperCase())}</span></span></td>
         <td class="col-faction t-mute"><span class="icon-label">${glyphHtml("faction", f.enemy)}<span>${esc(f.enemy.toUpperCase())}</span></span></td>
         <td class="col-timer t-timer" data-expiry="${f.expiry}">--:--</td>
@@ -681,13 +815,19 @@ function timedStageTitle(card: TimedContentCard, stage: TimedContentStage): stri
 }
 
 function timedIdentifierLabel(value: string): string {
+  // 生のLotus path等はleafだけを人間可読へ整形する。空になる縮退はrawへfallbackし、
+  // 呼出側はraw識別子をtooltipへ保持する(RND-010)
   const leaf = (value.split("/").pop() ?? value)
     .replace(/AllyAgent$/, "")
-    .replace(/\.level$/, "");
-  return leaf
+    .replace(/\.level$/, "")
+    .replace(/^CoH/, "")
+    .replace(/(Spec|Aura)$/, "");
+  const label = leaf
     .replace(/[_-]+/g, " ")
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
     .trim();
+  return label === "" ? value : label;
 }
 
 function timedTitle(card: TimedContentCard): string {
@@ -774,7 +914,11 @@ function conditionGroup(labelKey: MessageKey, conditions: TimedCondition[]): HTM
   return group;
 }
 
-function namedValues(labelKey: MessageKey, values: string[]): HTMLElement | null {
+function namedValues(
+  labelKey: MessageKey,
+  values: string[],
+  labelFor?: (value: string) => string,
+): HTMLElement | null {
   const present = values.filter((value) => value.trim() !== "");
   if (!present.length) return null;
   const group = document.createElement("div");
@@ -784,7 +928,9 @@ function namedValues(labelKey: MessageKey, values: string[]): HTMLElement | null
   const list = document.createElement("ul");
   for (const value of present) {
     const item = document.createElement("li");
-    item.textContent = value;
+    const label = labelFor ? labelFor(value) : value;
+    item.textContent = label;
+    if (label !== value) item.title = value;
     list.append(item);
   }
   group.append(heading, list);
@@ -866,12 +1012,12 @@ function appendStageDetails(body: HTMLElement, stage: TimedContentStage): void {
     );
     if (group) body.append(group);
   }
-  for (const [key, values] of [
-    ["timed.choices", stage.choices ?? []],
-    ["timed.specs", stage.specs ?? []],
-    ["timed.auras", stage.auras ?? []],
+  for (const [key, values, humanize] of [
+    ["timed.choices", stage.choices ?? [], false],
+    ["timed.specs", stage.specs ?? [], true],
+    ["timed.auras", stage.auras ?? [], true],
   ] as const) {
-    const group = namedValues(key, [...values]);
+    const group = namedValues(key, [...values], humanize ? timedIdentifierLabel : undefined);
     if (group) body.append(group);
   }
   const rewards = rewardDetails(stage);
@@ -1321,6 +1467,26 @@ function paletteApply() {
     enterRenameMode();
     return;
   }
+  // SORTコマンドは表示のみ: backendを呼ばずヘッダクリックと同じ結線を通し、
+  // 開いたまま連続入力できるようクエリだけリセットする(RND-007)
+  if (c.id.startsWith("action:sort-")) {
+    const key = c.id.slice("action:sort-".length);
+    if (key in SORT_ACCESSORS) applySort(key as SortKey);
+    const input = $("palette-input") as HTMLInputElement;
+    input.value = "";
+    paletteSel = 0;
+    void paletteQuery();
+    return;
+  }
+  // タブ切替コマンドは対応タブへ切り替えてパレットを閉じる。設定は変更しない(RND-010)
+  if (c.id.startsWith("action:tab-")) {
+    const tab = c.id.slice("action:tab-".length);
+    if ((CONTENT_TAB_IDS as readonly string[]).includes(tab)) {
+      activateContentTab(tab as ContentTabId);
+    }
+    closePalette();
+    return;
+  }
 
   if (paletteApplying) {
     // 同じEnterのkey repeatは捨て、異なる後続候補だけを最新activeへ順番に適用する。
@@ -1515,6 +1681,7 @@ async function init() {
     const locale = normalizeLocale((event.target as HTMLSelectElement).value);
     void persistLocale(locale);
   });
+  $("content-add-btn").addEventListener("click", addContentAlertFromForm);
   $("mute-check").addEventListener("click", () => {
     if (!config) return;
     config.notificationMute = {

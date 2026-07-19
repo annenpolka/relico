@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use crate::config::{AppConfig, AppLocale};
 use crate::i18n;
 use crate::model::Fissure;
+use crate::timed::TimedContent;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopPayload {
@@ -73,6 +74,86 @@ pub fn desktop_payload_for_locale(
     }
 }
 
+/// 時限コンテンツのkindを選択言語のラベルへ解決する。未知kindはrawを保持する。SPEC: NTF-006
+fn content_kind_label(kind: &str, locale: AppLocale) -> String {
+    let key = match kind {
+        "arbitration" => "notify.kind.arbitration",
+        "sortie" => "notify.kind.sortie",
+        "archon" => "notify.kind.archon",
+        "syndicate" => "notify.kind.syndicate",
+        "area-mission" => "notify.kind.areaMission",
+        "area-objective" => "notify.kind.areaObjective",
+        "bounty" => "notify.kind.bounty",
+        "area-environment" => "notify.kind.areaEnvironment",
+        "area-event" => "notify.kind.areaEvent",
+        "circuit" => "notify.kind.circuit",
+        "archimedea" => "notify.kind.archimedea",
+        "descendia" => "notify.kind.descendia",
+        _ => return kind.to_string(),
+    };
+    i18n::text(locale, key)
+}
+
+fn content_primary_stage(card: &TimedContent) -> Option<&crate::timed::TimedStage> {
+    card.stages.iter().min_by_key(|stage| stage.order)
+}
+
+pub fn content_title_for_locale(card: &TimedContent, locale: AppLocale) -> String {
+    let label = content_kind_label(&card.kind, locale);
+    let subject = content_primary_stage(card)
+        .map(|stage| stage.title.as_str())
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or(card.title.as_str());
+    format!("{label} — {subject}")
+}
+
+fn content_detail_parts(card: &TimedContent) -> Vec<String> {
+    let mut parts = vec![];
+    if let Some(stage) = content_primary_stage(card) {
+        if let Some(node) = stage.node.as_deref().filter(|node| !node.trim().is_empty()) {
+            parts.push(node.to_string());
+        }
+        if let (Some(minimum), Some(maximum)) = (
+            stage.enemy_levels.iter().min(),
+            stage.enemy_levels.iter().max(),
+        ) {
+            parts.push(format!("LV {minimum}-{maximum}"));
+        }
+    }
+    parts
+}
+
+/// desktop本文: node・enemy level範囲・呼出側nowで計算した残り分数。SPEC: NTF-006
+pub fn content_desktop_payload_for_locale(
+    card: &TimedContent,
+    now: DateTime<Utc>,
+    locale: AppLocale,
+) -> DesktopPayload {
+    let mut parts = content_detail_parts(card);
+    if let Some(expiry) = card.expiry {
+        let remaining_min = expiry.signed_duration_since(now).num_minutes().max(0);
+        parts.push(i18n::format(
+            locale,
+            "notify.contentRemaining",
+            &[("minutes", &remaining_min.to_string())],
+        ));
+    }
+    DesktopPayload {
+        title: content_title_for_locale(card, locale),
+        body: parts.join(" · "),
+    }
+}
+
+/// Discord embed description: node・level・動的タイムスタンプ。SPEC: NTF-006
+pub fn content_discord_description_for_locale(card: &TimedContent, locale: AppLocale) -> String {
+    let _ = locale;
+    let mut parts = content_detail_parts(card);
+    if let Some(expiry) = card.expiry {
+        parts.push(format!("<t:{}:R>", expiry.timestamp()));
+    }
+    parts.join(" · ")
+}
+
 pub fn desktop_unavailable_message(detail: &str) -> String {
     desktop_unavailable_message_for_locale(detail, AppLocale::Ja)
 }
@@ -139,10 +220,40 @@ pub async fn desktop(
     desktop_for_locale(fissure, now, interactive, AppLocale::Ja).await
 }
 
-#[cfg(target_os = "macos")]
 pub async fn desktop_for_locale(
     fissure: &Fissure,
     now: DateTime<Utc>,
+    interactive: bool,
+    locale: AppLocale,
+) -> Result<DesktopReceipt, String> {
+    desktop_request(
+        format!("relico-{}", fissure.id),
+        desktop_payload_for_locale(fissure, now, locale),
+        interactive,
+        locale,
+    )
+    .await
+}
+
+pub async fn content_desktop_for_locale(
+    card: &TimedContent,
+    now: DateTime<Utc>,
+    interactive: bool,
+    locale: AppLocale,
+) -> Result<DesktopReceipt, String> {
+    desktop_request(
+        format!("relico-content-{}", card.id),
+        content_desktop_payload_for_locale(card, now, locale),
+        interactive,
+        locale,
+    )
+    .await
+}
+
+#[cfg(target_os = "macos")]
+async fn desktop_request(
+    id: String,
+    payload: DesktopPayload,
     interactive: bool,
     locale: AppLocale,
 ) -> Result<DesktopReceipt, String> {
@@ -214,9 +325,8 @@ pub async fn desktop_for_locale(
         None
     };
 
-    let payload = desktop_payload_for_locale(fissure, now, locale);
     let handle = Notification::new()
-        .id(&format!("relico-{}", fissure.id))
+        .id(&id)
         .title(payload.title)
         .message(payload.body)
         .default_sound()
@@ -237,9 +347,9 @@ pub async fn desktop_for_locale(
 }
 
 #[cfg(not(target_os = "macos"))]
-pub async fn desktop_for_locale(
-    _fissure: &Fissure,
-    _now: DateTime<Utc>,
+async fn desktop_request(
+    _id: String,
+    _payload: DesktopPayload,
     _interactive: bool,
     locale: AppLocale,
 ) -> Result<DesktopReceipt, String> {
@@ -331,6 +441,32 @@ pub async fn discord_for_locale(
             "color": color
         }]
     });
+    discord_post(client, webhook_url, body, locale).await
+}
+
+pub async fn content_discord_for_locale(
+    client: &reqwest::Client,
+    webhook_url: &str,
+    card: &TimedContent,
+    locale: AppLocale,
+) -> Result<String, String> {
+    // コンテンツ通知はシアン(OPS CONSOLEパレット)
+    let body = serde_json::json!({
+        "embeds": [{
+            "title": content_title_for_locale(card, locale),
+            "description": content_discord_description_for_locale(card, locale),
+            "color": 0x6ECFDB
+        }]
+    });
+    discord_post(client, webhook_url, body, locale).await
+}
+
+async fn discord_post(
+    client: &reqwest::Client,
+    webhook_url: &str,
+    body: serde_json::Value,
+    locale: AppLocale,
+) -> Result<String, String> {
     let response = client
         .post(discord_request_url_for_locale(webhook_url, locale)?)
         .json(&body)
@@ -361,6 +497,28 @@ pub async fn send(client: &reqwest::Client, cfg: &AppConfig, fissure: &Fissure) 
         if !url.is_empty() {
             if let Err(error) = discord_for_locale(client, url, fissure, cfg.locale).await {
                 eprintln!("discord webhook failed: {error}");
+            }
+        }
+    }
+}
+
+/// contentRulesに合致した時限cardの通知。fissure sendと同じ配送マナーに従う。SPEC: NTF-006
+pub async fn send_content(client: &reqwest::Client, cfg: &AppConfig, card: &TimedContent) {
+    let now = Utc::now();
+    if cfg.desktop_notification {
+        match content_desktop_for_locale(card, now, false, cfg.locale).await {
+            Ok(receipt) => {
+                if let Some(warning) = receipt.warning {
+                    eprintln!("content desktop notification warning: {warning}");
+                }
+            }
+            Err(error) => eprintln!("content desktop notification failed: {error}"),
+        }
+    }
+    if let Some(url) = cfg.discord_webhook_url.as_deref() {
+        if !url.is_empty() {
+            if let Err(error) = content_discord_for_locale(client, url, card, cfg.locale).await {
+                eprintln!("content discord webhook failed: {error}");
             }
         }
     }

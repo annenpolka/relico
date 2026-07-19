@@ -283,12 +283,47 @@ class AppConfigCompat extends Clause {
   label = "example-tested"
 }
 
+/// 時限コンテンツ監視ルール(contentRules)の合致意味論。空軸=全対象。
+/// キーワード条件とレベル条件は同一stage上の連言で、enemy levelを持たないstageへ
+/// レベル条件は合致しない(レベルを捏造しない)。
+class ContentRuleMatch extends Clause {
+  pattern = "content_rule_match"
+  label = "property-tested"
+}
+
+/// コンテンツ通知の選択: seed中・ミュート中は通知済みmarkのみで配送せず、
+/// 同一card idは高々1回だけ配送され、配送対象は常に合致集合の部分集合。
+class ContentNotifyOnce extends Clause {
+  pattern = "content_notify_once"
+  label = "property-tested"
+}
+
+/// コンテンツ通知範囲のprojection: notify=trueルールだけを元の順序で正規化キーワード
+/// と共に保持し、名前・notify=falseルールの変更では変わらない。変更時だけ再seedする。
+class ContentScopeChange extends Clause {
+  pattern = "content_scope_change"
+  label = "property-tested"
+}
+
+/// コンテンツ監視ルールのキーワードをパレットのミッションalias語彙で正準化する。
+/// 未知キーワードはrawのまま使う。
+class ContentKeywordCanonical extends Clause {
+  pattern = "content_keyword_canonical"
+  label = "example-tested"
+}
+
+/// contentRulesの後方互換設定読込とround-tripを具体例で検査する。
+class ContentRulesConfig extends Clause {
+  pattern = "content_rules_config"
+  label = "example-tested"
+}
+
 /// 時限コンテンツの外部payloadを固定fixtureで正規化し、source・詳細field・wire shapeを検査する。
 /// network到達性や第三者scheduleの将来正確性はManualへ残す。
 class TimedContentFixture extends Clause {
   pattern = "timed_content_fixture"
   label = "example-tested"
-  scenario: "wire_shape" | "arbitration_join" | "oracle_bounties" | "circuit" | "rich_details" | "area_sources"
+  scenario: "wire_shape" | "arbitration_join" | "oracle_bounties" | "circuit" | "rich_details" | "area_sources" | "node_level_index"
 }
 
 /// 通知テストの結果表示・payload・raw dev時の案内を、固定した具体例で検証する。
@@ -296,7 +331,7 @@ class TimedContentFixture extends Clause {
 class NotificationExample extends Clause {
   pattern = "notification_example"
   label = "example-tested"
-  scenario: "outcomes" | "desktop_payload" | "desktop_unavailable" | "discord_receipt" | "localized_backend"
+  scenario: "outcomes" | "desktop_payload" | "desktop_unavailable" | "discord_receipt" | "localized_backend" | "content_payload"
 }
 
 /// リポジトリ内の静的成果物(設定ファイル・アイコン・配線)を生成テストで検査する。
@@ -341,7 +376,7 @@ class ToolingScenario extends Clause {
 class RendererScenario extends Clause {
   pattern = "renderer_scenario"
   label = "example-tested"
-  scenario: "palette_keyboard" | "delivery_flush" | "rule_row_controls" | "sidebar_fit" | "compact_table" | "expiry_cleanup" | "rule_naming" | "table_sort" | "unselected_picker_create" | "content_tabs" | "mute_window" | "locale_display"
+  scenario: "palette_keyboard" | "delivery_flush" | "rule_row_controls" | "sidebar_fit" | "compact_table" | "expiry_cleanup" | "rule_naming" | "table_sort" | "unselected_picker_create" | "content_tabs" | "mute_window" | "locale_display" | "node_levels" | "content_alerts"
 }
 
 /// 実アプリ(実IPC・実WKWebView)を通すWDIO Tauri E2E。renderer統合(RendererScenario)が

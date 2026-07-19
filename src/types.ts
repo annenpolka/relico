@@ -28,8 +28,21 @@ export interface WatchRule {
   storms: StormMode;
 }
 
+/** 亀裂以外の時限コンテンツ監視ルール。合致・通知判定はRust側(content_filter.rs)が正本 */
+export interface ContentWatchRule {
+  notify: boolean;
+  name: string | null;
+  /** 対象card kind(空=全kind) */
+  kinds: string[];
+  /** ミッション種別キーワード(空=全種別)。正準化はRust側 */
+  missionTypes: string[];
+  /** enemy level下限。null=レベル条件なし */
+  minEnemyLevel: number | null;
+}
+
 export interface AppConfig {
   rules: WatchRule[];
+  contentRules: ContentWatchRule[];
   minRemainingSecs: number;
   pollIntervalSecs: number;
   desktopNotification: boolean;
@@ -184,6 +197,8 @@ export interface StatusSnapshot {
   /** backendが現在時刻と設定から判定した通知ミュート状態。TSでは再計算しない。 */
   notificationsMuted: boolean;
   suppressedToday: number;
+  /** 亀裂NODE表示用のnode表示名→[min, max] enemy level(ExportRegions由来) */
+  nodeLevels: Record<string, [number, number]>;
   timedContent: TimedContentSnapshot;
 }
 

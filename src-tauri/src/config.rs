@@ -75,11 +75,42 @@ impl DailyMuteWindow {
     }
 }
 
+/// 亀裂以外の時限コンテンツ(仲裁・エリア等)の監視ルール。ルール内はAND、複数ルールはOR。
+/// 合致意味論はcontent_filter.rsが正本。SPEC: CNT-001 / CFG-006
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ContentWatchRule {
+    /// 通知へ参加するか。欠落した旧JSONはtrue
+    pub notify: bool,
+    /// 表示用の任意名。合致・projectionには関与しない
+    pub name: Option<String>,
+    /// 対象card kind(空=全kind)。wire上のTimedContent.kind語彙
+    pub kinds: Vec<String>,
+    /// ミッション種別キーワード(空=全種別)。正準化して部分一致で照合する
+    pub mission_types: Vec<String>,
+    /// enemy levelの下限(stageの最小levelがこの値以上)。未指定=レベル条件なし
+    pub min_enemy_level: Option<u32>,
+}
+
+impl Default for ContentWatchRule {
+    fn default() -> Self {
+        Self {
+            notify: true,
+            name: None,
+            kinds: vec![],
+            mission_types: vec![],
+            min_enemy_level: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
     /// 監視ルール。enabledのORが一覧表示、notifyのORが通知。空なら通知なし・全件表示
     pub rules: Vec<WatchRule>,
+    /// 時限コンテンツの監視ルール。欠落した旧JSONは空リスト。SPEC: CFG-006
+    pub content_rules: Vec<ContentWatchRule>,
     pub min_remaining_secs: u64,
     pub poll_interval_secs: u64,
     pub desktop_notification: bool,
@@ -93,6 +124,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             rules: vec![WatchRule::default()],
+            content_rules: vec![],
             min_remaining_secs: 300,
             poll_interval_secs: 60,
             desktop_notification: true,
