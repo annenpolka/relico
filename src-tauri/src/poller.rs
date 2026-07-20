@@ -141,7 +141,7 @@ pub fn http_client() -> reqwest::Client {
         .expect("http client")
 }
 
-/// 指定された表示選択ルールに合致するもの。消滅が近い順。SPEC: FLT-013 / DED-003
+/// 通知用filter設定に合致するもの。消滅が近い順。SPEC: FLT-013 / DED-003
 pub fn matching_fissures(
     settings: &FilterSettings,
     fissures: &[Fissure],
@@ -156,24 +156,29 @@ pub fn matching_fissures(
     matching
 }
 
-/// 一覧に出す生存中の亀裂。表示選択ルールがあれば合致のみ、
-/// 無指定(enabled=trueが0本)はexpiry > nowの全件をブラウズ表示する。
-/// 通知参加・min_remaining_secsとは独立。SPEC: VIS-001
+/// 一覧に出す生存中の亀裂。表示選択ルールがあればルール条件の合致のみ、
+/// 無指定(enabled=trueが0本)は全件をブラウズ表示する。
+/// Delivery設定のmin_remaining_secsと通知参加には依存しない。SPEC: VIS-001
 pub fn visible_fissures(
     settings: &FilterSettings,
     fissures: &[Fissure],
     now: DateTime<Utc>,
 ) -> Vec<Fissure> {
-    if !settings.rules.iter().any(|rule| rule.enabled) {
-        let mut all: Vec<Fissure> = fissures
-            .iter()
-            .filter(|fissure| fissure.expiry > now)
-            .cloned()
-            .collect();
-        all.sort_by_key(|f| f.expiry);
-        return all;
-    }
-    matching_fissures(settings, fissures, now)
+    let has_enabled_rule = settings.rules.iter().any(|rule| rule.enabled);
+    let mut visible: Vec<Fissure> = fissures
+        .iter()
+        .filter(|fissure| {
+            fissure.expiry > now
+                && (!has_enabled_rule
+                    || settings
+                        .rules
+                        .iter()
+                        .any(|rule| rule.enabled && filter::rule_matches(rule, fissure)))
+        })
+        .cloned()
+        .collect();
+    visible.sort_by_key(|fissure| fissure.expiry);
+    visible
 }
 
 /// 通知候補 = notification projection(notify=true、enabled非依存)に合致するもののみ。
@@ -380,7 +385,11 @@ async fn poll_once(
         st.snapshot.api_ok = true;
         st.snapshot.last_error = None;
         st.snapshot.last_poll = Some(now);
-        st.snapshot.next_poll_secs = if cfg.paused { 0 } else { cfg.effective_poll_secs() };
+        st.snapshot.next_poll_secs = if cfg.paused {
+            0
+        } else {
+            cfg.effective_poll_secs()
+        };
         st.snapshot.notified_today += to_notify.len() as u32;
         st.snapshot.notifications_muted = muted;
         st.snapshot.suppressed_today += suppressed;

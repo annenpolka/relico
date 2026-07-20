@@ -54,27 +54,29 @@ class RulePassWhenEmpty extends Clause {
   matchExpr: String
 }
 
-/// 設定全体の述語 ∧ fissure述語 → 全体として合致しない(ルール構成に依らない棄却)
+/// 通知候補用filterの設定全体の述語 ∧ fissure述語 → 全体として合致しない
+/// (ルール構成に依らない棄却)
 class SettingsRejectWhen extends Clause {
   pattern = "settings_reject_when"
   label = "property-tested"
   fissureOverride: String = ""
 }
 
-/// ルール1つの設定では、全体合致 = (残り時間OK ∧ enabled ∧ そのルールの条件合致)
+/// 通知候補用filterで、ルール1つの設定では、
+/// 全体合致 = (残り時間OK ∧ enabled ∧ そのルールの条件合致)
 class SingleRuleEmbedding extends Clause {
   pattern = "single_rule_embedding"
   label = "property-tested"
 }
 
-/// enabled=trueのルールを追加しても、それまで表示合致していた亀裂は合致し続ける
-/// (VIEWルールORの単調性)
+/// enabled=trueのルールを追加しても、それまでfilter合致していた亀裂は合致し続ける
+/// (ルールORの単調性)
 class RuleAdditivity extends Clause {
   pattern = "rule_additivity"
   label = "property-tested"
 }
 
-/// 全体合致は残り時間条件と、enabled=trueのルールだけをORした結果に等しい。
+/// 通知候補用filterの全体合致は残り時間条件と、enabled=trueのルールだけをORした結果に等しい。
 /// 全ルール無効またはルールなしなら合致しない。
 class EnabledRulesOr extends Clause {
   pattern = "enabled_rules_or"

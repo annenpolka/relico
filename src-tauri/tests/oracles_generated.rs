@@ -370,23 +370,23 @@ proptest! {
         );
     }
 
-    /// FLT-007: 残り時間がmin_remaining_secs未満の亀裂は、ルール構成に依らず合致しない(期限切れ含む)
+    /// FLT-007: 通知候補用filterでは、残り時間がmin_remaining_secs未満の亀裂はルール構成に依らず合致しない(期限切れ含む)。一覧表示はこの設定を参照しない
     #[test]
     fn flt_007(s in arb_settings(), mut f in arb_fissure()) {
         let now = base_now();
         f.expiry = now + Duration::seconds((s.min_remaining_secs as i64) - 1);
-        prop_assert!(!filter::matches(&s, &f, now), "SPEC FLT-007 違反: 残り時間がmin_remaining_secs未満の亀裂は、ルール構成に依らず合致しない(期限切れ含む)");
+        prop_assert!(!filter::matches(&s, &f, now), "SPEC FLT-007 違反: 通知候補用filterでは、残り時間がmin_remaining_secs未満の亀裂はルール構成に依らず合致しない(期限切れ含む)。一覧表示はこの設定を参照しない");
     }
 
-    /// FLT-015: expiryが現在時刻以下の亀裂は、min_remaining_secs=0でもルール構成に依らず合致しない(生存条件はexpiry > now)
+    /// FLT-015: 通知候補用filterでは、expiryが現在時刻以下の亀裂はmin_remaining_secs=0でもルール構成に依らず合致しない(生存条件はexpiry > now)
     #[test]
     fn flt_015(mut s in arb_settings(), mut f in arb_fissure()) {
         let now = base_now();
         s.min_remaining_secs = 0; f.expiry = now;
-        prop_assert!(!filter::matches(&s, &f, now), "SPEC FLT-015 違反: expiryが現在時刻以下の亀裂は、min_remaining_secs=0でもルール構成に依らず合致しない(生存条件はexpiry > now)");
+        prop_assert!(!filter::matches(&s, &f, now), "SPEC FLT-015 違反: 通知候補用filterでは、expiryが現在時刻以下の亀裂はmin_remaining_secs=0でもルール構成に依らず合致しない(生存条件はexpiry > now)");
     }
 
-    /// FLT-008: ルール1つの一覧表示判定では、全体合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致)
+    /// FLT-008: 通知候補用filterのルール1本での合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致)
     #[test]
     fn flt_008(rule in arb_rule(), f in arb_fissure(), min in 0u64..1800) {
         let now = base_now();
@@ -396,11 +396,11 @@ proptest! {
         prop_assert_eq!(
             filter::matches(&s, &f, now),
             remaining_ok && rule.enabled && filter::rule_matches(&rule, &f),
-            "SPEC FLT-008 違反: ルール1つの一覧表示判定では、全体合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致)"
+            "SPEC FLT-008 違反: 通知候補用filterのルール1本での合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致)"
         );
     }
 
-    /// FLT-009: 表示選択(enabled=true)ルールを追加しても、それまで一覧表示に合致していた亀裂は合致し続ける(表示ルールORの単調性)
+    /// FLT-009: 通知候補用filterへenabled=trueルールを追加しても、それまで合致していた亀裂は合致し続ける(ルールORの単調性)
     #[test]
     fn flt_009(s in arb_settings(), mut extra in arb_rule(), f in arb_fissure()) {
         let now = base_now();
@@ -408,11 +408,11 @@ proptest! {
             extra.enabled = true;
             let mut bigger = s.clone();
             bigger.rules.push(extra);
-            prop_assert!(filter::matches(&bigger, &f, now), "SPEC FLT-009 違反: 表示選択(enabled=true)ルールを追加しても、それまで一覧表示に合致していた亀裂は合致し続ける(表示ルールORの単調性)");
+            prop_assert!(filter::matches(&bigger, &f, now), "SPEC FLT-009 違反: 通知候補用filterへenabled=trueルールを追加しても、それまで合致していた亀裂は合致し続ける(ルールORの単調性)");
         }
     }
 
-    /// FLT-013: 一覧表示の全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。表示選択なし、またはルールなしではフィルタ合致しない
+    /// FLT-013: 通知候補用filterの全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。enabled=trueルールなし、またはルールなしではfilter合致しない
     #[test]
     fn flt_013(s in arb_settings(), f in arb_fissure()) {
         let now = base_now();
@@ -425,7 +425,7 @@ proptest! {
         prop_assert_eq!(
             filter::matches(&s, &f, now),
             remaining_ok && enabled_or,
-            "SPEC FLT-013 違反: 一覧表示の全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。表示選択なし、またはルールなしではフィルタ合致しない (VIEWルールORの完全な等式)"
+            "SPEC FLT-013 違反: 通知候補用filterの全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。enabled=trueルールなし、またはルールなしではfilter合致しない (VIEWルールORの完全な等式)"
         );
 
         let mut all_disabled = s.clone();
@@ -436,7 +436,7 @@ proptest! {
         valid_fissure.expiry = now + Duration::seconds(s.min_remaining_secs as i64 + 1);
         prop_assert!(
             !filter::matches(&all_disabled, &valid_fissure, now),
-            "SPEC FLT-013 違反: 一覧表示の全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。表示選択なし、またはルールなしではフィルタ合致しない (全ルールVIEW OFFなのに表示合致した)"
+            "SPEC FLT-013 違反: 通知候補用filterの全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。enabled=trueルールなし、またはルールなしではfilter合致しない (全ルールVIEW OFFなのに表示合致した)"
         );
 
         let empty = FilterSettings {
@@ -445,7 +445,7 @@ proptest! {
         };
         prop_assert!(
             !filter::matches(&empty, &valid_fissure, now),
-            "SPEC FLT-013 違反: 一覧表示の全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。表示選択なし、またはルールなしではフィルタ合致しない (ルールなしなのに合致した)"
+            "SPEC FLT-013 違反: 通知候補用filterの全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。enabled=trueルールなし、またはルールなしではfilter合致しない (ルールなしなのに合致した)"
         );
     }
 
@@ -1794,7 +1794,7 @@ proptest! {
         prop_assert!(visible.is_empty(), "SPEC NTY-001 違反: 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない (通知ルールを一覧表示へ混入した)");
     }
 
-    /// VIS-001: 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる
+    /// VIS-001: 一覧表示はDelivery設定のmin_remaining_secsを参照しない。表示選択(enabled=true)ルールがあるときは、いずれかの表示ルールに合致する生存中(expiry > now)の亀裂を期限直前まで1件も取りこぼさず表示する。表示選択が1本もない(無指定)ときは生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる
     #[test]
     fn vis_001(s in arb_settings(), fs in proptest::collection::vec(arb_fissure(), 0..30)) {
         let now = base_now();
@@ -1807,24 +1807,39 @@ proptest! {
         prop_assert_eq!(
             poller::visible_fissures(&notify_toggled, &fs, now),
             visible.clone(),
-            "SPEC VIS-001 違反: 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (notify変更で一覧表示が変化した)"
+            "SPEC VIS-001 違反: 一覧表示はDelivery設定のmin_remaining_secsを参照しない。表示選択(enabled=true)ルールがあるときは、いずれかの表示ルールに合致する生存中(expiry > now)の亀裂を期限直前まで1件も取りこぼさず表示する。表示選択が1本もない(無指定)ときは生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (notify変更で一覧表示が変化した)"
+        );
+        // Deliveryの最小残り時間は通知専用で、一覧表示へ影響しない。
+        let mut threshold_changed = s.clone();
+        threshold_changed.min_remaining_secs = u64::MAX;
+        prop_assert_eq!(
+            poller::visible_fissures(&threshold_changed, &fs, now),
+            visible.clone(),
+            "SPEC VIS-001 違反: 一覧表示はDelivery設定のmin_remaining_secsを参照しない。表示選択(enabled=true)ルールがあるときは、いずれかの表示ルールに合致する生存中(expiry > now)の亀裂を期限直前まで1件も取りこぼさず表示する。表示選択が1本もない(無指定)ときは生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (min_remaining_secs変更で一覧表示が変化した)"
         );
         if s.rules.iter().any(|rule| rule.enabled) {
+            let expected: Vec<&Fissure> = fs.iter().filter(|f|
+                f.expiry > now && s.rules.iter().any(|rule|
+                    rule.enabled && filter::rule_matches(rule, f)
+                )
+            ).collect();
+            prop_assert_eq!(visible.len(), expected.len(), "SPEC VIS-001 違反: 一覧表示はDelivery設定のmin_remaining_secsを参照しない。表示選択(enabled=true)ルールがあるときは、いずれかの表示ルールに合致する生存中(expiry > now)の亀裂を期限直前まで1件も取りこぼさず表示する。表示選択が1本もない(無指定)ときは生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (表示ルール合致の生存中全件と一致しない)");
             for f in &visible {
-                prop_assert!(filter::matches(&s, f, now), "SPEC VIS-001 違反: 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (対象外が表示された)");
+                prop_assert!(f.expiry > now, "SPEC VIS-001 違反: 一覧表示はDelivery設定のmin_remaining_secsを参照しない。表示選択(enabled=true)ルールがあるときは、いずれかの表示ルールに合致する生存中(expiry > now)の亀裂を期限直前まで1件も取りこぼさず表示する。表示選択が1本もない(無指定)ときは生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (期限切れが表示された)");
+                prop_assert!(s.rules.iter().any(|rule| rule.enabled && filter::rule_matches(rule, f)), "SPEC VIS-001 違反: 一覧表示はDelivery設定のmin_remaining_secsを参照しない。表示選択(enabled=true)ルールがあるときは、いずれかの表示ルールに合致する生存中(expiry > now)の亀裂を期限直前まで1件も取りこぼさず表示する。表示選択が1本もない(無指定)ときは生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (表示ルール対象外が表示された)");
             }
-            for f in fs.iter().filter(|f| filter::matches(&s, f, now)) {
-                prop_assert!(visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (合致亀裂が欠落した)");
+            for f in expected {
+                prop_assert!(visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 一覧表示はDelivery設定のmin_remaining_secsを参照しない。表示選択(enabled=true)ルールがあるときは、いずれかの表示ルールに合致する生存中(expiry > now)の亀裂を期限直前まで1件も取りこぼさず表示する。表示選択が1本もない(無指定)ときは生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (合致亀裂が欠落した)");
             }
         } else {
             // 無指定(表示選択なし): 通知参加・min_remainingとは独立に生存中だけ全件表示する
             let live: Vec<&Fissure> = fs.iter().filter(|f| f.expiry > now).collect();
-            prop_assert_eq!(visible.len(), live.len(), "SPEC VIS-001 違反: 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (無指定の生存中全件と一致しない)");
+            prop_assert_eq!(visible.len(), live.len(), "SPEC VIS-001 違反: 一覧表示はDelivery設定のmin_remaining_secsを参照しない。表示選択(enabled=true)ルールがあるときは、いずれかの表示ルールに合致する生存中(expiry > now)の亀裂を期限直前まで1件も取りこぼさず表示する。表示選択が1本もない(無指定)ときは生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (無指定の生存中全件と一致しない)");
             for f in live {
-                prop_assert!(visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (無指定で生存中亀裂が欠落した)");
+                prop_assert!(visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 一覧表示はDelivery設定のmin_remaining_secsを参照しない。表示選択(enabled=true)ルールがあるときは、いずれかの表示ルールに合致する生存中(expiry > now)の亀裂を期限直前まで1件も取りこぼさず表示する。表示選択が1本もない(無指定)ときは生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (無指定で生存中亀裂が欠落した)");
             }
             for f in fs.iter().filter(|f| f.expiry <= now) {
-                prop_assert!(!visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (無指定で期限切れを表示した)");
+                prop_assert!(!visible.iter().any(|v| v.id == f.id), "SPEC VIS-001 違反: 一覧表示はDelivery設定のmin_remaining_secsを参照しない。表示選択(enabled=true)ルールがあるときは、いずれかの表示ルールに合致する生存中(expiry > now)の亀裂を期限直前まで1件も取りこぼさず表示する。表示選択が1本もない(無指定)ときは生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる (無指定で期限切れを表示した)");
             }
         }
     }

@@ -70,25 +70,25 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.SettingsRejectWhen {
     id = "FLT-007"
-    desc = "残り時間がmin_remaining_secs未満の亀裂は、ルール構成に依らず合致しない(期限切れ含む)"
+    desc = "通知候補用filterでは、残り時間がmin_remaining_secs未満の亀裂はルール構成に依らず合致しない(期限切れ含む)。一覧表示はこの設定を参照しない"
     fissureOverride = "f.expiry = now + Duration::seconds((s.min_remaining_secs as i64) - 1);"
   }
   new patterns.SettingsRejectWhen {
     id = "FLT-015"
-    desc = "expiryが現在時刻以下の亀裂は、min_remaining_secs=0でもルール構成に依らず合致しない(生存条件はexpiry > now)"
+    desc = "通知候補用filterでは、expiryが現在時刻以下の亀裂はmin_remaining_secs=0でもルール構成に依らず合致しない(生存条件はexpiry > now)"
     fissureOverride = "s.min_remaining_secs = 0; f.expiry = now;"
   }
   new patterns.SingleRuleEmbedding {
     id = "FLT-008"
-    desc = "ルール1つの一覧表示判定では、全体合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致)"
+    desc = "通知候補用filterのルール1本での合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致)"
   }
   new patterns.RuleAdditivity {
     id = "FLT-009"
-    desc = "表示選択(enabled=true)ルールを追加しても、それまで一覧表示に合致していた亀裂は合致し続ける(表示ルールORの単調性)"
+    desc = "通知候補用filterへenabled=trueルールを追加しても、それまで合致していた亀裂は合致し続ける(ルールORの単調性)"
   }
   new patterns.EnabledRulesOr {
     id = "FLT-013"
-    desc = "一覧表示の全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。表示選択なし、またはルールなしではフィルタ合致しない"
+    desc = "通知候補用filterの全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。enabled=trueルールなし、またはルールなしではfilter合致しない"
   }
   new patterns.NotificationProjection {
     id = "FLT-014"
@@ -191,7 +191,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.FilteredView {
     id = "VIS-001"
-    desc = "表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる"
+    desc = "一覧表示はDelivery設定のmin_remaining_secsを参照しない。表示選択(enabled=true)ルールがあるときは、いずれかの表示ルールに合致する生存中(expiry > now)の亀裂を期限直前まで1件も取りこぼさず表示する。表示選択が1本もない(無指定)ときは生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる"
   }
   new patterns.FuzzySubsequence {
     id = "FZY-001"

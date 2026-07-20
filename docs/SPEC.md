@@ -24,11 +24,11 @@
 | FLT-005 | `rule_pass_when_empty` | property-tested | ルールのmission_typesが空のとき、ミッション種別を理由に棄却しない(空=全種別対象) |
 | FLT-006 | `rule_pass_when_empty` | property-tested | ルールのplanetsが空のとき、惑星を理由に棄却しない(空=全惑星対象) |
 | FLT-016 | `rule_pass_when_empty` | property-tested | ルールのfactionsが空のとき、陣営を理由に棄却しない(空=全陣営対象)。非空ならAPIのenemy値との完全一致で絞り込む |
-| FLT-007 | `settings_reject_when` | property-tested | 残り時間がmin_remaining_secs未満の亀裂は、ルール構成に依らず合致しない(期限切れ含む) |
-| FLT-015 | `settings_reject_when` | property-tested | expiryが現在時刻以下の亀裂は、min_remaining_secs=0でもルール構成に依らず合致しない(生存条件はexpiry > now) |
-| FLT-008 | `single_rule_embedding` | property-tested | ルール1つの一覧表示判定では、全体合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致) |
-| FLT-009 | `rule_additivity` | property-tested | 表示選択(enabled=true)ルールを追加しても、それまで一覧表示に合致していた亀裂は合致し続ける(表示ルールORの単調性) |
-| FLT-013 | `enabled_rules_or` | property-tested | 一覧表示の全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。表示選択なし、またはルールなしではフィルタ合致しない |
+| FLT-007 | `settings_reject_when` | property-tested | 通知候補用filterでは、残り時間がmin_remaining_secs未満の亀裂はルール構成に依らず合致しない(期限切れ含む)。一覧表示はこの設定を参照しない |
+| FLT-015 | `settings_reject_when` | property-tested | 通知候補用filterでは、expiryが現在時刻以下の亀裂はmin_remaining_secs=0でもルール構成に依らず合致しない(生存条件はexpiry > now) |
+| FLT-008 | `single_rule_embedding` | property-tested | 通知候補用filterのルール1本での合致 = (残り時間OK ∧ rule.enabled ∧ そのルールの条件が合致) |
+| FLT-009 | `rule_additivity` | property-tested | 通知候補用filterへenabled=trueルールを追加しても、それまで合致していた亀裂は合致し続ける(ルールORの単調性) |
+| FLT-013 | `enabled_rules_or` | property-tested | 通知候補用filterの全体合致は、残り時間条件を満たし、enabled=trueのルールの少なくとも1本が条件合致する場合に限る。enabled=trueルールなし、またはルールなしではfilter合致しない |
 | FLT-014 | `notification_projection` | property-tested | notification projection(通知範囲の射影)はnotify=trueのルールをenabledに依らず元の順序で保持し、照合用にenabled=trueへ正規化して、notify=falseルールを除き、共通のmin_remaining_secsを保持する。表示選択(enabled)の変更やnotify=false draftの追加・削除・条件編集では変わらず、notify切替・通知参加ルールの条件・min_remaining_secsの変更は通知範囲へ反映される。ルール名は表示用メタデータであり射影に含まれない(名前変更は通知範囲を変えず、再seedを起こさない) |
 | DED-001 | `at_most_once` | property-tested | 同一亀裂idは任意のポーリング列で高々1回しか通知されない |
 | DED-002 | `prune_preserves_live` | property-tested | pruneは生存中idの通知済み状態を保持し、期限切れidを除去する |
@@ -52,7 +52,7 @@
 | CPL-003 | `content_palette` | property-tested | 条件編集の編集先はタブ専用(kinds非空かつタブkind群と交差)ルールの末尾で、kinds未指定の全タブ共通ルールは編集先にならない。編集先がない状態でキーワード/レベル候補を適用すると、既存ルールを変更せずkinds=タブkind群・notify=ONの新ルールを末尾へ1本作って適用する。NEW ALERTはnotify=OFF・条件なしの安全なdraftを末尾へ追加し、そのdraftへの最初のキーワード/レベル適用はnotify=ONへ確定する。条件を持つ既存ルールへの条件編集はnotifyを暗黙に変えない |
 | CFG-006 | `content_rules_config` | example-tested | AppConfigのcontentRulesは後方互換の省略可能fieldで、持たない旧JSONは空リストとして読み込む。ルールのnotifyが欠落した場合はtrueで、設定したnotify/name/kinds/missionTypes/minEnemyLevelはserialize/deserializeを往復しても保持され、camelCaseでserializeされる |
 | NTY-001 | `notify_candidates` | property-tested | 通知候補はnotify=trueのルールのORに合致する亀裂のみで、それらを1件も取りこぼさない。enabled=falseの非表示ルールも通知へ参加し、通知候補は一覧表示の部分集合に限定されない |
-| VIS-001 | `filtered_view` | property-tested | 表示選択(enabled=true)ルールがあるとき、一覧に表示されるのはいずれかの表示ルールに合致する生存中(expiry > now)の亀裂のみで、合致する亀裂は1件も取りこぼさない。表示選択が1本もない(無指定)ときはmin_remaining_secsにかかわらず生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる |
+| VIS-001 | `filtered_view` | property-tested | 一覧表示はDelivery設定のmin_remaining_secsを参照しない。表示選択(enabled=true)ルールがあるときは、いずれかの表示ルールに合致する生存中(expiry > now)の亀裂を期限直前まで1件も取りこぼさず表示する。表示選択が1本もない(無指定)ときは生存中の全亀裂を表示し、期限切れは表示しない。どちらの場合も通知参加はnotifyだけで独立に決まる |
 | FZY-001 | `fuzzy_subsequence` | property-tested | パレットのファジーマッチが成立するのは、クエリ文字が候補文字列(またはalias)に順序どおり現れる場合に限る(健全性) |
 | FZY-002 | `fuzzy_empty_query` | property-tested | 空クエリはパレット候補の全件を返す(完全性) |
 | FZY-003 | `fuzzy_exact_first` | property-tested | クエリと完全一致する候補(label/alias)が存在すれば、先頭候補は完全一致である |

@@ -1645,11 +1645,26 @@ ${indent(c.fissureOverride ?? "", 8)}
             visible.clone(),
             "${msg} (notify変更で一覧表示が変化した)"
         );
+        // Deliveryの最小残り時間は通知専用で、一覧表示へ影響しない。
+        let mut threshold_changed = s.clone();
+        threshold_changed.min_remaining_secs = u64::MAX;
+        prop_assert_eq!(
+            poller::visible_fissures(&threshold_changed, &fs, now),
+            visible.clone(),
+            "${msg} (min_remaining_secs変更で一覧表示が変化した)"
+        );
         if s.rules.iter().any(|rule| rule.enabled) {
+            let expected: Vec<&Fissure> = fs.iter().filter(|f|
+                f.expiry > now && s.rules.iter().any(|rule|
+                    rule.enabled && filter::rule_matches(rule, f)
+                )
+            ).collect();
+            prop_assert_eq!(visible.len(), expected.len(), "${msg} (表示ルール合致の生存中全件と一致しない)");
             for f in &visible {
-                prop_assert!(filter::matches(&s, f, now), "${msg} (対象外が表示された)");
+                prop_assert!(f.expiry > now, "${msg} (期限切れが表示された)");
+                prop_assert!(s.rules.iter().any(|rule| rule.enabled && filter::rule_matches(rule, f)), "${msg} (表示ルール対象外が表示された)");
             }
-            for f in fs.iter().filter(|f| filter::matches(&s, f, now)) {
+            for f in expected {
                 prop_assert!(visible.iter().any(|v| v.id == f.id), "${msg} (合致亀裂が欠落した)");
             }
         } else {

@@ -4,7 +4,7 @@
 use chrono::{TimeZone, Utc};
 use relico_lib::filter::{self, FilterSettings, Mode, StormMode, WatchRule};
 use relico_lib::model::Fissure;
-use relico_lib::palette;
+use relico_lib::{palette, poller};
 
 fn fixture() -> Vec<Fissure> {
     serde_json::from_str(include_str!("fixtures/fissures.json")).expect("fixture parse")
@@ -93,17 +93,23 @@ fn two_rules_union_matches_five() {
 }
 
 #[test]
-fn min_remaining_excludes_soon_expiring() {
-    // 04:45時点: Metis (Jupiter) は04:49消滅なので残り5分未満 → 除外される
+fn min_remaining_only_excludes_soon_expiring_notification_candidates() {
+    // 04:45時点: Metis (Jupiter) は04:49消滅なので、通知候補からは除外されるが
+    // VIEWルールに合致する生存中亀裂として一覧には残る。
     let now = Utc.with_ymd_and_hms(2026, 7, 17, 4, 45, 0).unwrap();
     let s = settings(vec![rule()]);
-    let matched: Vec<String> = fixture()
+    let fissures = fixture();
+    let notifying: Vec<String> = poller::notify_candidates(&s, &fissures, now)
         .iter()
-        .filter(|f| filter::matches(&s, f, now))
         .map(|f| f.node.clone())
         .collect();
-    assert!(!matched.contains(&"Metis (Jupiter)".to_string()));
-    assert!(matched.contains(&"Keeler (Saturn)".to_string()));
+    let visible: Vec<String> = poller::visible_fissures(&s, &fissures, now)
+        .iter()
+        .map(|f| f.node.clone())
+        .collect();
+    assert!(!notifying.contains(&"Metis (Jupiter)".to_string()));
+    assert!(notifying.contains(&"Keeler (Saturn)".to_string()));
+    assert!(visible.contains(&"Metis (Jupiter)".to_string()));
 }
 
 #[test]
