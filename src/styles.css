@@ -1216,6 +1216,20 @@ input:focus-visible {
   padding-top: 7px;
 }
 
+.rail-footer-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.rail-footer-actions .action {
+  min-width: 0;
+}
+
+.action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 #rail-msg {
   color: var(--dim);
   margin: 5px 0 0;

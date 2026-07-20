@@ -262,6 +262,11 @@ pub fn catalog() -> Vec<Candidate> {
             "pause",
             vec!["一時停止", "teishi", "ichijiteishi", "pozu", "saikai"],
         ),
+        (
+            "RELOAD",
+            "reload",
+            vec!["再読み込み", "更新", "refresh", "saikomi", "yomikomi", "koshin"],
+        ),
         // 亀裂表の項目別ソート(表示のみ。適用はフロント側でRND-007の結線を通る)
         (
             "SORT BY TIER",
@@ -405,11 +410,12 @@ pub fn catalog_with_rules(rules: &[WatchRule]) -> Vec<Candidate> {
     out
 }
 
-/// フロント側だけで完結する表示系アクション(ソート・タブ切替・改名モード・pause)。
+/// ルール構成を変更しないアクション(ソート・タブ切替・改名モード・pause・reload)。
 /// ルール構成を変更しないため、SAT-001の操作空間から除外する。
 fn is_view_only_action(cand: &Candidate) -> bool {
     cand.facet == Facet::Action
         && (cand.value == "pause"
+            || cand.value == "reload"
             || cand.value == "rename-rule"
             || cand.value.starts_with("sort-")
             || cand.value.starts_with("tab-"))

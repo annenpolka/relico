@@ -584,6 +584,7 @@ function installMock({
     { id: "action:notify-rule", label: "TOGGLE NOTIFY", facet: "action" },
     { id: "action:clear", label: "CLEAR FILTERS", facet: "action" },
     { id: "action:pause", label: "PAUSE WATCH", facet: "action" },
+    { id: "action:reload", label: "RELOAD", facet: "action" },
     // 表示のみのSORT/タブ切替コマンド(フロント側でinterceptされbackendへ届かない)
     { id: "action:sort-tier", label: "SORT BY TIER", facet: "action" },
     { id: "action:sort-node", label: "SORT BY NODE", facet: "action" },
@@ -736,7 +737,12 @@ function installMock({
           facet: "rule",
           on: contentRule.notify,
         })),
-      ...catalog.filter((cand) => cand.id === "action:pause" || cand.id.startsWith("action:tab-")),
+      ...catalog.filter(
+        (cand) =>
+          cand.id === "action:pause" ||
+          cand.id === "action:reload" ||
+          cand.id.startsWith("action:tab-"),
+      ),
     ];
     const out = statics.filter(
       (cand) => query === "" || cand.label.toLowerCase().includes(query),
@@ -791,10 +797,12 @@ function installMock({
     }
   };
 
+  let reloadRequest = 0;
   const handlers: Record<string, (args: Record<string, unknown>) => unknown | Promise<unknown>> = {
     get_config: () => state.config,
     get_status: () => state.status,
     get_autostart: () => state.autostart,
+    manual_reload: () => ++reloadRequest,
     set_autostart: (args) => {
       state.autostart = Boolean(args.enabled);
       return null;

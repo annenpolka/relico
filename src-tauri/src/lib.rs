@@ -213,6 +213,7 @@ pub fn run() {
             let cfg = AppConfig::load(&config_path);
             sync_window_title(app.handle(), &cfg);
             let (cfg_tx, cfg_rx) = watch::channel(cfg.clone());
+            let (reload_tx, reload_rx) = watch::channel(0_u64);
             let poller_state = Arc::new(Mutex::new(PollerState::new(
                 NotifiedSet::load(&notified_path),
                 NotifiedSet::load(&content_notified_path),
@@ -221,6 +222,7 @@ pub fn run() {
 
             app.manage(AppState {
                 cfg_tx,
+                reload_tx,
                 poller: poller_state.clone(),
                 config_path,
                 client: poller::http_client(),
@@ -306,12 +308,14 @@ pub fn run() {
             tauri::async_runtime::spawn(timed::run(
                 app.handle().clone(),
                 cfg_rx.clone(),
+                reload_rx.clone(),
                 poller_state.clone(),
                 content_notified_path,
             ));
             tauri::async_runtime::spawn(poller::run(
                 app.handle().clone(),
                 cfg_rx,
+                reload_rx,
                 poller_state,
                 notified_path,
             ));
@@ -330,6 +334,7 @@ pub fn run() {
             commands::get_config,
             commands::set_config,
             commands::get_status,
+            commands::manual_reload,
             commands::test_notification,
             commands::get_autostart,
             commands::set_autostart,

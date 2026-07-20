@@ -17,6 +17,7 @@ use crate::poller::{PollerState, StatusSnapshot};
 
 pub struct AppState {
     pub cfg_tx: watch::Sender<AppConfig>,
+    pub reload_tx: watch::Sender<u64>,
     pub poller: Arc<Mutex<PollerState>>,
     pub config_path: PathBuf,
     pub client: reqwest::Client,
@@ -306,6 +307,18 @@ pub fn get_status(state: State<AppState>) -> StatusSnapshot {
         poller.bump_revision();
     }
     poller.snapshot.clone()
+}
+
+/// 亀裂・時限コンテンツの両pollerへ、次の自動周期を待たない再取得を要求する。
+/// watch値を要求番号として返すため、IPC側は実commandを往復したことを確認できる。
+#[tauri::command]
+pub fn manual_reload(state: State<AppState>) -> u64 {
+    let mut request = 0;
+    state.reload_tx.send_modify(|current| {
+        *current = current.wrapping_add(1);
+        request = *current;
+    });
+    request
 }
 
 /// MAN-001 / MAN-002 の確認手段。ダミー亀裂で通知経路を発火する

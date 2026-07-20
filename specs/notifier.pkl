@@ -442,6 +442,11 @@ clauses: Listing<patterns.Clause> = new {
     scenario = "content_picker"
   }
   new patterns.RendererScenario {
+    id = "RND-017"
+    desc = "右サイドバーのRELOADボタンと全コンテンツタブのパレットRELOAD候補は、未保存設定をflushした後に同じmanual_reload commandを1回呼ぶ。要求受付をrailへ表示し、ルール・設定・active tabを変更しない。パレット候補からの実行はパレットを閉じる(renderer統合)"
+    scenario = "manual_reload"
+  }
+  new patterns.RendererScenario {
     id = "RND-014"
     desc = "ルール管理はコンテンツタブごとに分かれる: 亀裂タブではrail上部のルール一覧が亀裂WatchRuleを表示し、それ以外のタブでは同じ位置がそのタブ対象のコンテンツ通知ルール管理UI(タブ名入りheading・行リスト・キーワード+LV下限の追加フォーム)へ切り替わる。行はkindsがタブのkind群(エリアはarea-mission/area-objective/bounty、シンジケートはsyndicate)と交差するルールに加えkinds未指定(すべて)のルールも含み、追加はそのタブのkind群へ展開して保存される。行の通知トグルは元のcontentRulesの該当ルールのnotifyだけを、削除ボタンは該当ルールの除去だけをset_config(contentRules)へ保存する。これらの操作は亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュート設定を変更しない(renderer統合)"
     scenario = "content_alerts"
@@ -475,6 +480,11 @@ clauses: Listing<patterns.Clause> = new {
     id = "E2E-003"
     desc = "実アプリの起動時ja、en変更後、zh-Hans変更後、再読込後でdocument.titleとmain native window titleが各localeのapp.titleへ同期し、表示言語は本物のset_config完了後にhtml langとcritical UIへ反映され、再読込後も実get_configからzh-Hansが復元される(WDIO Tauri E2E)"
     scenario = "locale_config_roundtrip"
+  }
+  new patterns.E2eScenario {
+    id = "E2E-004"
+    desc = "実アプリのmanual_reload commandは本物のIPCを往復し、呼ぶたびに単調増加する要求番号を返して亀裂pollerと時限コンテンツpollerの待機解除要求を発行する(WDIO Tauri E2E)"
+    scenario = "manual_reload_ipc"
   }
   new patterns.Manual {
     id = "MAN-001"

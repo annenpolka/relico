@@ -1614,6 +1614,11 @@ function paletteApply() {
     enterRenameMode();
     return;
   }
+  if (c.id === "action:reload") {
+    closePalette();
+    void manualReload();
+    return;
+  }
   // SORTコマンドは表示のみ: backendを呼ばずヘッダクリックと同じ結線を通し、
   // 開いたまま連続入力できるようクエリだけリセットする(RND-007)
   if (c.id.startsWith("action:sort-")) {
@@ -1722,6 +1727,26 @@ async function clearFilter() {
   }
 }
 
+let reloadPending = false;
+
+async function manualReload() {
+  if (reloadPending) return;
+  reloadPending = true;
+  const button = $<HTMLButtonElement>("reload-btn");
+  button.disabled = true;
+  railMsg(t("common.reloadRequesting"));
+  try {
+    await flushSave();
+    await invoke<number>("manual_reload");
+    railMsg(t("common.reloadRequested"), "ok");
+  } catch (error) {
+    railMsg(String(error), "err");
+  } finally {
+    reloadPending = false;
+    button.disabled = false;
+  }
+}
+
 function renderLocaleSensitiveUi() {
   applyDocumentTranslations();
   renderRail();
@@ -1799,6 +1824,7 @@ async function init() {
     armOrFire("rule-del", () => void applyCand("action:delete-rule")),
   );
   $("clear-btn").addEventListener("click", () => armOrFire("clear-btn", () => void clearFilter()));
+  $("reload-btn").addEventListener("click", () => void manualReload());
   $("pause-btn").addEventListener("click", () => applyCand("action:pause"));
   $("filters-tab").addEventListener("click", () => setRailTab("filters"));
   $("delivery-tab").addEventListener("click", () => setRailTab("delivery"));

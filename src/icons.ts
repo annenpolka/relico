@@ -104,6 +104,7 @@ const ACTIONS: Record<string, string> = {
   "notify-rule-off": `<path d="M10 3a4.5 4.5 0 0 1 4.5 4.5V11l1.5 2.5H4L5.5 11V7.5A4.5 4.5 0 0 1 10 3Z"/><path d="M8.5 16a1.5 1.5 0 0 0 3 0"/><path d="m3.5 3 13 14"/>`,
   clear: `<path d="m4 4 12 12M16 4 4 16"/>`,
   pause: `<circle cx="10" cy="10" r="6.5"/><path d="M8 7v6M12 7v6"/>`,
+  reload: `<path d="M15.5 7A6 6 0 1 0 16 12"/><path d="M15.5 3v4h-4"/>`,
 };
 
 function factionShape(value: string): string {

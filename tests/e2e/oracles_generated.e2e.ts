@@ -106,3 +106,18 @@ describe("E2E-003", () => {
     await expectSynchronizedTitle("RELICO — 限时内容");
   });
 });
+
+// E2E-004: 実アプリのmanual_reload commandは本物のIPCを往復し、呼ぶたびに単調増加する要求番号を返して亀裂pollerと時限コンテンツpollerの待機解除要求を発行する(WDIO Tauri E2E)
+describe("E2E-004", () => {
+  it("manual reload round-trips through real IPC", async () => {
+    await waitForInit();
+    const first = (await browser.tauri.execute(({ core }) =>
+      core.invoke("manual_reload"),
+    )) as number;
+    const second = (await browser.tauri.execute(({ core }) =>
+      core.invoke("manual_reload"),
+    )) as number;
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBeGreaterThan(first);
+  });
+});

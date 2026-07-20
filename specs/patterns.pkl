@@ -385,7 +385,7 @@ class ToolingScenario extends Clause {
 class RendererScenario extends Clause {
   pattern = "renderer_scenario"
   label = "example-tested"
-  scenario: "palette_keyboard" | "delivery_flush" | "rule_row_controls" | "sidebar_fit" | "compact_table" | "expiry_cleanup" | "rule_naming" | "table_sort" | "unselected_picker_create" | "content_tabs" | "mute_window" | "locale_display" | "node_levels" | "content_alerts" | "filter_auto_tab" | "content_picker"
+  scenario: "palette_keyboard" | "delivery_flush" | "rule_row_controls" | "sidebar_fit" | "compact_table" | "expiry_cleanup" | "rule_naming" | "table_sort" | "unselected_picker_create" | "content_tabs" | "mute_window" | "locale_display" | "node_levels" | "content_alerts" | "filter_auto_tab" | "content_picker" | "manual_reload"
 }
 
 /// 実アプリ(実IPC・実WKWebView)を通すWDIO Tauri E2E。renderer統合(RendererScenario)が
@@ -394,7 +394,7 @@ class RendererScenario extends Clause {
 class E2eScenario extends Clause {
   pattern = "e2e_scenario"
   label = "example-tested"
-  scenario: "palette_apply_ipc" | "delivery_error_surface" | "locale_config_roundtrip"
+  scenario: "palette_apply_ipc" | "delivery_error_surface" | "locale_config_roundtrip" | "manual_reload_ipc"
 }
 
 /// 機械検証しない残余。手動確認手順をSPEC.mdに列挙する

@@ -184,9 +184,10 @@ pub fn catalog(tab: &str, rules: &[ContentWatchRule], query: &str) -> Vec<Candid
             facet: Facet::Action,
         });
     }
-    // 共有アクション: タブ切替とPAUSEだけを亀裂カタログから引き継ぐ(SORT・亀裂ルール操作は除外)
+    // 共有アクション: タブ切替・PAUSE・RELOADを亀裂カタログから引き継ぐ(SORT・亀裂ルール操作は除外)
     out.extend(palette::catalog().into_iter().filter(|cand| {
-        cand.facet == Facet::Action && (cand.value == "pause" || cand.value.starts_with("tab-"))
+        cand.facet == Facet::Action
+            && (cand.value == "pause" || cand.value == "reload" || cand.value.starts_with("tab-"))
     }));
     out
 }

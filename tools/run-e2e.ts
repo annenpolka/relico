@@ -5,7 +5,8 @@ import { run } from "./command";
 import { cleanupOwnedListener } from "./e2e-process";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const bundleRoot = join(root, "src-tauri", "target.noindex");
+const E2E_TARGET_DIR = "src-tauri/target.noindex";
+const bundleRoot = join(root, E2E_TARGET_DIR);
 const binaryName = process.platform === "win32" ? "relico.exe" : "relico";
 const appBinary = join(bundleRoot, "debug", binaryName);
 const leasePath = join(bundleRoot, "e2e-process.lease");

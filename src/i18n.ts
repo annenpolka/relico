@@ -23,6 +23,7 @@ const CANDIDATE_KEYS: Partial<Record<string, MessageKey>> = {
   "action:deselect-all-rules": "candidate.action.deselectAll",
   "action:clear": "candidate.action.clear",
   "action:pause": "candidate.action.pause",
+  "action:reload": "candidate.action.reload",
   "caction:new-content-rule": "candidate.caction.newAlert",
   "caction:delete-content-rule": "candidate.caction.deleteAlert",
   "clevel:off": "candidate.clevel.off",

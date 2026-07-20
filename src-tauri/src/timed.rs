@@ -1053,6 +1053,7 @@ fn next_poll_delay(
 pub async fn run(
     app: AppHandle,
     cfg_rx: watch::Receiver<AppConfig>,
+    mut reload_rx: watch::Receiver<u64>,
     state: Arc<Mutex<PollerState>>,
     content_notified_path: PathBuf,
 ) {
@@ -1172,12 +1173,18 @@ pub async fn run(
         for card in &to_notify {
             notify::send_content(&app, &client, &cfg, card).await;
         }
-        tokio::time::sleep(next_poll_delay(
-            &snapshot.timed_content,
-            now,
-            cache.short_retry_delay_secs(now),
-        ))
-        .await;
+        tokio::select! {
+            _ = tokio::time::sleep(next_poll_delay(
+                &snapshot.timed_content,
+                now,
+                cache.short_retry_delay_secs(now),
+            )) => {}
+            changed = reload_rx.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+            }
+        }
     }
 }
 

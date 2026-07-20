@@ -897,6 +897,39 @@ test("RND-016 content tab picker", async ({ page }) => {
   await expect(page.locator("#palette-overlay")).toBeVisible();
 });
 
+// RND-017: 右サイドバーのRELOADボタンと全コンテンツタブのパレットRELOAD候補は、未保存設定をflushした後に同じmanual_reload commandを1回呼ぶ。要求受付をrailへ表示し、ルール・設定・active tabを変更しない。パレット候補からの実行はパレットを閉じる(renderer統合)
+test("RND-017 manual reload", async ({ page }) => {
+  await bootConsole(page);
+  await page.locator("#tab-arbitration").click();
+  await page.locator("#reload-btn").click();
+  await expect(page.locator("#rail-msg")).toHaveText("Reload requested");
+  let sequence = await calls(page);
+  let reloads = sequence.filter((entry) => entry.cmd === "manual_reload");
+  expect(reloads).toHaveLength(1);
+  expect(sequence.findIndex((entry) => entry.cmd === "set_config")).toBeLessThan(
+    sequence.findIndex((entry) => entry.cmd === "manual_reload"),
+  );
+  await expect(page.locator('#content-tabs [aria-selected="true"]')).toHaveAttribute(
+    "data-tab-id",
+    "arbitration",
+  );
+
+  await page.keyboard.press("r");
+  await page.locator("#palette-input").fill("reload");
+  await expect(page.locator("#palette-cands .cand", { hasText: "Reload" })).toHaveCount(1);
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#palette-overlay")).toBeHidden();
+  await expect(page.locator("#rail-msg")).toHaveText("Reload requested");
+  sequence = await calls(page);
+  reloads = sequence.filter((entry) => entry.cmd === "manual_reload");
+  expect(reloads).toHaveLength(2);
+  expect(sequence.some((entry) => entry.cmd === "apply_candidate" && entry.args.id === "action:reload")).toBe(false);
+  await expect(page.locator('#content-tabs [aria-selected="true"]')).toHaveAttribute(
+    "data-tab-id",
+    "arbitration",
+  );
+});
+
 // RND-014: ルール管理はコンテンツタブごとに分かれる: 亀裂タブではrail上部のルール一覧が亀裂WatchRuleを表示し、それ以外のタブでは同じ位置がそのタブ対象のコンテンツ通知ルール管理UI(タブ名入りheading・行リスト・キーワード+LV下限の追加フォーム)へ切り替わる。行はkindsがタブのkind群(エリアはarea-mission/area-objective/bounty、シンジケートはsyndicate)と交差するルールに加えkinds未指定(すべて)のルールも含み、追加はそのタブのkind群へ展開して保存される。行の通知トグルは元のcontentRulesの該当ルールのnotifyだけを、削除ボタンは該当ルールの除去だけをset_config(contentRules)へ保存する。これらの操作は亀裂のWatchRule・VIEW/NOTIFY・edit focus・通知ミュート設定を変更しない(renderer統合)
 test("RND-014 per-tab rule management", async ({ page }) => {
   await bootConsole(page, { locale: "en" });

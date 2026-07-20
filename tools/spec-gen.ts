@@ -93,6 +93,7 @@ const ACTION_POOL = [
   "deselect-all-rules",
   "clear",
   "pause",
+  "reload",
 ];
 const PROXIMA_PLANETS = ["Earth", "Venus", "Saturn", "Neptune", "Pluto", "Veil"];
 // 時限コンテンツ監視ルールの生成プール(kindはwire上のTimedContent.kind語彙)
@@ -5566,6 +5567,40 @@ for (const [locale, golden] of Object.entries(localeGoldens)) {
     }
   });
 }`;
+    case "manual_reload":
+      return `
+// ${c.id}: ${c.desc}
+test("${c.id} manual reload", async ({ page }) => {
+  await bootConsole(page);
+  await page.locator("#tab-arbitration").click();
+  await page.locator("#reload-btn").click();
+  await expect(page.locator("#rail-msg")).toHaveText("Reload requested");
+  let sequence = await calls(page);
+  let reloads = sequence.filter((entry) => entry.cmd === "manual_reload");
+  expect(reloads).toHaveLength(1);
+  expect(sequence.findIndex((entry) => entry.cmd === "set_config")).toBeLessThan(
+    sequence.findIndex((entry) => entry.cmd === "manual_reload"),
+  );
+  await expect(page.locator('#content-tabs [aria-selected="true"]')).toHaveAttribute(
+    "data-tab-id",
+    "arbitration",
+  );
+
+  await page.keyboard.press("r");
+  await page.locator("#palette-input").fill("reload");
+  await expect(page.locator("#palette-cands .cand", { hasText: "Reload" })).toHaveCount(1);
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#palette-overlay")).toBeHidden();
+  await expect(page.locator("#rail-msg")).toHaveText("Reload requested");
+  sequence = await calls(page);
+  reloads = sequence.filter((entry) => entry.cmd === "manual_reload");
+  expect(reloads).toHaveLength(2);
+  expect(sequence.some((entry) => entry.cmd === "apply_candidate" && entry.args.id === "action:reload")).toBe(false);
+  await expect(page.locator('#content-tabs [aria-selected="true"]')).toHaveAttribute(
+    "data-tab-id",
+    "arbitration",
+  );
+});`;
     default:
       throw new Error(`未知のrendererシナリオ: ${c.scenario} (${c.id})`);
   }
@@ -5664,6 +5699,22 @@ describe("${c.id}", () => {
     await expect($("#locale-select")).toHaveValue("zh-Hans");
     await expect($("#tab-fissures")).toHaveText("裂隙");
     await expectSynchronizedTitle("RELICO — 限时内容");
+  });
+});`;
+    case "manual_reload_ipc":
+      return `
+// ${c.id}: ${c.desc}
+describe("${c.id}", () => {
+  it("manual reload round-trips through real IPC", async () => {
+    await waitForInit();
+    const first = (await browser.tauri.execute(({ core }) =>
+      core.invoke("manual_reload"),
+    )) as number;
+    const second = (await browser.tauri.execute(({ core }) =>
+      core.invoke("manual_reload"),
+    )) as number;
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBeGreaterThan(first);
   });
 });`;
     default:

@@ -51,7 +51,7 @@ test("ICN-001 icn_001", async () => {
     ["faction", ["Grineer","Corpus","Infested","Orokin","Corrupted","Murmur","The Murmur"]],
     ["difficulty", ["Normal","SteelPath","Both"]],
     ["storm", ["Exclude","Include","Only"]],
-    ["action", ["new-rule","delete-rule","rename-rule","toggle-rule","notify-rule","deselect-all-rules","clear","pause"]],
+    ["action", ["new-rule","delete-rule","rename-rule","toggle-rule","notify-rule","deselect-all-rules","clear","pause","reload"]],
   ];
   for (const [kind, values] of pools) {
     // 未知値はカテゴリ別の汎用グリフへフォールバックし、例外を出さない

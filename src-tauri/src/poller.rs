@@ -222,16 +222,18 @@ pub fn notification_scope_changed(
 pub async fn run(
     app: AppHandle,
     mut cfg_rx: watch::Receiver<AppConfig>,
+    mut reload_rx: watch::Receiver<u64>,
     state: Arc<Mutex<PollerState>>,
     notified_path: PathBuf,
 ) {
     let client = http_client();
     let mut backoff = Backoff::new(60, 600);
     let mut seeded_scope: Option<FilterSettings> = None;
+    let mut manual = false;
 
     loop {
         let cfg = cfg_rx.borrow().clone();
-        let sleep_secs = if cfg.paused {
+        let sleep_secs = if cfg.paused && !manual {
             emit_snapshot(&app, &cfg, &state, |snap| {
                 snap.paused = true;
                 snap.notifications_muted =
@@ -248,6 +250,7 @@ pub async fn run(
                 &state,
                 &notified_path,
                 seeded_scope.as_ref(),
+                manual,
             )
             .await
             {
@@ -287,6 +290,7 @@ pub async fn run(
                 }
             }
         };
+        manual = false;
 
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(sleep_secs)) => {}
@@ -294,6 +298,12 @@ pub async fn run(
                 if changed.is_err() {
                     return; // 送信側が落ちた=アプリ終了
                 }
+            }
+            changed = reload_rx.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+                manual = true;
             }
         }
     }
@@ -306,6 +316,7 @@ async fn poll_once(
     state: &Arc<Mutex<PollerState>>,
     notified_path: &Path,
     seeded_scope: Option<&FilterSettings>,
+    manual: bool,
 ) -> Result<Option<FilterSettings>, String> {
     let fissures: Vec<Fissure> = client
         .get(API_URL)
@@ -320,7 +331,7 @@ async fn poll_once(
 
     // HTTP待機中に保存されたミュート・Pause・locale・ruleを、dedup/配送より前に採用する。
     let cfg = cfg_rx.borrow().clone();
-    if cfg.paused {
+    if cfg.paused && !manual {
         emit_snapshot(app, &cfg, state, |snap| {
             snap.paused = true;
             snap.notifications_muted = cfg.notifications_muted_at(Local::now());
@@ -343,7 +354,7 @@ async fn poll_once(
         st.reset_daily_counters(now.with_timezone(&Local));
         st.notified.prune(now);
 
-        let suppressed = if muted && !seed_only {
+        let suppressed = if !cfg.paused && muted && !seed_only {
             let mut unique_ids = HashSet::new();
             candidates
                 .iter()
@@ -354,7 +365,11 @@ async fn poll_once(
         } else {
             0
         };
-        let to_notify = select_notifications(&mut st.notified, candidates, seed_only, muted);
+        let to_notify = if cfg.paused {
+            vec![]
+        } else {
+            select_notifications(&mut st.notified, candidates, seed_only, muted)
+        };
 
         if let Err(e) = st.notified.save(notified_path) {
             eprintln!("notified set save failed: {e}");
@@ -365,11 +380,11 @@ async fn poll_once(
         st.snapshot.api_ok = true;
         st.snapshot.last_error = None;
         st.snapshot.last_poll = Some(now);
-        st.snapshot.next_poll_secs = cfg.effective_poll_secs();
+        st.snapshot.next_poll_secs = if cfg.paused { 0 } else { cfg.effective_poll_secs() };
         st.snapshot.notified_today += to_notify.len() as u32;
         st.snapshot.notifications_muted = muted;
         st.snapshot.suppressed_today += suppressed;
-        st.snapshot.paused = false;
+        st.snapshot.paused = cfg.paused;
         to_notify
     };
 
@@ -378,7 +393,7 @@ async fn poll_once(
     for f in &to_notify {
         notify::send(app, client, &cfg, f).await;
     }
-    Ok(Some(filter::notification_projection(&fcfg)))
+    Ok((!cfg.paused).then(|| filter::notification_projection(&fcfg)))
 }
 
 fn emit_snapshot(
