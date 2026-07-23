@@ -279,11 +279,6 @@ clauses: Listing<patterns.Clause> = new {
     scenario = "rich_details"
   }
   new patterns.TimedContentFixture {
-    id = "TMD-007"
-    desc = "ExportRegionsと英語辞書のfixtureから、亀裂表示用のnode表示名→enemy level範囲lookupを構築する。表示名は仲裁cardと同じ「Name (System)」でsystem欠落時はNameのみ、min/maxのlevelが欠落・逆転したentryはlookupへ含めずlevelを捏造しない。lookupはStatusSnapshotのnodeLevelsとしてcamelCaseでserializeされる"
-    scenario = "node_level_index"
-  }
-  new patterns.TimedContentFixture {
     id = "TMD-006"
     desc = "AreaはWFCDのCetus/Vallis/Cambion/Zariman/Duviri各cycleを状態allowlistと有効期間で検証し、earthCycleとDuviri choicesを重複表示しない。通常依頼はOstrons/Solaris United/Entratiの既知variantを保持し、Oracle BountyのHoldfasts/Cavia/Hexと合わせて6勢力を欠落させない。WFCD eventはHeatFissure/GhoulEmergence/InfestedPlainsのtag完全一致だけをactive cardへ正規化し、未知tagと期限切れを無視する。location-bountiesはCetus/Solaris/Entratiの非空location配列を独立sourceとしてExportBountiesと英語辞書へjoinし、job名をobjective候補として保持し、未知identifierはraw leafへfallbackする。expiry欠落・期限切れ・必須勢力欠落・空location・重複path・不正pathは部分成功せずLKGを上書きせず、WFCD通常依頼へ波及しない"
     scenario = "area_sources"
@@ -453,8 +448,8 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-013"
-    desc = "亀裂表のNODE列はbackend snapshotのnodeLevels(ExportRegions由来)に表示名が一致するnodeへLV {min}-{max}を併記し、鋼(isHard)の亀裂は基底levelへ+100した範囲を表示する。NODE列の表示幅が足りない場合はnode名をlevelより優先し、level側を先に省略する。行tooltipにはnode名とlevelの完全な値を含める。lookupにないnodeへはlevelを表示せず捏造しない。level表示は表示のみで設定・通知を変えない(renderer統合)"
-    scenario = "node_levels"
+    desc = "亀裂表のNODE列はnode名だけを表示し、enemy levelをLV表記で併記しない。行tooltipにもlevelを含めず、tier・node名・mission・enemy・mode・stormだけを含める。NODE列の表示幅が足りない場合はnode名を省略表示する。表示は設定・通知を変えない(renderer統合)"
+    scenario = "node_only"
   }
   new patterns.RendererScenario {
     id = "RND-011"

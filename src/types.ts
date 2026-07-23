@@ -207,8 +207,6 @@ export interface StatusSnapshot {
   /** backendが現在時刻と設定から判定した通知ミュート状態。TSでは再計算しない。 */
   notificationsMuted: boolean;
   suppressedToday: number;
-  /** 亀裂NODE表示用のnode表示名→[min, max] enemy level(ExportRegions由来) */
-  nodeLevels: Record<string, [number, number]>;
   timedContent: TimedContentSnapshot;
 }
 

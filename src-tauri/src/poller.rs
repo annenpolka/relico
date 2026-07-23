@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -79,8 +79,6 @@ pub struct StatusSnapshot {
     pub notifications_muted: bool,
     /// quiet-hours中に既知扱いとして破棄した新規通知数。
     pub suppressed_today: u32,
-    /// 亀裂NODE表示用のnode表示名→enemy level範囲(ExportRegions由来)。SPEC: TMD-007
-    pub node_levels: BTreeMap<String, [u32; 2]>,
     /// 亀裂とは独立した5分周期の時限コンテンツsnapshot。
     pub timed_content: TimedContentSnapshot,
     pub paused: bool,

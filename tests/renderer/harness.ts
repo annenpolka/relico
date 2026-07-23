@@ -183,13 +183,6 @@ function installMock({
       paused: false,
       notificationsMuted,
       suppressedToday: notificationsMuted ? 2 : 0,
-      // ExportRegions由来のnode level lookup。Nsu Grid (Veil Proxima)は意図的に欠落させ、
-      // lookupにないnodeへlevelを捏造しないこと(RND-013)の検査に使う。
-      // Taveuni行はisHard=trueのため表示は+100(RND-013)
-      nodeLevels: {
-        "Taveuni (Kuva Fortress)": [32, 37],
-        "Hepit (Void)": [10, 15],
-      } as Record<string, [number, number]>,
       timedContent: {
         arbitration: [
           {

@@ -608,28 +608,11 @@ td .flag {
   overflow: hidden;
 }
 
-td .icon-label > span:last-child:not(.t-level),
-td .icon-label > .t-node,
+td .icon-label > span:last-child,
 td .flag > span:last-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-td .icon-label > .t-node {
-  flex-shrink: 0;
-}
-
-/* NODE列のlevel併記。幅不足時はlevelを先に縮め、ノード名を優先する。RND-013 */
-td .icon-label > .t-level {
-  flex: 0 1000 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--dim);
-  font-size: 9.5px;
-  letter-spacing: 0.04em;
   white-space: nowrap;
 }
 
@@ -779,8 +762,7 @@ td .icon-label > .t-level {
     overflow: hidden;
   }
 
-  tbody td .icon-label > span:last-child:not(.t-level),
-  tbody td .icon-label > .t-node,
+  tbody td .icon-label > span:last-child,
   tbody td .flag > span:last-child {
     min-width: 0;
     overflow: hidden;
