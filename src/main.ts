@@ -736,17 +736,9 @@ function renderTable() {
         ? `<span class="flag t-storm">${glyphHtml("storm", "Only")}<span>${esc(t("table.stormValue").toUpperCase())}</span></span>`
         : `<span class="t-no-storm">—</span>`;
       const planet = planetForFissure(f.planet, f.isStorm);
-      // backend snapshotのnodeLevelsにあるnodeだけLVを併記する(捏造しない)。
-      // 鋼(isHard)は基底levelへ+100した範囲を表示する。RND-013
-      const baseLevels = status?.nodeLevels?.[f.node];
-      const hardOffset = f.isHard ? 100 : 0;
-      const levelText = baseLevels
-        ? t("table.level", { min: baseLevels[0] + hardOffset, max: baseLevels[1] + hardOffset })
-        : null;
       tr.title = [
         f.tier.toUpperCase(),
         f.node,
-        levelText,
         f.missionType.toUpperCase(),
         f.enemy.toUpperCase(),
         modeLabel,
@@ -756,7 +748,7 @@ function renderTable() {
         .join(" · ");
       tr.innerHTML = `
         <td class="col-tier t-tier"><span class="icon-label">${glyphHtml("tier", f.tier)}<span>${esc(f.tier.toUpperCase())}</span></span></td>
-        <td class="col-node"><span class="icon-label">${glyphHtml("planet", planet)}<span class="t-node">${esc(f.node)}</span>${levelText ? `<span class="t-level">${esc(levelText)}</span>` : ""}</span></td>
+        <td class="col-node"><span class="icon-label">${glyphHtml("planet", planet)}<span class="t-node">${esc(f.node)}</span></span></td>
         <td class="col-mission"><span class="icon-label">${glyphHtml("mission", f.missionType)}<span>${esc(f.missionType.toUpperCase())}</span></span></td>
         <td class="col-faction t-mute"><span class="icon-label">${glyphHtml("faction", f.enemy)}<span>${esc(f.enemy.toUpperCase())}</span></span></td>
         <td class="col-timer t-timer" data-expiry="${f.expiry}">--:--</td>

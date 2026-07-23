@@ -39,7 +39,6 @@ type Clause = {
     | "circuit"
     | "rich_details"
     | "area_sources"
-    | "node_level_index"
     | "glyph_known_values"
     | "planet_proxima_view"
     | "e2e_targeted_cleanup"
@@ -55,7 +54,7 @@ type Clause = {
     | "content_tabs"
     | "mute_window"
     | "locale_display"
-    | "node_levels"
+    | "node_only"
     | "content_alerts"
     | "filter_auto_tab"
     | "content_picker"
@@ -2532,116 +2531,6 @@ fn ${name}() {
             "${msg} (Dark Sector {key}={expected})",
         );
     }
-}`;
-      case "node_level_index":
-        return `
-/// ${c.id}: ${c.desc}
-#[test]
-fn ${name}() {
-    let now = base_now();
-    let schedule = format!(
-        "{},ClanNode7\\n{},ClanNode8\\n",
-        now.timestamp(),
-        (now + Duration::hours(1)).timestamp(),
-    );
-    let regions = serde_json::json!({
-        "ClanNode7": {
-            "name": "/node/Cholistan",
-            "systemName": "/system/Europa",
-            "missionName": "/mission/Excavation",
-            "faction": "FC_INFESTATION",
-            "minEnemyLevel": 23,
-            "maxEnemyLevel": 33
-        },
-        "ClanNode8": {
-            "name": "/node/Cholistan",
-            "systemName": "/system/Europa",
-            "missionName": "/mission/Excavation",
-            "faction": "FC_INFESTATION",
-            "minEnemyLevel": 23,
-            "maxEnemyLevel": 33
-        },
-        "SolNode900": {
-            "name": "/node/NoLevels",
-            "systemName": "/system/Europa",
-            "missionName": "/mission/Excavation",
-            "faction": "FC_INFESTATION"
-        },
-        "SolNode901": {
-            "name": "/node/Inverted",
-            "systemName": "/system/Europa",
-            "missionName": "/mission/Excavation",
-            "faction": "FC_INFESTATION",
-            "minEnemyLevel": 30,
-            "maxEnemyLevel": 20
-        },
-        "SolNode902": {
-            "name": "/node/Solo",
-            "systemName": "",
-            "missionName": "/mission/Excavation",
-            "faction": "FC_INFESTATION",
-            "minEnemyLevel": 5,
-            "maxEnemyLevel": 9
-        }
-    });
-    let challenges = serde_json::json!({
-        "/challenge/kill": {
-            "name": "/challenge/name",
-            "description": "/challenge/description",
-            "requiredCount": 10
-        }
-    });
-    let dictionary = serde_json::json!({
-        "/node/Cholistan": "Cholistan",
-        "/node/NoLevels": "No Levels",
-        "/node/Inverted": "Inverted",
-        "/node/Solo": "Solo",
-        "/system/Europa": "Europa",
-        "/mission/Excavation": "EXCAVATION",
-        "/challenge/name": "Operator",
-        "/challenge/description": "Kill |COUNT| enemies",
-        "/faction/infested": "INFESTED"
-    });
-    let factions = serde_json::json!({
-        "FC_INFESTATION": { "index": 2, "name": "/faction/infested" }
-    });
-    let assets = timed::parse_community_assets(
-        &schedule,
-        &regions.to_string(),
-        &challenges.to_string(),
-        &dictionary.to_string(),
-        &factions.to_string(),
-    )
-    .expect("Public Export fixtureを結合できること");
-
-    let levels = timed::node_level_index(&assets);
-    assert_eq!(
-        levels.get("Cholistan (Europa)"),
-        Some(&[23u32, 33u32]),
-        "${msg} (Name (System)表示名でのlookup)",
-    );
-    assert_eq!(
-        levels.get("Solo"),
-        Some(&[5u32, 9u32]),
-        "${msg} (system欠落時はNameのみ)",
-    );
-    assert!(
-        !levels.keys().any(|key| key.contains("No Levels")),
-        "${msg} (level欠落entryを捏造した)",
-    );
-    assert!(
-        !levels.keys().any(|key| key.contains("Inverted")),
-        "${msg} (逆転level entryを含めた)",
-    );
-
-    let mut snapshot = poller::StatusSnapshot::default();
-    snapshot.node_levels = levels;
-    let value = serde_json::to_value(&snapshot).expect("StatusSnapshotをserializeできること");
-    assert_eq!(
-        value["nodeLevels"]["Cholistan (Europa)"],
-        serde_json::json!([23, 33]),
-        "${msg} (camelCase nodeLevels wire)",
-    );
 }`;
       case "oracle_bounties":
         return `
@@ -5142,39 +5031,25 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
   // 個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。
   await expect(page.locator(".timed-progress-note")).toHaveCount(0);
 });`;
-    case "node_levels":
+    case "node_only":
       return `
 // ${c.id}: ${c.desc}
-test("${c.id} node levels in fissure table", async ({ page }) => {
+test("${c.id} node-only fissure table", async ({ page }) => {
   await page.setViewportSize({ width: 720, height: 620 });
   await bootConsole(page);
-  // 鋼(isHard)の亀裂は基底node levelへ+100した範囲を表示する
+  // 通常・鋼・VOID嵐のいずれもNODE列はnode名だけを表示する
   const kuva = page.locator("#fissure-rows tr", { hasText: "Taveuni" });
-  await expect(kuva.locator(".col-node .t-level")).toHaveText("LV 132-137");
-  // 通常亀裂は基底levelをそのまま表示する
   const normal = page.locator("#fissure-rows tr", { hasText: "Hepit" });
+  const storm = page.locator("#fissure-rows tr", { hasText: "Nsu Grid" });
+  await expect(kuva.locator(".col-node .t-node")).toHaveText("Taveuni (Kuva Fortress)");
   await expect(normal.locator(".col-node .t-node")).toHaveText("Hepit (Void)");
-  await expect(normal.locator(".col-node .t-level")).toHaveText("LV 10-15");
-  // NODE列の幅が足りない場合はlevelを先に省略し、node名を優先する
-  const kuvaNode = kuva.locator(".col-node .t-node");
-  const kuvaLevel = kuva.locator(".col-node .t-level");
-  expect(await kuvaNode.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-  expect(
-    await kuvaNode.evaluate((el) => {
-      const parent = el.parentElement;
-      return parent !== null && el.getBoundingClientRect().right <= parent.getBoundingClientRect().right + 1;
-    }),
-  ).toBe(true);
-  expect(await kuvaLevel.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
-  // 行tooltipにも同じ値を含める
-  expect(await kuva.getAttribute("title")).toContain("LV 132-137");
-  expect(await normal.getAttribute("title")).toContain("LV 10-15");
-  // lookupにないnodeへはlevelを表示しない(捏造しない)
-  const unknown = page.locator("#fissure-rows tr", { hasText: "Nsu Grid" });
-  await expect(unknown.locator(".col-node .t-node")).toHaveText("Nsu Grid (Veil Proxima)");
-  await expect(unknown.locator(".col-node .t-level")).toHaveCount(0);
-  expect(await unknown.getAttribute("title")).not.toContain("LV");
-  // level表示は表示のみ: 設定・通知の変更を呼ばない
+  await expect(storm.locator(".col-node .t-node")).toHaveText("Nsu Grid (Veil Proxima)");
+  await expect(page.locator("#fissure-rows .t-level")).toHaveCount(0);
+  const levelField = /(?:^| · )LV \\d+-\\d+(?: · |$)/;
+  expect(await kuva.getAttribute("title")).not.toMatch(levelField);
+  expect(await normal.getAttribute("title")).not.toMatch(levelField);
+  expect(await storm.getAttribute("title")).not.toMatch(levelField);
+  // node表示は設定・通知の変更を呼ばない
   expect(
     (await calls(page)).filter((entry) =>
       ["set_config", "set_rule_enabled", "set_rule_notify", "apply_candidate"].includes(entry.cmd),

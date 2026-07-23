@@ -310,53 +310,6 @@ pub(crate) fn parse_shared_community_assets(
     })
 }
 
-/// 亀裂NODE表示用: ExportRegions+英語辞書からnode表示名→enemy level範囲のlookupを構築する。
-/// 表示名は仲裁cardと同じ「Name (System)」でsystem欠落時はNameのみ。
-/// min/maxのlevelが欠落・逆転したentryは含めない(levelを捏造しない)。SPEC: TMD-007
-pub(crate) fn node_level_index_from_shared(
-    shared: &SharedCommunityAssets,
-) -> BTreeMap<String, [u32; 2]> {
-    let mut index = BTreeMap::new();
-    for region in shared.regions.values() {
-        let (Some(minimum), Some(maximum)) = (region.min_enemy_level, region.max_enemy_level)
-        else {
-            continue;
-        };
-        if minimum > maximum {
-            continue;
-        }
-        let name = resolve_text(shared, &region.name);
-        if name.trim().is_empty() {
-            continue;
-        }
-        let system = resolve_text(shared, &region.system_name);
-        let display = if system.trim().is_empty() {
-            name
-        } else {
-            format!("{name} ({system})")
-        };
-        index.insert(display, [minimum, maximum]);
-    }
-    index
-}
-
-/// fixture API: 結合済みcommunity assetsからnode level lookupを得る。SPEC: TMD-007
-pub fn node_level_index(assets: &CommunityAssets) -> BTreeMap<String, [u32; 2]> {
-    node_level_index_from_shared(&assets.arbitration.shared)
-}
-
-impl ArbitrationAssets {
-    pub(crate) fn node_level_index(&self) -> BTreeMap<String, [u32; 2]> {
-        node_level_index_from_shared(&self.shared)
-    }
-}
-
-impl BountyAssets {
-    pub(crate) fn node_level_index(&self) -> BTreeMap<String, [u32; 2]> {
-        node_level_index_from_shared(&self.shared)
-    }
-}
-
 pub(crate) fn parse_arbitration_assets(
     schedule_body: &str,
     shared: Arc<SharedCommunityAssets>,

@@ -1012,37 +1012,23 @@ test("RND-014 per-tab rule management", async ({ page }) => {
   await expect(page.locator("#mute-check")).toHaveAttribute("aria-pressed", "false");
 });
 
-// RND-013: 亀裂表のNODE列はbackend snapshotのnodeLevels(ExportRegions由来)に表示名が一致するnodeへLV {min}-{max}を併記し、鋼(isHard)の亀裂は基底levelへ+100した範囲を表示する。NODE列の表示幅が足りない場合はnode名をlevelより優先し、level側を先に省略する。行tooltipにはnode名とlevelの完全な値を含める。lookupにないnodeへはlevelを表示せず捏造しない。level表示は表示のみで設定・通知を変えない(renderer統合)
-test("RND-013 node levels in fissure table", async ({ page }) => {
+// RND-013: 亀裂表のNODE列はnode名だけを表示し、enemy levelをLV表記で併記しない。行tooltipにもlevelを含めず、tier・node名・mission・enemy・mode・stormだけを含める。NODE列の表示幅が足りない場合はnode名を省略表示する。表示は設定・通知を変えない(renderer統合)
+test("RND-013 node-only fissure table", async ({ page }) => {
   await page.setViewportSize({ width: 720, height: 620 });
   await bootConsole(page);
-  // 鋼(isHard)の亀裂は基底node levelへ+100した範囲を表示する
+  // 通常・鋼・VOID嵐のいずれもNODE列はnode名だけを表示する
   const kuva = page.locator("#fissure-rows tr", { hasText: "Taveuni" });
-  await expect(kuva.locator(".col-node .t-level")).toHaveText("LV 132-137");
-  // 通常亀裂は基底levelをそのまま表示する
   const normal = page.locator("#fissure-rows tr", { hasText: "Hepit" });
+  const storm = page.locator("#fissure-rows tr", { hasText: "Nsu Grid" });
+  await expect(kuva.locator(".col-node .t-node")).toHaveText("Taveuni (Kuva Fortress)");
   await expect(normal.locator(".col-node .t-node")).toHaveText("Hepit (Void)");
-  await expect(normal.locator(".col-node .t-level")).toHaveText("LV 10-15");
-  // NODE列の幅が足りない場合はlevelを先に省略し、node名を優先する
-  const kuvaNode = kuva.locator(".col-node .t-node");
-  const kuvaLevel = kuva.locator(".col-node .t-level");
-  expect(await kuvaNode.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-  expect(
-    await kuvaNode.evaluate((el) => {
-      const parent = el.parentElement;
-      return parent !== null && el.getBoundingClientRect().right <= parent.getBoundingClientRect().right + 1;
-    }),
-  ).toBe(true);
-  expect(await kuvaLevel.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
-  // 行tooltipにも同じ値を含める
-  expect(await kuva.getAttribute("title")).toContain("LV 132-137");
-  expect(await normal.getAttribute("title")).toContain("LV 10-15");
-  // lookupにないnodeへはlevelを表示しない(捏造しない)
-  const unknown = page.locator("#fissure-rows tr", { hasText: "Nsu Grid" });
-  await expect(unknown.locator(".col-node .t-node")).toHaveText("Nsu Grid (Veil Proxima)");
-  await expect(unknown.locator(".col-node .t-level")).toHaveCount(0);
-  expect(await unknown.getAttribute("title")).not.toContain("LV");
-  // level表示は表示のみ: 設定・通知の変更を呼ばない
+  await expect(storm.locator(".col-node .t-node")).toHaveText("Nsu Grid (Veil Proxima)");
+  await expect(page.locator("#fissure-rows .t-level")).toHaveCount(0);
+  const levelField = /(?:^| · )LV \d+-\d+(?: · |$)/;
+  expect(await kuva.getAttribute("title")).not.toMatch(levelField);
+  expect(await normal.getAttribute("title")).not.toMatch(levelField);
+  expect(await storm.getAttribute("title")).not.toMatch(levelField);
+  // node表示は設定・通知の変更を呼ばない
   expect(
     (await calls(page)).filter((entry) =>
       ["set_config", "set_rule_enabled", "set_rule_notify", "apply_candidate"].includes(entry.cmd),

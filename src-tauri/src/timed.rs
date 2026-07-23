@@ -24,10 +24,10 @@ use browse_wf::{
 };
 
 pub use browse_wf::{
-    arbitration_card, arbitration_slot_at, node_level_index, parse_arbitration_schedule,
-    parse_bounty_cards, parse_bounty_cycle_json, parse_community_assets,
-    parse_location_bounty_assets, parse_location_bounty_cards, ArbitrationSchedule,
-    ArbitrationSlot, CommunityAssets, LocationBountyAssets,
+    arbitration_card, arbitration_slot_at, parse_arbitration_schedule, parse_bounty_cards,
+    parse_bounty_cycle_json, parse_community_assets, parse_location_bounty_assets,
+    parse_location_bounty_cards, ArbitrationSchedule, ArbitrationSlot, CommunityAssets,
+    LocationBountyAssets,
 };
 pub use de::{parse_circuit_json, parse_descents_json};
 pub use wfcd::{parse_wfcd_json, WfcdTimedContent};
@@ -1105,20 +1105,6 @@ pub async fn run(
         )
         .await;
         cache.record_derivation(now, asset_feedback);
-        // 亀裂NODE表示用のlevel lookup。検証済みasset(LKG)がある間だけ置換し、
-        // asset未取得時は前回値を保持する。SPEC: TMD-007
-        let node_levels = cache
-            .arbitration
-            .value
-            .as_ref()
-            .map(|assets| assets.node_level_index())
-            .or_else(|| {
-                cache
-                    .bounties
-                    .value
-                    .as_ref()
-                    .map(|assets| assets.node_level_index())
-            });
         // HTTP待機中に保存された最新のcontentRules・ミュート・Pauseで通知を評価する。
         let cfg = cfg_rx.borrow().clone();
         let mut to_notify: Vec<TimedContent> = vec![];
@@ -1129,9 +1115,6 @@ pub async fn run(
                 .snapshot
                 .timed_content
                 .apply_poll_with_asset_health(now, results, asset_health);
-            if let Some(node_levels) = node_levels {
-                state.snapshot.node_levels = node_levels;
-            }
             // PAUSE中は評価もmarkもしない(亀裂pollerのHTTP停止と同じ姿勢)
             if !cfg.paused {
                 let seed_only =
