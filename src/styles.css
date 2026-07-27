@@ -554,6 +554,35 @@ body {
   min-width: 0;
 }
 
+.arbitration-prediction-tier {
+  flex: 0 0 auto;
+  min-width: 42px;
+  padding: 2px 5px;
+  border: 1px solid currentColor;
+  color: var(--dim);
+  font-size: 9px;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.arbitration-prediction-tier.tier-s {
+  color: var(--cyan);
+}
+
+.arbitration-prediction-tier.tier-a {
+  color: var(--ink);
+}
+
+.arbitration-prediction-tier.tier-b {
+  color: var(--amber);
+}
+
+.arbitration-prediction-tier.tier-d,
+.arbitration-prediction-tier.tier-f {
+  color: var(--red);
+}
+
 .arbitration-prediction-mission {
   color: var(--ink);
   font-size: 11px;

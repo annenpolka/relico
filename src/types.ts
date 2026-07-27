@@ -83,6 +83,7 @@ export type TimedSourceId =
   | "wfcd-worldstate"
   | "de-worldstate"
   | "browse-wf-arbitration-schedule"
+  | "browse-wf-arbitration-tiers"
   | "browse-wf-bounty-cycle"
   | "browse-wf-location-bounties"
   | "browse-wf-export-bounties"

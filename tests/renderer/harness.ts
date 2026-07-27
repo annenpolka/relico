@@ -92,6 +92,7 @@ function installMock({
     validUntil,
     error: null as string | null,
   });
+  const arbitrationTiers = ["S", "A", "B", "C", "D", "F"];
   const arbitrationPredictions = Array.from({ length: 24 }, (_, index) => ({
     id: `arbitration-future-${index + 1}`,
     kind: "arbitration",
@@ -103,12 +104,19 @@ function installMock({
     temporalStatus: "upcoming" as const,
     provenance: {
       kind: "community-schedule" as const,
-      contributors: ["browse-wf-arbitration-schedule", "browse-wf-regions"],
+      contributors: [
+        "browse-wf-arbitration-schedule",
+        "browse-wf-arbitration-tiers",
+        "browse-wf-regions",
+      ],
     },
     sourceId: "browse-wf-arbitration-schedule",
     sourceName: "browse.wf schedule",
     sourceUrl: "https://browse.wf/arbys.txt",
-    metadata: [{ key: "faction", value: index % 2 === 0 ? "Grineer" : "Corpus" }],
+    metadata: [
+      { key: "arbitrationTier", value: arbitrationTiers[index % arbitrationTiers.length] },
+      { key: "faction", value: index % 2 === 0 ? "Grineer" : "Corpus" },
+    ],
     personalModifiers: [],
     stages: [
       {
@@ -232,12 +240,19 @@ function installMock({
             temporalStatus: "active",
             provenance: {
               kind: "community-schedule",
-              contributors: ["browse-wf-arbitration-schedule", "browse-wf-regions"],
+              contributors: [
+                "browse-wf-arbitration-schedule",
+                "browse-wf-arbitration-tiers",
+                "browse-wf-regions",
+              ],
             },
             sourceId: "browse-wf-arbitration-schedule",
             sourceName: "browse.wf schedule",
             sourceUrl: "https://browse.wf/arbys.txt",
-            metadata: [{ key: "faction", value: "Infested" }],
+            metadata: [
+              { key: "arbitrationTier", value: "S" },
+              { key: "faction", value: "Infested" },
+            ],
             personalModifiers: [],
             stages: [
               {

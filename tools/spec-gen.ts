@@ -2374,6 +2374,7 @@ fn ${name}() {
         kind: timed::TimedSourceKind::CommunitySchedule,
         contributors: vec![
             timed::TimedSourceId::BrowseWfArbitrationSchedule,
+            timed::TimedSourceId::BrowseWfArbitrationTiers,
             timed::TimedSourceId::BrowseWfRegions,
         ],
     };
@@ -2434,7 +2435,11 @@ fn ${name}() {
     assert_eq!(value["circuit"][0]["provenance"]["kind"], "official-live", "${msg} (official provenance)");
     assert_eq!(
         value["arbitration"][0]["provenance"]["contributors"],
-        serde_json::json!(["browse-wf-arbitration-schedule", "browse-wf-regions"]),
+        serde_json::json!([
+            "browse-wf-arbitration-schedule",
+            "browse-wf-arbitration-tiers",
+            "browse-wf-regions"
+        ]),
         "${msg} (物理contributor ID群)",
     );
     assert_eq!(value["sources"]["wfcd"]["freshness"], "fresh", "${msg} (fresh wire)");
@@ -2512,6 +2517,7 @@ fn ${name}() {
     });
     let assets = timed::parse_community_assets(
         &schedule,
+        "window.arbyTiers = { ClanNode0: \\"S\\", ClanNode1: \\"B\\" };",
         &regions.to_string(),
         &challenges.to_string(),
         &dictionary.to_string(),
@@ -2527,6 +2533,16 @@ fn ${name}() {
     assert_eq!(predictions.len(), timed::ARBITRATION_PREDICTION_LIMIT, "${msg} (最大168件)");
     assert!(predictions.iter().all(|card| card.temporal_status == timed::TimedTemporalStatus::Upcoming), "${msg} (upcoming区分)");
     assert_eq!(predictions[0].activation, Some(now + Duration::hours(1)), "${msg} (現在直後から開始)");
+    assert_eq!(
+        current.metadata.iter().find(|item| item.key == "arbitrationTier").map(|item| item.value.as_str()),
+        Some("S"),
+        "${msg} (現在slot Tier)",
+    );
+    assert_eq!(
+        predictions[0].metadata.iter().find(|item| item.key == "arbitrationTier").map(|item| item.value.as_str()),
+        Some("B"),
+        "${msg} (予測slot Tier)",
+    );
     assert_eq!(
         predictions.last().and_then(|card| card.activation),
         Some(now + Duration::hours(timed::ARBITRATION_PREDICTION_LIMIT as i64)),
@@ -2597,12 +2613,25 @@ fn ${name}() {
     });
     let assets = timed::parse_community_assets(
         &schedule,
+        "window.arbyTiers = { ClanNode7: \\"A\\" };",
         &regions.to_string(),
         &challenges.to_string(),
         &dictionary.to_string(),
         &factions.to_string(),
     )
     .expect("Public Export fixtureを結合できること");
+    assert!(
+        timed::parse_community_assets(
+            &schedule,
+            "window.arbyTiers = { ClanNode7: \\"F\\" };",
+            &regions.to_string(),
+            &challenges.to_string(),
+            &dictionary.to_string(),
+            &factions.to_string(),
+        )
+        .is_err(),
+        "${msg} (Tier表はS/A/B/C/Dだけを受理)",
+    );
     let card = timed::arbitration_card(&assets, now + Duration::seconds(1))
         .expect("対象時刻の仲裁cardを生成できること");
 
@@ -2618,6 +2647,18 @@ fn ${name}() {
     assert_eq!(card.stages[0].node.as_deref(), Some("Cholistan (Europa)"), "${msg} (node/惑星)");
     assert_eq!(card.stages[0].detail.as_deref(), Some("Infested"), "${msg} (faction)");
     assert_eq!(card.stages[0].enemy_levels, vec![23, 33], "${msg} (enemy level)");
+    assert_eq!(
+        card.metadata.iter().find(|item| item.key == "arbitrationTier").map(|item| item.value.as_str()),
+        Some("A"),
+        "${msg} (Arbitration Goons Tier)",
+    );
+    let unlisted = timed::arbitration_card(&assets, now + Duration::hours(1) + Duration::seconds(1))
+        .expect("Tier表未掲載nodeもcard化できること");
+    assert_eq!(
+        unlisted.metadata.iter().find(|item| item.key == "arbitrationTier").map(|item| item.value.as_str()),
+        Some("F"),
+        "${msg} (未掲載nodeはF)",
+    );
     for (key, expected) in [
         ("resourceBonusPercent", "25"),
         ("xpBonusPercent", "18"),
@@ -2704,6 +2745,7 @@ fn ${name}() {
     });
     let assets = timed::parse_community_assets(
         &schedule,
+        "window.arbyTiers = { ClanNode7: \\"S\\" };",
         &regions.to_string(),
         &challenges.to_string(),
         &dictionary.to_string(),
@@ -2789,6 +2831,7 @@ fn ${name}() {
     });
     let assets = timed::parse_community_assets(
         &schedule,
+        "window.arbyTiers = { ClanNode7: \\"S\\" };",
         &regions.to_string(),
         &challenges.to_string(),
         &dictionary.to_string(),
@@ -2869,6 +2912,7 @@ fn ${name}() {
     let raw_dictionary = serde_json::json!({"unrelated":"value"});
     let raw_assets = timed::parse_community_assets(
         &schedule,
+        "window.arbyTiers = { ClanNode7: \\"S\\" };",
         &regions.to_string(),
         &challenges.to_string(),
         &raw_dictionary.to_string(),
@@ -5138,6 +5182,8 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
   await expect(arbitrationTimer).toHaveCount(1);
   await expect(arbitrationTimer).toHaveText(/^\\d+:\\d{2}(:\\d{2})?$/);
   expect(await arbitration.textContent()).not.toContain("Starts ");
+  await expect(arbitration.locator(".timed-meta")).toContainText("Tier");
+  await expect(arbitration.locator(".timed-meta")).toContainText("S");
   await expect(arbitration.locator(".timed-source-link")).toHaveAttribute(
     "href",
     /browse\\.wf/,
@@ -5153,6 +5199,9 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
   await expect(arbitrationPredictions).toHaveCount(24);
   await expect(arbitrationPredictions.first()).toHaveAttribute("data-temporal-status", "upcoming");
   await expect(arbitrationPredictions.first().locator("time[datetime]")).toHaveCount(1);
+  await expect(arbitrationPredictions.first().locator(".arbitration-prediction-tier")).toHaveAttribute("data-tier", "S");
+  await expect(arbitrationPredictions.first().locator(".arbitration-prediction-tier")).toContainText("S Tier");
+  await expect(arbitrationPredictions.nth(5).locator(".arbitration-prediction-tier")).toHaveAttribute("data-tier", "F");
   await expect(arbitrationPredictions.first().locator(".arbitration-prediction-mission")).toContainText("Defense");
   await expect(arbitrationPredictions.first().locator(".arbitration-prediction-node")).toContainText("Hydron (Sedna)");
   await expect(arbitrationPredictions.first().locator(".t-timer[data-activation]")).toHaveCount(1);

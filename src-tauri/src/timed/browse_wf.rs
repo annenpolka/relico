@@ -85,6 +85,7 @@ pub(crate) struct SharedCommunityAssets {
 #[derive(Debug, Clone)]
 pub(crate) struct ArbitrationAssets {
     schedule: ArbitrationSchedule,
+    tiers: BTreeMap<String, String>,
     shared: Arc<SharedCommunityAssets>,
 }
 
@@ -268,6 +269,7 @@ pub fn arbitration_slot_at(
 
 pub fn parse_community_assets(
     schedule_body: &str,
+    arbitration_tiers_body: &str,
     regions_body: &str,
     challenges_body: &str,
     dictionary_body: &str,
@@ -278,7 +280,8 @@ pub fn parse_community_assets(
         dictionary_body,
         factions_body,
     )?);
-    let arbitration = parse_arbitration_assets(schedule_body, Arc::clone(&shared))?;
+    let arbitration =
+        parse_arbitration_assets(schedule_body, arbitration_tiers_body, Arc::clone(&shared))?;
     let bounties = parse_bounty_assets(challenges_body, shared)?;
     Ok(CommunityAssets {
         arbitration,
@@ -360,9 +363,11 @@ impl BountyAssets {
 
 pub(crate) fn parse_arbitration_assets(
     schedule_body: &str,
+    arbitration_tiers_body: &str,
     shared: Arc<SharedCommunityAssets>,
 ) -> Result<ArbitrationAssets, TimedSourceError> {
     let schedule = parse_arbitration_schedule(schedule_body)?;
+    let tiers = parse_arbitration_tiers(arbitration_tiers_body)?;
 
     let mut unresolved = BTreeSet::new();
     for slot in &schedule.slots {
@@ -405,7 +410,73 @@ pub(crate) fn parse_arbitration_assets(
         )));
     }
 
-    Ok(ArbitrationAssets { schedule, shared })
+    Ok(ArbitrationAssets {
+        schedule,
+        tiers,
+        shared,
+    })
+}
+
+fn parse_arbitration_tiers(body: &str) -> Result<BTreeMap<String, String>, TimedSourceError> {
+    const ASSIGNMENT: &str = "window.arbyTiers";
+    let assignment = body
+        .find(ASSIGNMENT)
+        .ok_or_else(|| TimedSourceError::failed("arbyTiers.js lacks window.arbyTiers"))?;
+    let object_start = body[assignment + ASSIGNMENT.len()..]
+        .find('{')
+        .map(|offset| assignment + ASSIGNMENT.len() + offset + 1)
+        .ok_or_else(|| TimedSourceError::failed("arbyTiers.js lacks object start"))?;
+    let object_end = body[object_start..]
+        .find('}')
+        .map(|offset| object_start + offset)
+        .ok_or_else(|| TimedSourceError::failed("arbyTiers.js lacks object end"))?;
+
+    let mut tiers = BTreeMap::new();
+    for (entry_index, raw_entry) in body[object_start..object_end].split(',').enumerate() {
+        let entry = raw_entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let (raw_node, raw_tier) = entry.split_once(':').ok_or_else(|| {
+            TimedSourceError::failed(format!(
+                "arbyTiers.js entry {} must contain node:tier",
+                entry_index + 1
+            ))
+        })?;
+        let node = raw_node
+            .trim()
+            .trim_matches(|character| character == '"' || character == '\'');
+        if node.is_empty()
+            || !node
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_')
+        {
+            return Err(TimedSourceError::failed(format!(
+                "arbyTiers.js entry {} has invalid node key",
+                entry_index + 1
+            )));
+        }
+        let tier = raw_tier
+            .trim()
+            .trim_matches(|character| character == '"' || character == '\'');
+        if !matches!(tier, "S" | "A" | "B" | "C" | "D") {
+            return Err(TimedSourceError::failed(format!(
+                "arbyTiers.js entry {} has invalid tier {tier}",
+                entry_index + 1
+            )));
+        }
+        if tiers.insert(node.to_string(), tier.to_string()).is_some() {
+            return Err(TimedSourceError::failed(format!(
+                "arbyTiers.js contains duplicate node {node}"
+            )));
+        }
+    }
+    if tiers.is_empty() {
+        return Err(TimedSourceError::failed(
+            "arbyTiers.js contains an empty tier table",
+        ));
+    }
+    Ok(tiers)
 }
 
 pub(crate) fn parse_bounty_assets(
@@ -632,6 +703,14 @@ fn arbitration_card_for_slot(
             value: slot.node_key.clone(),
         },
         TimedMetadata {
+            key: "arbitrationTier".to_string(),
+            value: assets
+                .tiers
+                .get(&slot.node_key)
+                .cloned()
+                .unwrap_or_else(|| "F".to_string()),
+        },
+        TimedMetadata {
             key: "faction".to_string(),
             value: faction,
         },
@@ -677,6 +756,7 @@ fn arbitration_card_for_slot(
             kind: TimedSourceKind::CommunitySchedule,
             contributors: vec![
                 TimedSourceId::BrowseWfArbitrationSchedule,
+                TimedSourceId::BrowseWfArbitrationTiers,
                 TimedSourceId::BrowseWfRegions,
                 TimedSourceId::BrowseWfDictionaryEn,
                 TimedSourceId::BrowseWfFactions,
@@ -1041,6 +1121,7 @@ mod tests {
         });
         parse_community_assets(
             &schedule,
+            "window.arbyTiers = { ClanNode7: \"S\" };",
             &regions.to_string(),
             &challenges.to_string(),
             &dictionary.to_string(),
@@ -1181,9 +1262,53 @@ mod tests {
                 )
                 .unwrap(),
             );
-            let error = parse_arbitration_assets(&schedule, shared).unwrap_err();
+            let error = parse_arbitration_assets(
+                &schedule,
+                "window.arbyTiers = { ClanNode7: \"S\" };",
+                shared,
+            )
+            .unwrap_err();
             assert!(error.to_string().contains("enemy levels"));
         }
+    }
+
+    #[test]
+    fn arbitration_tiers_validate_grades_and_default_unlisted_nodes_to_f() {
+        let tiers = parse_arbitration_tiers(
+            r#"
+                // Credit to the Arbitration Goons.
+                window.arbyTiers = {
+                    SolNode450: "S",
+                    ClanNode24: "B",
+                };
+            "#,
+        )
+        .unwrap();
+        assert_eq!(tiers.get("SolNode450").map(String::as_str), Some("S"));
+        assert_eq!(tiers.get("ClanNode24").map(String::as_str), Some("B"));
+        assert!(parse_arbitration_tiers("window.arbyTiers = { SolNode1: \"F\" };").is_err());
+        assert!(parse_arbitration_tiers("window.arbyTiers = {};").is_err());
+
+        let assets = asset_fixture(json!({"unrelated":"value"}));
+        let card = arbitration_card(&assets, at(FIRST_EPOCH + 1)).unwrap();
+        assert_eq!(
+            card.metadata
+                .iter()
+                .find(|item| item.key == "arbitrationTier")
+                .map(|item| item.value.as_str()),
+            Some("S")
+        );
+
+        let mut unlisted_assets = assets;
+        unlisted_assets.arbitration.tiers.clear();
+        let card = arbitration_card(&unlisted_assets, at(FIRST_EPOCH + 1)).unwrap();
+        assert_eq!(
+            card.metadata
+                .iter()
+                .find(|item| item.key == "arbitrationTier")
+                .map(|item| item.value.as_str()),
+            Some("F")
+        );
     }
 
     #[test]
@@ -1192,7 +1317,7 @@ mod tests {
         let card = arbitration_card(&assets, at(FIRST_EPOCH + 1)).unwrap();
         assert_eq!(card.temporal_status, TimedTemporalStatus::Active);
         assert_eq!(card.provenance.kind, TimedSourceKind::CommunitySchedule);
-        assert_eq!(card.provenance.contributors.len(), 4);
+        assert_eq!(card.provenance.contributors.len(), 5);
         assert_eq!(card.stages[0].title, "/mission/Excavation");
         assert_eq!(
             card.stages[0].node.as_deref(),

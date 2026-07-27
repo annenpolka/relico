@@ -868,6 +868,7 @@ const TIMED_METADATA_KEYS: Partial<Record<string, MessageKey>> = {
   vaultRotation: "timed.vaultRotation",
   zarimanFaction: "timed.faction",
   faction: "timed.faction",
+  arbitrationTier: "timed.arbitrationTier",
   week: "timed.week",
   state: "timed.environmentState",
 };
@@ -1429,6 +1430,14 @@ function arbitrationPredictionsElement(cards: TimedContentCard[]): HTMLElement |
 
     const body = document.createElement("div");
     body.className = "arbitration-prediction-body";
+    const tierValue = card.metadata?.find((item) => item.key === "arbitrationTier")?.value;
+    if (tierValue && /^(S|A|B|C|D|F)$/.test(tierValue)) {
+      const tier = document.createElement("span");
+      tier.className = `arbitration-prediction-tier tier-${tierValue.toLowerCase()}`;
+      tier.dataset.tier = tierValue;
+      tier.textContent = t("timed.arbitrationTierBadge", { tier: tierValue });
+      body.append(tier);
+    }
     const mission = document.createElement("span");
     mission.className = "icon-label arbitration-prediction-mission";
     mission.innerHTML = `${stageGlyphHtml(card, stage)}<span>${esc(timedStageTitle(card, stage))}</span>`;

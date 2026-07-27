@@ -537,7 +537,7 @@ test("RND-009 serializes rapid new rule and filter apply", async ({ page }) => {
   expect(after[2]).toMatchObject({ enabled: true, notify: false, tiers: ["Axi"] });
 });
 
-// RND-010: コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁の現在cardはcommunity schedule・browse.wf出典で絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示する。仲裁の将来予測は現在cardの後に「今後の予測」として最大168行をactivation昇順で表示し、各行はローカル開始日時・mission・node・開始までのdata-activationカウントダウンを持ち、予測一覧自身を縦スクロールできる。将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。DescendiaのSpecs/Aurasは生のLotus pathを本文へ表示せず、path leafを人間可読ラベル(CoH接頭辞とSpec/Aura接尾辞を除去しcamelCaseを分かち書き)へ整形して表示し、整形前のraw識別子はtooltipへ保持する。Descendiaのactive cardはupcoming行と同じくpanel全幅の単一列で表示し、multi-card gridの分割幅で細長く積まない。Circuitタブは現在のデュヴィリのスパイラル(WFCD由来の環境サイクルcard。状態ラベルと残り時間カウントダウン付き)をCircuit cardの前へ併記し、WFCD sourceの障害はこのタブでも表示できる。スパイラルcardはArea環境サイクルの表示からも取り除かない。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。パレットのGO TO {タブ}候補は対応タブへ切り替えてパレットを閉じ、ルール・設定を変更しない。タブ列が横幅からあふれるときは、あふれている側だけにedge fadeヒント(scrolled-start/scrolled-end)を付けてスクロール可能性を示し、native scrollbarより控えめな細いテーマ色バーを使う。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)
+// RND-010: コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁の現在cardはcommunity schedule・browse.wf出典・Tier評価を持ち、絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示する。仲裁の将来予測は現在cardの後に「今後の予測」として最大168行をactivation昇順で表示し、各行はローカル開始日時・Tier・mission・node・開始までのdata-activationカウントダウンを持ち、予測一覧自身を縦スクロールできる。将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。DescendiaのSpecs/Aurasは生のLotus pathを本文へ表示せず、path leafを人間可読ラベル(CoH接頭辞とSpec/Aura接尾辞を除去しcamelCaseを分かち書き)へ整形して表示し、整形前のraw識別子はtooltipへ保持する。Descendiaのactive cardはupcoming行と同じくpanel全幅の単一列で表示し、multi-card gridの分割幅で細長く積まない。Circuitタブは現在のデュヴィリのスパイラル(WFCD由来の環境サイクルcard。状態ラベルと残り時間カウントダウン付き)をCircuit cardの前へ併記し、WFCD sourceの障害はこのタブでも表示できる。スパイラルcardはArea環境サイクルの表示からも取り除かない。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。パレットのGO TO {タブ}候補は対応タブへ切り替えてパレットを閉じ、ルール・設定を変更しない。タブ列が横幅からあふれるときは、あふれている側だけにedge fadeヒント(scrolled-start/scrolled-end)を付けてスクロール可能性を示し、native scrollbarより控えめな細いテーマ色バーを使う。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)
 test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 620 });
   await bootConsole(page, { locale: "en" });
@@ -664,6 +664,8 @@ test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   await expect(arbitrationTimer).toHaveCount(1);
   await expect(arbitrationTimer).toHaveText(/^\d+:\d{2}(:\d{2})?$/);
   expect(await arbitration.textContent()).not.toContain("Starts ");
+  await expect(arbitration.locator(".timed-meta")).toContainText("Tier");
+  await expect(arbitration.locator(".timed-meta")).toContainText("S");
   await expect(arbitration.locator(".timed-source-link")).toHaveAttribute(
     "href",
     /browse\.wf/,
@@ -679,6 +681,9 @@ test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   await expect(arbitrationPredictions).toHaveCount(24);
   await expect(arbitrationPredictions.first()).toHaveAttribute("data-temporal-status", "upcoming");
   await expect(arbitrationPredictions.first().locator("time[datetime]")).toHaveCount(1);
+  await expect(arbitrationPredictions.first().locator(".arbitration-prediction-tier")).toHaveAttribute("data-tier", "S");
+  await expect(arbitrationPredictions.first().locator(".arbitration-prediction-tier")).toContainText("S Tier");
+  await expect(arbitrationPredictions.nth(5).locator(".arbitration-prediction-tier")).toHaveAttribute("data-tier", "F");
   await expect(arbitrationPredictions.first().locator(".arbitration-prediction-mission")).toContainText("Defense");
   await expect(arbitrationPredictions.first().locator(".arbitration-prediction-node")).toContainText("Hydron (Sedna)");
   await expect(arbitrationPredictions.first().locator(".t-timer[data-activation]")).toHaveCount(1);
