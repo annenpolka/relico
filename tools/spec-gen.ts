@@ -2378,6 +2378,11 @@ fn ${name}() {
         ],
     };
     arbitration.source_id = timed::TimedSourceId::BrowseWfArbitrationSchedule;
+    let mut arbitration_prediction = arbitration.clone();
+    arbitration_prediction.id = "arbitration-prediction".to_string();
+    arbitration_prediction.activation = Some(base_now() + Duration::hours(1));
+    arbitration_prediction.expiry = Some(base_now() + Duration::hours(2));
+    arbitration_prediction.temporal_status = timed::TimedTemporalStatus::Upcoming;
 
     let mut circuit = mk_timed_card("circuit", Some(base_now() + Duration::days(1)));
     circuit.kind = "circuit".to_string();
@@ -2409,6 +2414,7 @@ fn ${name}() {
     area_objective.source_id = timed::TimedSourceId::BrowseWfLocationBounties;
 
     snapshot.arbitration = vec![arbitration];
+    snapshot.arbitration_predictions = vec![arbitration_prediction];
     snapshot.circuit = vec![circuit];
     snapshot.bounties = vec![bounty];
     snapshot.area_objectives = vec![area_objective];
@@ -2421,6 +2427,7 @@ fn ${name}() {
 
     let value = serde_json::to_value(&snapshot).expect("TimedContentSnapshotをserializeできること");
     assert_eq!(value["arbitration"][0]["temporalStatus"], "active", "${msg} (active wire)");
+    assert_eq!(value["arbitrationPredictions"][0]["temporalStatus"], "upcoming", "${msg} (arbitrationPredictions wire)");
     assert_eq!(value["circuit"][0]["temporalStatus"], "upcoming", "${msg} (upcoming wire)");
     assert_eq!(value["arbitration"][0]["provenance"]["kind"], "community-schedule", "${msg} (schedule provenance)");
     assert_eq!(value["bounties"][0]["provenance"]["kind"], "community-live", "${msg} (community live provenance)");
@@ -2440,10 +2447,100 @@ fn ${name}() {
     assert!(value.get("areaEnvironments").is_some(), "${msg} (camelCase areaEnvironments)");
     assert!(value.get("areaObjectives").is_some(), "${msg} (camelCase areaObjectives)");
     assert!(value.get("areaEvents").is_some(), "${msg} (camelCase areaEvents)");
+    assert!(value.get("arbitrationPredictions").is_some(), "${msg} (camelCase arbitrationPredictions)");
     assert!(value.get("lastPoll").is_some(), "${msg} (camelCase lastPoll)");
     let encoded = serde_json::to_string(&value).unwrap();
     assert!(!encoded.contains("availability"), "${msg} (旧synthetic availabilityを残した)");
     assert!(!encoded.contains("netracells"), "${msg} (取得不能netracells fieldを残した)");
+}`;
+      case "arbitration_predictions":
+        return `
+/// ${c.id}: ${c.desc}
+#[test]
+fn ${name}() {
+    let now = base_now();
+    let schedule = (0..=timed::ARBITRATION_PREDICTION_LIMIT + 2)
+        .map(|index| {
+            format!(
+                "{},ClanNode{}",
+                (now + Duration::hours(index as i64)).timestamp(),
+                index % 2,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\\n");
+    let regions = serde_json::json!({
+        "ClanNode0": {
+            "name": "/node/Cholistan",
+            "systemName": "/system/Europa",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION",
+            "minEnemyLevel": 23,
+            "maxEnemyLevel": 33
+        },
+        "ClanNode1": {
+            "name": "/node/Hydron",
+            "systemName": "/system/Sedna",
+            "missionName": "/mission/Defense",
+            "faction": "FC_GRINEER",
+            "minEnemyLevel": 30,
+            "maxEnemyLevel": 40
+        }
+    });
+    let challenges = serde_json::json!({
+        "/challenge/kill": {
+            "name": "/challenge/name",
+            "description": "/challenge/description",
+            "requiredCount": 10
+        }
+    });
+    let dictionary = serde_json::json!({
+        "/node/Cholistan": "Cholistan",
+        "/node/Hydron": "Hydron",
+        "/system/Europa": "Europa",
+        "/system/Sedna": "Sedna",
+        "/mission/Excavation": "EXCAVATION",
+        "/mission/Defense": "DEFENSE",
+        "/challenge/name": "Operator",
+        "/challenge/description": "Kill |COUNT| enemies",
+        "/faction/infested": "INFESTED",
+        "/faction/grineer": "GRINEER"
+    });
+    let factions = serde_json::json!({
+        "FC_INFESTATION": { "index": 2, "name": "/faction/infested" },
+        "FC_GRINEER": { "index": 0, "name": "/faction/grineer" }
+    });
+    let assets = timed::parse_community_assets(
+        &schedule,
+        &regions.to_string(),
+        &challenges.to_string(),
+        &dictionary.to_string(),
+        &factions.to_string(),
+    )
+    .expect("仲裁予測fixtureを結合できること");
+    let current = timed::arbitration_card(&assets, now + Duration::seconds(1))
+        .expect("現在slotを生成できること");
+    let predictions = timed::arbitration_prediction_cards(&assets, now + Duration::seconds(1))
+        .expect("将来slotを生成できること");
+
+    assert_eq!(current.temporal_status, timed::TimedTemporalStatus::Active, "${msg} (現在slot)");
+    assert_eq!(predictions.len(), timed::ARBITRATION_PREDICTION_LIMIT, "${msg} (最大168件)");
+    assert!(predictions.iter().all(|card| card.temporal_status == timed::TimedTemporalStatus::Upcoming), "${msg} (upcoming区分)");
+    assert_eq!(predictions[0].activation, Some(now + Duration::hours(1)), "${msg} (現在直後から開始)");
+    assert_eq!(
+        predictions.last().and_then(|card| card.activation),
+        Some(now + Duration::hours(timed::ARBITRATION_PREDICTION_LIMIT as i64)),
+        "${msg} (activation昇順)",
+    );
+    let final_slot_at = now + Duration::hours((timed::ARBITRATION_PREDICTION_LIMIT + 2) as i64);
+    let tail = timed::arbitration_prediction_cards(&assets, final_slot_at + Duration::seconds(1))
+        .expect("最終slot内では空の将来予測を返せること");
+    assert!(tail.is_empty(), "${msg} (schedule末尾を循環・補間)");
+
+    let mut snapshot = timed::TimedContentSnapshot::default();
+    snapshot.arbitration = vec![current];
+    snapshot.arbitration_predictions = predictions;
+    assert_eq!(snapshot.all_cards().filter(|card| card.kind == "arbitration").count(), 1, "${msg} (予測を通知候補へ混入)");
 }`;
       case "arbitration_join":
         return `
@@ -5050,6 +5147,21 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
       '#panel-arbitration .timed-source-validity[data-source="browseWfArbitration"]',
     ),
   ).toBeVisible();
+  const arbitrationSchedule = page.locator("#panel-arbitration .arbitration-schedule");
+  await expect(arbitrationSchedule).toHaveAttribute("data-prediction-count", "24");
+  const arbitrationPredictions = arbitrationSchedule.locator(".arbitration-prediction");
+  await expect(arbitrationPredictions).toHaveCount(24);
+  await expect(arbitrationPredictions.first()).toHaveAttribute("data-temporal-status", "upcoming");
+  await expect(arbitrationPredictions.first().locator("time[datetime]")).toHaveCount(1);
+  await expect(arbitrationPredictions.first().locator(".arbitration-prediction-mission")).toContainText("Defense");
+  await expect(arbitrationPredictions.first().locator(".arbitration-prediction-node")).toContainText("Hydron (Sedna)");
+  await expect(arbitrationPredictions.first().locator(".t-timer[data-activation]")).toHaveCount(1);
+  const predictionList = arbitrationSchedule.locator(".arbitration-predictions");
+  expect(await predictionList.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  await predictionList.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  expect(await predictionList.evaluate((element) => element.scrollTop > 0)).toBe(true);
 
   await page.keyboard.press("Meta+6");
   const areaGroups = page.locator("#panel-area-missions .timed-card-group");
@@ -5469,6 +5581,7 @@ const localeGoldens = {
     languageLabel: "表示言語",
     rulePlaceholder: "ルール名 (R1)",
     arbitrationProvenance: "コミュニティ予測",
+    arbitrationPredictions: "今後の予測",
     areaGroups: ["環境サイクル", "通常依頼", "ローカル依頼候補", "追加依頼", "エリアイベント"],
     environmentState: "状態 昼",
     circuitStages: ["通常サーキット", "鋼の道のりサーキット"],
@@ -5495,6 +5608,7 @@ const localeGoldens = {
     languageLabel: "Display language",
     rulePlaceholder: "Rule name (R1)",
     arbitrationProvenance: "Community prediction",
+    arbitrationPredictions: "Upcoming predictions",
     areaGroups: ["Environments", "Open-world bounties", "Objective rotations", "Additional bounties", "Area events"],
     environmentState: "State Day",
     circuitStages: ["Normal Circuit", "Steel Path Circuit"],
@@ -5521,6 +5635,7 @@ const localeGoldens = {
     languageLabel: "显示语言",
     rulePlaceholder: "规则名称 (R1)",
     arbitrationProvenance: "社区预测",
+    arbitrationPredictions: "后续预测",
     areaGroups: ["环境周期", "开放世界赏金", "目标轮换", "额外赏金", "地区活动"],
     environmentState: "状态 白昼",
     circuitStages: ["普通无尽回廊", "钢铁之路无尽回廊"],
@@ -5555,6 +5670,9 @@ for (const [locale, golden] of Object.entries(localeGoldens)) {
     await expect(
       page.locator('#panel-arbitration .timed-card[data-provenance="community-schedule"] .timed-provenance-badge'),
     ).toHaveText(golden.arbitrationProvenance);
+    await expect(page.locator("#arbitration-predictions-heading")).toHaveText(
+      golden.arbitrationPredictions,
+    );
     await page.locator("#tab-area-missions").click();
     const areaHeadings = page.locator("#panel-area-missions .timed-group-heading");
     await expect(areaHeadings).toHaveCount(5);

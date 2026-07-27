@@ -1394,10 +1394,67 @@ function areaGroup(
   return section;
 }
 
+function arbitrationPredictionsElement(cards: TimedContentCard[]): HTMLElement | null {
+  if (!cards.length) return null;
+  const section = document.createElement("section");
+  section.className = "arbitration-schedule";
+  section.dataset.predictionCount = String(cards.length);
+
+  const header = document.createElement("div");
+  header.className = "arbitration-schedule-header";
+  const heading = document.createElement("h2");
+  heading.id = "arbitration-predictions-heading";
+  heading.textContent = t("timed.arbitrationPredictions");
+  const count = document.createElement("span");
+  count.textContent = t("timed.arbitrationPredictionCount", { count: cards.length });
+  header.append(heading, count);
+
+  const list = document.createElement("ol");
+  list.className = "arbitration-predictions";
+  list.tabIndex = 0;
+  list.setAttribute("aria-labelledby", heading.id);
+  for (const card of cards) {
+    const stage = [...card.stages].sort((a, b) => a.order - b.order)[0];
+    if (!stage || !card.activation) continue;
+    const row = document.createElement("li");
+    row.className = "arbitration-prediction";
+    row.dataset.cardId = card.id;
+    row.dataset.temporalStatus = card.temporalStatus;
+    row.dataset.provenance = card.provenance.kind;
+
+    const time = document.createElement("time");
+    time.className = "arbitration-prediction-time";
+    time.dateTime = card.activation;
+    time.textContent = localizedDate(card.activation);
+
+    const body = document.createElement("div");
+    body.className = "arbitration-prediction-body";
+    const mission = document.createElement("span");
+    mission.className = "icon-label arbitration-prediction-mission";
+    mission.innerHTML = `${stageGlyphHtml(card, stage)}<span>${esc(timedStageTitle(card, stage))}</span>`;
+    body.append(mission);
+    if (stage.node) {
+      const node = document.createElement("span");
+      node.className = "icon-label arbitration-prediction-node";
+      node.innerHTML = `${glyphHtml("planet", nodePlanet(stage.node))}<span>${esc(stage.node)}</span>`;
+      body.append(node);
+    }
+
+    const timer = timedTimerElement(card);
+    row.append(time, body);
+    if (timer) row.append(timer);
+    list.append(row);
+  }
+  section.append(header, list);
+  return section;
+}
+
 function renderTimedPanel(tab: TimedTabId): void {
   const root = $(`timed-${tab}`);
   const timed = status?.timedContent;
   const cards = cardsForTab(tab, timed);
+  const arbitrationPredictions =
+    tab === "arbitration" ? (timed?.arbitrationPredictions ?? []) : [];
   const children: HTMLElement[] = [];
 
   for (const sourceKey of TIMED_TAB_SOURCES[tab]) {
@@ -1409,7 +1466,7 @@ function renderTimedPanel(tab: TimedTabId): void {
     if (validity) children.push(validity);
   }
 
-  if (!cards.length) {
+  if (!cards.length && !arbitrationPredictions.length) {
     const empty = document.createElement("p");
     empty.className = "timed-empty";
     empty.textContent = t("timed.noContent");
@@ -1445,6 +1502,10 @@ function renderTimedPanel(tab: TimedTabId): void {
           : timedCardElement(card),
       ),
     );
+    if (tab === "arbitration") {
+      const predictions = arbitrationPredictionsElement(arbitrationPredictions);
+      if (predictions) children.push(predictions);
+    }
   }
 
   root.replaceChildren(...children);

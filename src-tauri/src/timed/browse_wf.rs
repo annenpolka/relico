@@ -23,6 +23,7 @@ const REQUIRED_LOCATION_BOUNTY_TAGS: [(&str, &str, &str); 3] = [
 ];
 
 const LOCATION_BOUNTY_PATH_PREFIX: &str = "/Lotus/Types/Gameplay/";
+pub const ARBITRATION_PREDICTION_LIMIT: usize = 168;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArbitrationSlot {
@@ -565,11 +566,46 @@ pub fn arbitration_card(
     arbitration_card_from_assets(&assets.arbitration, now)
 }
 
+pub fn arbitration_prediction_cards(
+    assets: &CommunityAssets,
+    now: DateTime<Utc>,
+) -> Result<Vec<TimedContent>, TimedSourceError> {
+    arbitration_prediction_cards_from_assets(&assets.arbitration, now)
+}
+
 pub(crate) fn arbitration_card_from_assets(
     assets: &ArbitrationAssets,
     now: DateTime<Utc>,
 ) -> Result<TimedContent, TimedSourceError> {
     let slot = arbitration_slot_at(&assets.schedule, now)?;
+    arbitration_card_for_slot(assets, &slot, TimedTemporalStatus::Active)
+}
+
+pub(crate) fn arbitration_prediction_cards_from_assets(
+    assets: &ArbitrationAssets,
+    now: DateTime<Utc>,
+) -> Result<Vec<TimedContent>, TimedSourceError> {
+    let current = arbitration_slot_at(&assets.schedule, now)?;
+    let current_index = usize::try_from(
+        (current.activation.timestamp() - assets.schedule.slots[0].activation.timestamp()) / 3600,
+    )
+    .map_err(|_| TimedSourceError::out_of_range("arbitration slot index overflow"))?;
+
+    assets
+        .schedule
+        .slots
+        .iter()
+        .skip(current_index.saturating_add(1))
+        .take(ARBITRATION_PREDICTION_LIMIT)
+        .map(|slot| arbitration_card_for_slot(assets, slot, TimedTemporalStatus::Upcoming))
+        .collect()
+}
+
+fn arbitration_card_for_slot(
+    assets: &ArbitrationAssets,
+    slot: &ArbitrationSlot,
+    temporal_status: TimedTemporalStatus,
+) -> Result<TimedContent, TimedSourceError> {
     let region = assets.shared.regions.get(&slot.node_key).ok_or_else(|| {
         TimedSourceError::failed(format!(
             "ExportRegions cannot resolve arbitration node {}",
@@ -636,7 +672,7 @@ pub(crate) fn arbitration_card_from_assets(
         subtitle: None,
         activation: Some(slot.activation),
         expiry: Some(slot.expiry),
-        temporal_status: TimedTemporalStatus::Active,
+        temporal_status,
         provenance: TimedProvenance {
             kind: TimedSourceKind::CommunitySchedule,
             contributors: vec![

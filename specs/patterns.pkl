@@ -334,7 +334,7 @@ class ContentPalette extends Clause {
 class TimedContentFixture extends Clause {
   pattern = "timed_content_fixture"
   label = "example-tested"
-  scenario: "wire_shape" | "arbitration_join" | "oracle_bounties" | "circuit" | "rich_details" | "area_sources" | "node_level_index"
+  scenario: "wire_shape" | "arbitration_join" | "arbitration_predictions" | "oracle_bounties" | "circuit" | "rich_details" | "area_sources" | "node_level_index"
 }
 
 /// 通知テストの結果表示・payload・raw dev時の案内を、固定した具体例で検証する。

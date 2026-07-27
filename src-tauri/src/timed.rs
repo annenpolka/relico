@@ -18,16 +18,18 @@ mod de;
 mod wfcd;
 
 use browse_wf::{
-    arbitration_card_from_assets, bounty_cards_from_cycle, location_bounty_cards_from_cycle,
-    parse_arbitration_assets, parse_bounty_assets, parse_location_bounty_cycle_json,
-    parse_shared_community_assets, ArbitrationAssets, BountyAssets,
+    arbitration_card_from_assets, arbitration_prediction_cards_from_assets,
+    bounty_cards_from_cycle, location_bounty_cards_from_cycle, parse_arbitration_assets,
+    parse_bounty_assets, parse_location_bounty_cycle_json, parse_shared_community_assets,
+    ArbitrationAssets, BountyAssets,
 };
 
 pub use browse_wf::{
-    arbitration_card, arbitration_slot_at, node_level_index, parse_arbitration_schedule,
-    parse_bounty_cards, parse_bounty_cycle_json, parse_community_assets,
-    parse_location_bounty_assets, parse_location_bounty_cards, ArbitrationSchedule,
-    ArbitrationSlot, CommunityAssets, LocationBountyAssets,
+    arbitration_card, arbitration_prediction_cards, arbitration_slot_at, node_level_index,
+    parse_arbitration_schedule, parse_bounty_cards, parse_bounty_cycle_json,
+    parse_community_assets, parse_location_bounty_assets, parse_location_bounty_cards,
+    ArbitrationSchedule, ArbitrationSlot, CommunityAssets, LocationBountyAssets,
+    ARBITRATION_PREDICTION_LIMIT,
 };
 pub use de::{parse_circuit_json, parse_descents_json};
 pub use wfcd::{parse_wfcd_json, WfcdTimedContent};
@@ -295,6 +297,8 @@ pub struct TimedContent {
 #[serde(rename_all = "camelCase")]
 pub struct TimedContentSnapshot {
     pub arbitration: Vec<TimedContent>,
+    /// 通知評価から分離した、仲裁の将来予測表示専用slice。SPEC: TMD-008
+    pub arbitration_predictions: Vec<TimedContent>,
     pub sortie: Vec<TimedContent>,
     pub archon: Vec<TimedContent>,
     pub syndicates: Vec<TimedContent>,
@@ -391,6 +395,52 @@ fn apply_timed_source_result_with_asset_error(
     }
 }
 
+fn apply_arbitration_source_result(
+    active: &mut Vec<TimedContent>,
+    predictions: &mut Vec<TimedContent>,
+    status: &mut TimedSourceStatus,
+    now: DateTime<Utc>,
+    result: Result<Vec<TimedContent>, TimedSourceError>,
+    asset_error: Option<String>,
+) {
+    match result {
+        Ok(mut next) => {
+            retain_unexpired(&mut next, now);
+            let valid_until = max_expiry(&next);
+            let (next_active, next_predictions): (Vec<_>, Vec<_>) = next
+                .into_iter()
+                .partition(|card| card.temporal_status == TimedTemporalStatus::Active);
+            *active = next_active;
+            *predictions = next_predictions;
+            if let Some(error) = asset_error {
+                status.failed(now, error, !active.is_empty() || !predictions.is_empty());
+                status.valid_until = valid_until;
+            } else {
+                status.fresh(now, valid_until);
+            }
+        }
+        Err(TimedSourceError::Failed(error)) => {
+            retain_unexpired(active, now);
+            retain_unexpired(predictions, now);
+            let error = match asset_error {
+                Some(asset_error) => format!("{error}; static assets: {asset_error}"),
+                None => error,
+            };
+            status.failed(now, error, !active.is_empty() || !predictions.is_empty());
+            status.valid_until = active
+                .iter()
+                .chain(predictions.iter())
+                .filter_map(|card| card.expiry)
+                .max();
+        }
+        Err(TimedSourceError::OutOfRange(error)) => {
+            active.clear();
+            predictions.clear();
+            status.out_of_range(now, error);
+        }
+    }
+}
+
 pub struct TimedPollResults {
     pub wfcd: Result<WfcdTimedContent, TimedSourceError>,
     pub descendia: Result<Vec<TimedContent>, TimedSourceError>,
@@ -450,7 +500,8 @@ struct TimedAssetDerivationFeedback {
 }
 
 impl TimedContentSnapshot {
-    /// 全sliceのcardを1本のiteratorで返す(contentRulesの合致評価用)。
+    /// 通知対象sliceのcardを1本のiteratorで返す(contentRulesの合致評価用)。
+    /// arbitration_predictionsは表示専用のため意図的に含めない。SPEC: TMD-008
     pub fn all_cards(&self) -> impl Iterator<Item = &TimedContent> {
         [
             &self.arbitration,
@@ -507,8 +558,9 @@ impl TimedContentSnapshot {
             results.area_objectives,
             asset_health.location_bounties_error,
         );
-        apply_timed_source_result_with_asset_error(
+        apply_arbitration_source_result(
             &mut self.arbitration,
+            &mut self.arbitration_predictions,
             &mut self.sources.browse_wf_arbitration,
             now,
             results.arbitration,
@@ -969,7 +1021,14 @@ async fn poll_sources(
             Err(error) => (Err(error), false, false),
         };
     let arbitration = match arbitration_assets {
-        Some(assets) => arbitration_card_from_assets(assets, now).map(|card| vec![card]),
+        Some(assets) => (|| {
+            let current = arbitration_card_from_assets(assets, now)?;
+            let predictions = arbitration_prediction_cards_from_assets(assets, now)?;
+            let mut cards = Vec::with_capacity(1 + predictions.len());
+            cards.push(current);
+            cards.extend(predictions);
+            Ok(cards)
+        })(),
         None => Err(missing_assets()),
     };
     let asset_refresh_hints = static_asset_refresh_hints(

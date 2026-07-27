@@ -537,7 +537,7 @@ test("RND-009 serializes rapid new rule and filter apply", async ({ page }) => {
   expect(after[2]).toMatchObject({ enabled: true, notify: false, tiers: ["Axi"] });
 });
 
-// RND-010: コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁cardはcommunity schedule・browse.wf出典で絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示し、将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。DescendiaのSpecs/Aurasは生のLotus pathを本文へ表示せず、path leafを人間可読ラベル(CoH接頭辞とSpec/Aura接尾辞を除去しcamelCaseを分かち書き)へ整形して表示し、整形前のraw識別子はtooltipへ保持する。Descendiaのactive cardはupcoming行と同じくpanel全幅の単一列で表示し、multi-card gridの分割幅で細長く積まない。Circuitタブは現在のデュヴィリのスパイラル(WFCD由来の環境サイクルcard。状態ラベルと残り時間カウントダウン付き)をCircuit cardの前へ併記し、WFCD sourceの障害はこのタブでも表示できる。スパイラルcardはArea環境サイクルの表示からも取り除かない。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。パレットのGO TO {タブ}候補は対応タブへ切り替えてパレットを閉じ、ルール・設定を変更しない。タブ列が横幅からあふれるときは、あふれている側だけにedge fadeヒント(scrolled-start/scrolled-end)を付けてスクロール可能性を示し、native scrollbarより控えめな細いテーマ色バーを使う。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)
+// RND-010: コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁の現在cardはcommunity schedule・browse.wf出典で絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示する。仲裁の将来予測は現在cardの後に「今後の予測」として最大168行をactivation昇順で表示し、各行はローカル開始日時・mission・node・開始までのdata-activationカウントダウンを持ち、予測一覧自身を縦スクロールできる。将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。DescendiaのSpecs/Aurasは生のLotus pathを本文へ表示せず、path leafを人間可読ラベル(CoH接頭辞とSpec/Aura接尾辞を除去しcamelCaseを分かち書き)へ整形して表示し、整形前のraw識別子はtooltipへ保持する。Descendiaのactive cardはupcoming行と同じくpanel全幅の単一列で表示し、multi-card gridの分割幅で細長く積まない。Circuitタブは現在のデュヴィリのスパイラル(WFCD由来の環境サイクルcard。状態ラベルと残り時間カウントダウン付き)をCircuit cardの前へ併記し、WFCD sourceの障害はこのタブでも表示できる。スパイラルcardはArea環境サイクルの表示からも取り除かない。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。パレットのGO TO {タブ}候補は対応タブへ切り替えてパレットを閉じ、ルール・設定を変更しない。タブ列が横幅からあふれるときは、あふれている側だけにedge fadeヒント(scrolled-start/scrolled-end)を付けてスクロール可能性を示し、native scrollbarより控えめな細いテーマ色バーを使う。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)
 test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 620 });
   await bootConsole(page, { locale: "en" });
@@ -673,6 +673,21 @@ test("RND-010 content tabs and browser shortcuts", async ({ page }) => {
       '#panel-arbitration .timed-source-validity[data-source="browseWfArbitration"]',
     ),
   ).toBeVisible();
+  const arbitrationSchedule = page.locator("#panel-arbitration .arbitration-schedule");
+  await expect(arbitrationSchedule).toHaveAttribute("data-prediction-count", "24");
+  const arbitrationPredictions = arbitrationSchedule.locator(".arbitration-prediction");
+  await expect(arbitrationPredictions).toHaveCount(24);
+  await expect(arbitrationPredictions.first()).toHaveAttribute("data-temporal-status", "upcoming");
+  await expect(arbitrationPredictions.first().locator("time[datetime]")).toHaveCount(1);
+  await expect(arbitrationPredictions.first().locator(".arbitration-prediction-mission")).toContainText("Defense");
+  await expect(arbitrationPredictions.first().locator(".arbitration-prediction-node")).toContainText("Hydron (Sedna)");
+  await expect(arbitrationPredictions.first().locator(".t-timer[data-activation]")).toHaveCount(1);
+  const predictionList = arbitrationSchedule.locator(".arbitration-predictions");
+  expect(await predictionList.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  await predictionList.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  expect(await predictionList.evaluate((element) => element.scrollTop > 0)).toBe(true);
 
   await page.keyboard.press("Meta+6");
   const areaGroups = page.locator("#panel-area-missions .timed-card-group");
@@ -1119,6 +1134,7 @@ const localeGoldens = {
     languageLabel: "表示言語",
     rulePlaceholder: "ルール名 (R1)",
     arbitrationProvenance: "コミュニティ予測",
+    arbitrationPredictions: "今後の予測",
     areaGroups: ["環境サイクル", "通常依頼", "ローカル依頼候補", "追加依頼", "エリアイベント"],
     environmentState: "状態 昼",
     circuitStages: ["通常サーキット", "鋼の道のりサーキット"],
@@ -1145,6 +1161,7 @@ const localeGoldens = {
     languageLabel: "Display language",
     rulePlaceholder: "Rule name (R1)",
     arbitrationProvenance: "Community prediction",
+    arbitrationPredictions: "Upcoming predictions",
     areaGroups: ["Environments", "Open-world bounties", "Objective rotations", "Additional bounties", "Area events"],
     environmentState: "State Day",
     circuitStages: ["Normal Circuit", "Steel Path Circuit"],
@@ -1171,6 +1188,7 @@ const localeGoldens = {
     languageLabel: "显示语言",
     rulePlaceholder: "规则名称 (R1)",
     arbitrationProvenance: "社区预测",
+    arbitrationPredictions: "后续预测",
     areaGroups: ["环境周期", "开放世界赏金", "目标轮换", "额外赏金", "地区活动"],
     environmentState: "状态 白昼",
     circuitStages: ["普通无尽回廊", "钢铁之路无尽回廊"],
@@ -1205,6 +1223,9 @@ for (const [locale, golden] of Object.entries(localeGoldens)) {
     await expect(
       page.locator('#panel-arbitration .timed-card[data-provenance="community-schedule"] .timed-provenance-badge'),
     ).toHaveText(golden.arbitrationProvenance);
+    await expect(page.locator("#arbitration-predictions-heading")).toHaveText(
+      golden.arbitrationPredictions,
+    );
     await page.locator("#tab-area-missions").click();
     const areaHeadings = page.locator("#panel-area-missions .timed-group-heading");
     await expect(areaHeadings).toHaveCount(5);

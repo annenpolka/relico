@@ -176,6 +176,8 @@ export interface TimedContentCard {
 
 export interface TimedContentSnapshot {
   arbitration: TimedContentCard[];
+  /** 仲裁の将来予測。表示専用で、backendのcontentRules通知評価には含まれない。 */
+  arbitrationPredictions: TimedContentCard[];
   sortie: TimedContentCard[];
   archon: TimedContentCard[];
   syndicates: TimedContentCard[];

@@ -2445,7 +2445,7 @@ fn cfg_005() {
     );
 }
 
-/// TMD-001: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない
+/// TMD-001: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない
 #[test]
 fn tmd_001() {
     let mut snapshot = timed::TimedContentSnapshot::default();
@@ -2461,6 +2461,11 @@ fn tmd_001() {
         ],
     };
     arbitration.source_id = timed::TimedSourceId::BrowseWfArbitrationSchedule;
+    let mut arbitration_prediction = arbitration.clone();
+    arbitration_prediction.id = "arbitration-prediction".to_string();
+    arbitration_prediction.activation = Some(base_now() + Duration::hours(1));
+    arbitration_prediction.expiry = Some(base_now() + Duration::hours(2));
+    arbitration_prediction.temporal_status = timed::TimedTemporalStatus::Upcoming;
 
     let mut circuit = mk_timed_card("circuit", Some(base_now() + Duration::days(1)));
     circuit.kind = "circuit".to_string();
@@ -2492,6 +2497,7 @@ fn tmd_001() {
     area_objective.source_id = timed::TimedSourceId::BrowseWfLocationBounties;
 
     snapshot.arbitration = vec![arbitration];
+    snapshot.arbitration_predictions = vec![arbitration_prediction];
     snapshot.circuit = vec![circuit];
     snapshot.bounties = vec![bounty];
     snapshot.area_objectives = vec![area_objective];
@@ -2503,30 +2509,32 @@ fn tmd_001() {
     snapshot.last_poll = Some(base_now());
 
     let value = serde_json::to_value(&snapshot).expect("TimedContentSnapshotをserializeできること");
-    assert_eq!(value["arbitration"][0]["temporalStatus"], "active", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (active wire)");
-    assert_eq!(value["circuit"][0]["temporalStatus"], "upcoming", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (upcoming wire)");
-    assert_eq!(value["arbitration"][0]["provenance"]["kind"], "community-schedule", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (schedule provenance)");
-    assert_eq!(value["bounties"][0]["provenance"]["kind"], "community-live", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (community live provenance)");
-    assert_eq!(value["circuit"][0]["provenance"]["kind"], "official-live", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (official provenance)");
+    assert_eq!(value["arbitration"][0]["temporalStatus"], "active", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (active wire)");
+    assert_eq!(value["arbitrationPredictions"][0]["temporalStatus"], "upcoming", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (arbitrationPredictions wire)");
+    assert_eq!(value["circuit"][0]["temporalStatus"], "upcoming", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (upcoming wire)");
+    assert_eq!(value["arbitration"][0]["provenance"]["kind"], "community-schedule", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (schedule provenance)");
+    assert_eq!(value["bounties"][0]["provenance"]["kind"], "community-live", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (community live provenance)");
+    assert_eq!(value["circuit"][0]["provenance"]["kind"], "official-live", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (official provenance)");
     assert_eq!(
         value["arbitration"][0]["provenance"]["contributors"],
         serde_json::json!(["browse-wf-arbitration-schedule", "browse-wf-regions"]),
-        "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (物理contributor ID群)",
+        "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (物理contributor ID群)",
     );
-    assert_eq!(value["sources"]["wfcd"]["freshness"], "fresh", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (fresh wire)");
-    assert_eq!(value["sources"]["deDescendia"]["freshness"], "stale", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (stale wire)");
-    assert_eq!(value["sources"]["deCircuit"]["freshness"], "out-of-range", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (out-of-range wire)");
-    assert_eq!(value["sources"]["browseWfBounties"]["freshness"], "unavailable", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (unavailable wire)");
-    assert_eq!(value["sources"]["browseWfLocationBounties"]["freshness"], "stale", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (location freshness wire)");
-    assert_eq!(value["areaObjectives"][0]["sourceId"], "browse-wf-location-bounties", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (location source wire)");
-    assert!(value.get("areaMissions").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase areaMissions)");
-    assert!(value.get("areaEnvironments").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase areaEnvironments)");
-    assert!(value.get("areaObjectives").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase areaObjectives)");
-    assert!(value.get("areaEvents").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase areaEvents)");
-    assert!(value.get("lastPoll").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase lastPoll)");
+    assert_eq!(value["sources"]["wfcd"]["freshness"], "fresh", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (fresh wire)");
+    assert_eq!(value["sources"]["deDescendia"]["freshness"], "stale", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (stale wire)");
+    assert_eq!(value["sources"]["deCircuit"]["freshness"], "out-of-range", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (out-of-range wire)");
+    assert_eq!(value["sources"]["browseWfBounties"]["freshness"], "unavailable", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (unavailable wire)");
+    assert_eq!(value["sources"]["browseWfLocationBounties"]["freshness"], "stale", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (location freshness wire)");
+    assert_eq!(value["areaObjectives"][0]["sourceId"], "browse-wf-location-bounties", "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (location source wire)");
+    assert!(value.get("areaMissions").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase areaMissions)");
+    assert!(value.get("areaEnvironments").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase areaEnvironments)");
+    assert!(value.get("areaObjectives").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase areaObjectives)");
+    assert!(value.get("areaEvents").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase areaEvents)");
+    assert!(value.get("arbitrationPredictions").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase arbitrationPredictions)");
+    assert!(value.get("lastPoll").is_some(), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (camelCase lastPoll)");
     let encoded = serde_json::to_string(&value).unwrap();
-    assert!(!encoded.contains("availability"), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (旧synthetic availabilityを残した)");
-    assert!(!encoded.contains("netracells"), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (取得不能netracells fieldを残した)");
+    assert!(!encoded.contains("availability"), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (旧synthetic availabilityを残した)");
+    assert!(!encoded.contains("netracells"), "SPEC TMD-001 違反: 時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない (取得不能netracells fieldを残した)");
 }
 
 /// TMD-002: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する
@@ -2614,6 +2622,94 @@ fn tmd_002() {
             "SPEC TMD-002 違反: 有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する (Dark Sector {key}={expected})",
         );
     }
+}
+
+/// TMD-008: 仲裁は現在slotをactiveな通知対象sliceに1件だけ保持し、その直後から最大168件の連続slotをactivation昇順のupcomingな表示専用arbitrationPredictions sliceへ分離する。予測はschedule末尾を越えて循環・補間せず、現在slotと将来予測の双方を同じbrowse.wf schedule/Public Exportから解決する。表示専用予測はcontentRulesの通知候補を列挙するallCardsへ混入させない
+#[test]
+fn tmd_008() {
+    let now = base_now();
+    let schedule = (0..=timed::ARBITRATION_PREDICTION_LIMIT + 2)
+        .map(|index| {
+            format!(
+                "{},ClanNode{}",
+                (now + Duration::hours(index as i64)).timestamp(),
+                index % 2,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let regions = serde_json::json!({
+        "ClanNode0": {
+            "name": "/node/Cholistan",
+            "systemName": "/system/Europa",
+            "missionName": "/mission/Excavation",
+            "faction": "FC_INFESTATION",
+            "minEnemyLevel": 23,
+            "maxEnemyLevel": 33
+        },
+        "ClanNode1": {
+            "name": "/node/Hydron",
+            "systemName": "/system/Sedna",
+            "missionName": "/mission/Defense",
+            "faction": "FC_GRINEER",
+            "minEnemyLevel": 30,
+            "maxEnemyLevel": 40
+        }
+    });
+    let challenges = serde_json::json!({
+        "/challenge/kill": {
+            "name": "/challenge/name",
+            "description": "/challenge/description",
+            "requiredCount": 10
+        }
+    });
+    let dictionary = serde_json::json!({
+        "/node/Cholistan": "Cholistan",
+        "/node/Hydron": "Hydron",
+        "/system/Europa": "Europa",
+        "/system/Sedna": "Sedna",
+        "/mission/Excavation": "EXCAVATION",
+        "/mission/Defense": "DEFENSE",
+        "/challenge/name": "Operator",
+        "/challenge/description": "Kill |COUNT| enemies",
+        "/faction/infested": "INFESTED",
+        "/faction/grineer": "GRINEER"
+    });
+    let factions = serde_json::json!({
+        "FC_INFESTATION": { "index": 2, "name": "/faction/infested" },
+        "FC_GRINEER": { "index": 0, "name": "/faction/grineer" }
+    });
+    let assets = timed::parse_community_assets(
+        &schedule,
+        &regions.to_string(),
+        &challenges.to_string(),
+        &dictionary.to_string(),
+        &factions.to_string(),
+    )
+    .expect("仲裁予測fixtureを結合できること");
+    let current = timed::arbitration_card(&assets, now + Duration::seconds(1))
+        .expect("現在slotを生成できること");
+    let predictions = timed::arbitration_prediction_cards(&assets, now + Duration::seconds(1))
+        .expect("将来slotを生成できること");
+
+    assert_eq!(current.temporal_status, timed::TimedTemporalStatus::Active, "SPEC TMD-008 違反: 仲裁は現在slotをactiveな通知対象sliceに1件だけ保持し、その直後から最大168件の連続slotをactivation昇順のupcomingな表示専用arbitrationPredictions sliceへ分離する。予測はschedule末尾を越えて循環・補間せず、現在slotと将来予測の双方を同じbrowse.wf schedule/Public Exportから解決する。表示専用予測はcontentRulesの通知候補を列挙するallCardsへ混入させない (現在slot)");
+    assert_eq!(predictions.len(), timed::ARBITRATION_PREDICTION_LIMIT, "SPEC TMD-008 違反: 仲裁は現在slotをactiveな通知対象sliceに1件だけ保持し、その直後から最大168件の連続slotをactivation昇順のupcomingな表示専用arbitrationPredictions sliceへ分離する。予測はschedule末尾を越えて循環・補間せず、現在slotと将来予測の双方を同じbrowse.wf schedule/Public Exportから解決する。表示専用予測はcontentRulesの通知候補を列挙するallCardsへ混入させない (最大168件)");
+    assert!(predictions.iter().all(|card| card.temporal_status == timed::TimedTemporalStatus::Upcoming), "SPEC TMD-008 違反: 仲裁は現在slotをactiveな通知対象sliceに1件だけ保持し、その直後から最大168件の連続slotをactivation昇順のupcomingな表示専用arbitrationPredictions sliceへ分離する。予測はschedule末尾を越えて循環・補間せず、現在slotと将来予測の双方を同じbrowse.wf schedule/Public Exportから解決する。表示専用予測はcontentRulesの通知候補を列挙するallCardsへ混入させない (upcoming区分)");
+    assert_eq!(predictions[0].activation, Some(now + Duration::hours(1)), "SPEC TMD-008 違反: 仲裁は現在slotをactiveな通知対象sliceに1件だけ保持し、その直後から最大168件の連続slotをactivation昇順のupcomingな表示専用arbitrationPredictions sliceへ分離する。予測はschedule末尾を越えて循環・補間せず、現在slotと将来予測の双方を同じbrowse.wf schedule/Public Exportから解決する。表示専用予測はcontentRulesの通知候補を列挙するallCardsへ混入させない (現在直後から開始)");
+    assert_eq!(
+        predictions.last().and_then(|card| card.activation),
+        Some(now + Duration::hours(timed::ARBITRATION_PREDICTION_LIMIT as i64)),
+        "SPEC TMD-008 違反: 仲裁は現在slotをactiveな通知対象sliceに1件だけ保持し、その直後から最大168件の連続slotをactivation昇順のupcomingな表示専用arbitrationPredictions sliceへ分離する。予測はschedule末尾を越えて循環・補間せず、現在slotと将来予測の双方を同じbrowse.wf schedule/Public Exportから解決する。表示専用予測はcontentRulesの通知候補を列挙するallCardsへ混入させない (activation昇順)",
+    );
+    let final_slot_at = now + Duration::hours((timed::ARBITRATION_PREDICTION_LIMIT + 2) as i64);
+    let tail = timed::arbitration_prediction_cards(&assets, final_slot_at + Duration::seconds(1))
+        .expect("最終slot内では空の将来予測を返せること");
+    assert!(tail.is_empty(), "SPEC TMD-008 違反: 仲裁は現在slotをactiveな通知対象sliceに1件だけ保持し、その直後から最大168件の連続slotをactivation昇順のupcomingな表示専用arbitrationPredictions sliceへ分離する。予測はschedule末尾を越えて循環・補間せず、現在slotと将来予測の双方を同じbrowse.wf schedule/Public Exportから解決する。表示専用予測はcontentRulesの通知候補を列挙するallCardsへ混入させない (schedule末尾を循環・補間)");
+
+    let mut snapshot = timed::TimedContentSnapshot::default();
+    snapshot.arbitration = vec![current];
+    snapshot.arbitration_predictions = predictions;
+    assert_eq!(snapshot.all_cards().filter(|card| card.kind == "arbitration").count(), 1, "SPEC TMD-008 違反: 仲裁は現在slotをactiveな通知対象sliceに1件だけ保持し、その直後から最大168件の連続slotをactivation昇順のupcomingな表示専用arbitrationPredictions sliceへ分離する。予測はschedule末尾を越えて循環・補間せず、現在slotと将来予測の双方を同じbrowse.wf schedule/Public Exportから解決する。表示専用予測はcontentRulesの通知候補を列挙するallCardsへ混入させない (予測を通知候補へ混入)");
 }
 
 /// TMD-003: 期限内のbounty-cycleとPublic Export fixtureを結合すると、expiry/rot/vaultRot/zarimanFactionを保持し、Holdfasts/Cavia/Hexを別cardとしてnode、challenge、Hex allyを保持する。必須root・3 tag・node・challengeの欠落は空cardにせずsource errorとし、未知identifierは空欄化せずrawを残し、Oracleにないenemy level・standingを捏造しない
