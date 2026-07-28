@@ -18,16 +18,18 @@ mod de;
 mod wfcd;
 
 use browse_wf::{
-    arbitration_card_from_assets, bounty_cards_from_cycle, location_bounty_cards_from_cycle,
-    parse_arbitration_assets, parse_bounty_assets, parse_location_bounty_cycle_json,
-    parse_shared_community_assets, ArbitrationAssets, BountyAssets,
+    arbitration_card_from_assets, arbitration_prediction_cards_from_assets,
+    bounty_cards_from_cycle, location_bounty_cards_from_cycle, parse_arbitration_assets,
+    parse_bounty_assets, parse_location_bounty_cycle_json, parse_shared_community_assets,
+    ArbitrationAssets, BountyAssets,
 };
 
 pub use browse_wf::{
-    arbitration_card, arbitration_slot_at, node_level_index, parse_arbitration_schedule,
-    parse_bounty_cards, parse_bounty_cycle_json, parse_community_assets,
-    parse_location_bounty_assets, parse_location_bounty_cards, ArbitrationSchedule,
-    ArbitrationSlot, CommunityAssets, LocationBountyAssets,
+    arbitration_card, arbitration_prediction_cards, arbitration_slot_at, node_level_index,
+    parse_arbitration_schedule, parse_bounty_cards, parse_bounty_cycle_json,
+    parse_community_assets, parse_location_bounty_assets, parse_location_bounty_cards,
+    ArbitrationSchedule, ArbitrationSlot, CommunityAssets, LocationBountyAssets,
+    ARBITRATION_PREDICTION_LIMIT,
 };
 pub use de::{parse_circuit_json, parse_descents_json};
 pub use wfcd::{parse_wfcd_json, WfcdTimedContent};
@@ -37,6 +39,8 @@ pub const DE_WORLDSTATE_URL: &str = "https://api.warframe.com/cdn/worldState.php
 pub const BROWSE_WF_BOUNTY_URL: &str = "https://oracle.browse.wf/bounty-cycle";
 pub const BROWSE_WF_LOCATION_BOUNTIES_URL: &str = "https://oracle.browse.wf/location-bounties";
 pub const BROWSE_WF_ARBITRATION_URL: &str = "https://browse.wf/arbys.txt";
+pub const BROWSE_WF_ARBITRATION_TIERS_URL: &str =
+    "https://browse.wf/supplemental-data/arbyTiers.js";
 pub const BROWSE_WF_REGIONS_URL: &str =
     "https://browse.wf/warframe-public-export-plus/ExportRegions.json";
 pub const BROWSE_WF_CHALLENGES_URL: &str =
@@ -77,6 +81,7 @@ pub enum TimedSourceId {
     WfcdWorldstate,
     DeWorldstate,
     BrowseWfArbitrationSchedule,
+    BrowseWfArbitrationTiers,
     BrowseWfBountyCycle,
     BrowseWfLocationBounties,
     BrowseWfExportBounties,
@@ -295,6 +300,8 @@ pub struct TimedContent {
 #[serde(rename_all = "camelCase")]
 pub struct TimedContentSnapshot {
     pub arbitration: Vec<TimedContent>,
+    /// 通知評価から分離した、仲裁の将来予測表示専用slice。SPEC: TMD-008
+    pub arbitration_predictions: Vec<TimedContent>,
     pub sortie: Vec<TimedContent>,
     pub archon: Vec<TimedContent>,
     pub syndicates: Vec<TimedContent>,
@@ -391,6 +398,52 @@ fn apply_timed_source_result_with_asset_error(
     }
 }
 
+fn apply_arbitration_source_result(
+    active: &mut Vec<TimedContent>,
+    predictions: &mut Vec<TimedContent>,
+    status: &mut TimedSourceStatus,
+    now: DateTime<Utc>,
+    result: Result<Vec<TimedContent>, TimedSourceError>,
+    asset_error: Option<String>,
+) {
+    match result {
+        Ok(mut next) => {
+            retain_unexpired(&mut next, now);
+            let valid_until = max_expiry(&next);
+            let (next_active, next_predictions): (Vec<_>, Vec<_>) = next
+                .into_iter()
+                .partition(|card| card.temporal_status == TimedTemporalStatus::Active);
+            *active = next_active;
+            *predictions = next_predictions;
+            if let Some(error) = asset_error {
+                status.failed(now, error, !active.is_empty() || !predictions.is_empty());
+                status.valid_until = valid_until;
+            } else {
+                status.fresh(now, valid_until);
+            }
+        }
+        Err(TimedSourceError::Failed(error)) => {
+            retain_unexpired(active, now);
+            retain_unexpired(predictions, now);
+            let error = match asset_error {
+                Some(asset_error) => format!("{error}; static assets: {asset_error}"),
+                None => error,
+            };
+            status.failed(now, error, !active.is_empty() || !predictions.is_empty());
+            status.valid_until = active
+                .iter()
+                .chain(predictions.iter())
+                .filter_map(|card| card.expiry)
+                .max();
+        }
+        Err(TimedSourceError::OutOfRange(error)) => {
+            active.clear();
+            predictions.clear();
+            status.out_of_range(now, error);
+        }
+    }
+}
+
 pub struct TimedPollResults {
     pub wfcd: Result<WfcdTimedContent, TimedSourceError>,
     pub descendia: Result<Vec<TimedContent>, TimedSourceError>,
@@ -450,7 +503,8 @@ struct TimedAssetDerivationFeedback {
 }
 
 impl TimedContentSnapshot {
-    /// 全sliceのcardを1本のiteratorで返す(contentRulesの合致評価用)。
+    /// 通知対象sliceのcardを1本のiteratorで返す(contentRulesの合致評価用)。
+    /// arbitration_predictionsは表示専用のため意図的に含めない。SPEC: TMD-008
     pub fn all_cards(&self) -> impl Iterator<Item = &TimedContent> {
         [
             &self.arbitration,
@@ -507,8 +561,9 @@ impl TimedContentSnapshot {
             results.area_objectives,
             asset_health.location_bounties_error,
         );
-        apply_timed_source_result_with_asset_error(
+        apply_arbitration_source_result(
             &mut self.arbitration,
+            &mut self.arbitration_predictions,
             &mut self.sources.browse_wf_arbitration,
             now,
             results.arbitration,
@@ -802,6 +857,7 @@ fn fetched_body(result: &Result<String, TimedSourceError>) -> Result<&str, Timed
 #[cfg(test)]
 fn parse_static_asset_bodies(
     schedule: Result<String, TimedSourceError>,
+    arbitration_tiers: Result<String, TimedSourceError>,
     regions: Result<String, TimedSourceError>,
     challenges: Result<String, TimedSourceError>,
     export_bounties: Result<String, TimedSourceError>,
@@ -818,8 +874,13 @@ fn parse_static_asset_bodies(
     })();
 
     let arbitration = match &shared {
-        Ok(shared) => fetched_body(&schedule)
-            .and_then(|body| parse_arbitration_assets(body, Arc::clone(shared))),
+        Ok(shared) => fetched_body(&schedule).and_then(|schedule_body| {
+            parse_arbitration_assets(
+                schedule_body,
+                fetched_body(&arbitration_tiers)?,
+                Arc::clone(shared),
+            )
+        }),
         Err(error) => Err(error.clone()),
     };
     let bounties = match &shared {
@@ -854,11 +915,17 @@ async fn fetch_static_assets(
     client: &reqwest::Client,
     targets: TimedAssetRefreshHints,
 ) -> StaticAssetRefresh {
-    let (schedule, regions, challenges, export_bounties, dictionary, factions) = tokio::join!(
+    let (schedule, arbitration_tiers, regions, challenges, export_bounties, dictionary, factions) = tokio::join!(
         fetch_optional_body(
             client,
             targets.arbitration,
             BROWSE_WF_ARBITRATION_URL,
+            SCHEDULE_BODY_LIMIT
+        ),
+        fetch_optional_body(
+            client,
+            targets.arbitration,
+            BROWSE_WF_ARBITRATION_TIERS_URL,
             SCHEDULE_BODY_LIMIT
         ),
         fetch_body(client, BROWSE_WF_REGIONS_URL, EXPORT_BODY_LIMIT, false),
@@ -885,11 +952,18 @@ async fn fetch_static_assets(
         )
         .map(Arc::new)
     })();
-    let arbitration = schedule.map(|schedule| match &shared {
-        Ok(shared) => fetched_body(&schedule)
-            .and_then(|body| parse_arbitration_assets(body, Arc::clone(shared))),
-        Err(error) => Err(error.clone()),
-    });
+    let arbitration = schedule
+        .zip(arbitration_tiers)
+        .map(|(schedule, arbitration_tiers)| match &shared {
+            Ok(shared) => fetched_body(&schedule).and_then(|schedule_body| {
+                parse_arbitration_assets(
+                    schedule_body,
+                    fetched_body(&arbitration_tiers)?,
+                    Arc::clone(shared),
+                )
+            }),
+            Err(error) => Err(error.clone()),
+        });
     let bounties = challenges.map(|challenges| match &shared {
         Ok(shared) => {
             fetched_body(&challenges).and_then(|body| parse_bounty_assets(body, Arc::clone(shared)))
@@ -969,7 +1043,14 @@ async fn poll_sources(
             Err(error) => (Err(error), false, false),
         };
     let arbitration = match arbitration_assets {
-        Some(assets) => arbitration_card_from_assets(assets, now).map(|card| vec![card]),
+        Some(assets) => (|| {
+            let current = arbitration_card_from_assets(assets, now)?;
+            let predictions = arbitration_prediction_cards_from_assets(assets, now)?;
+            let mut cards = Vec::with_capacity(1 + predictions.len());
+            cards.push(current);
+            cards.extend(predictions);
+            Ok(cards)
+        })(),
         None => Err(missing_assets()),
     };
     let asset_refresh_hints = static_asset_refresh_hints(
@@ -1198,10 +1279,11 @@ mod tests {
         Utc.with_ymd_and_hms(2026, 7, 18, 0, 0, 0).unwrap()
     }
 
-    fn static_asset_bodies() -> (String, String, String, String, String, String) {
+    fn static_asset_bodies() -> (String, String, String, String, String, String, String) {
         let base = now().timestamp();
         (
             format!("{base},ClanNode7\n{},ClanNode7\n", base + 3600),
+            r#"window.arbyTiers = { ClanNode7: "S" };"#.to_string(),
             r#"{"ClanNode7":{"name":"/node/Cholistan","systemName":"/system/Europa","missionName":"/mission/Excavation","faction":"FC_INFESTATION","minEnemyLevel":23,"maxEnemyLevel":33}}"#.to_string(),
             r#"{"/challenge/kill":{"name":"/challenge/name","description":"/challenge/description","requiredCount":10}}"#.to_string(),
             r#"{"/Lotus/Types/Gameplay/Eidolon/Jobs/Known":{"name":"/challenge/name"}}"#.to_string(),
@@ -1235,9 +1317,11 @@ mod tests {
 
     #[test]
     fn schedule_and_challenges_fail_independently_while_shared_failures_affect_both() {
-        let (_, regions, challenges, export_bounties, dictionary, factions) = static_asset_bodies();
+        let (_, tiers, regions, challenges, export_bounties, dictionary, factions) =
+            static_asset_bodies();
         let schedule_failed = parse_static_asset_bodies(
             Err(TimedSourceError::failed("schedule down")),
+            Ok(tiers),
             Ok(regions),
             Ok(challenges),
             Ok(export_bounties),
@@ -1248,9 +1332,11 @@ mod tests {
         assert!(schedule_failed.bounties.as_ref().unwrap().is_ok());
         assert!(schedule_failed.location_bounties.as_ref().unwrap().is_ok());
 
-        let (schedule, regions, _, export_bounties, dictionary, factions) = static_asset_bodies();
+        let (schedule, tiers, regions, _, export_bounties, dictionary, factions) =
+            static_asset_bodies();
         let challenges_failed = parse_static_asset_bodies(
             Ok(schedule),
+            Ok(tiers),
             Ok(regions),
             Err(TimedSourceError::failed("challenges down")),
             Ok(export_bounties),
@@ -1265,9 +1351,10 @@ mod tests {
             .unwrap()
             .is_ok());
 
-        let (schedule, regions, challenges, _, dictionary, factions) = static_asset_bodies();
+        let (schedule, tiers, regions, challenges, _, dictionary, factions) = static_asset_bodies();
         let export_bounties_failed = parse_static_asset_bodies(
             Ok(schedule),
+            Ok(tiers),
             Ok(regions),
             Ok(challenges),
             Err(TimedSourceError::failed("ExportBounties down")),
@@ -1282,10 +1369,11 @@ mod tests {
             .unwrap()
             .is_err());
 
-        let (schedule, _, challenges, export_bounties, dictionary, factions) =
+        let (schedule, tiers, _, challenges, export_bounties, dictionary, factions) =
             static_asset_bodies();
         let shared_failed = parse_static_asset_bodies(
             Ok(schedule),
+            Ok(tiers),
             Err(TimedSourceError::failed("regions down")),
             Ok(challenges),
             Ok(export_bounties),
@@ -1295,6 +1383,21 @@ mod tests {
         assert!(shared_failed.arbitration.as_ref().unwrap().is_err());
         assert!(shared_failed.bounties.as_ref().unwrap().is_err());
         assert!(shared_failed.location_bounties.as_ref().unwrap().is_ok());
+
+        let (schedule, _, regions, challenges, export_bounties, dictionary, factions) =
+            static_asset_bodies();
+        let tiers_failed = parse_static_asset_bodies(
+            Ok(schedule),
+            Err(TimedSourceError::failed("tiers down")),
+            Ok(regions),
+            Ok(challenges),
+            Ok(export_bounties),
+            Ok(dictionary),
+            Ok(factions),
+        );
+        assert!(tiers_failed.arbitration.as_ref().unwrap().is_err());
+        assert!(tiers_failed.bounties.as_ref().unwrap().is_ok());
+        assert!(tiers_failed.location_bounties.as_ref().unwrap().is_ok());
     }
 
     #[test]

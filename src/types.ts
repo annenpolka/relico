@@ -83,6 +83,7 @@ export type TimedSourceId =
   | "wfcd-worldstate"
   | "de-worldstate"
   | "browse-wf-arbitration-schedule"
+  | "browse-wf-arbitration-tiers"
   | "browse-wf-bounty-cycle"
   | "browse-wf-location-bounties"
   | "browse-wf-export-bounties"
@@ -176,6 +177,8 @@ export interface TimedContentCard {
 
 export interface TimedContentSnapshot {
   arbitration: TimedContentCard[];
+  /** 仲裁の将来予測。表示専用で、backendのcontentRules通知評価には含まれない。 */
+  arbitrationPredictions: TimedContentCard[];
   sortie: TimedContentCard[];
   archon: TimedContentCard[];
   syndicates: TimedContentCard[];

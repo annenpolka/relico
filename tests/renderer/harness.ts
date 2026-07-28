@@ -92,6 +92,43 @@ function installMock({
     validUntil,
     error: null as string | null,
   });
+  const arbitrationTiers = ["S", "A", "B", "C", "D", "F"];
+  const arbitrationPredictions = Array.from({ length: 24 }, (_, index) => ({
+    id: `arbitration-future-${index + 1}`,
+    kind: "arbitration",
+    variant: null,
+    title: "Arbitration",
+    subtitle: index % 2 === 0 ? "Grineer" : "Corpus",
+    activation: iso((index + 1) * 3600),
+    expiry: iso((index + 2) * 3600),
+    temporalStatus: "upcoming" as const,
+    provenance: {
+      kind: "community-schedule" as const,
+      contributors: [
+        "browse-wf-arbitration-schedule",
+        "browse-wf-arbitration-tiers",
+        "browse-wf-regions",
+      ],
+    },
+    sourceId: "browse-wf-arbitration-schedule",
+    sourceName: "browse.wf schedule",
+    sourceUrl: "https://browse.wf/arbys.txt",
+    metadata: [
+      { key: "arbitrationTier", value: arbitrationTiers[index % arbitrationTiers.length] },
+      { key: "faction", value: index % 2 === 0 ? "Grineer" : "Corpus" },
+    ],
+    personalModifiers: [],
+    stages: [
+      {
+        order: 1,
+        title: index % 2 === 0 ? "Defense" : "Survival",
+        node: index % 2 === 0 ? "Hydron (Sedna)" : "Mot (Void)",
+        detail: index % 2 === 0 ? "Grineer" : "Corpus",
+        enemyLevels: [60, 80],
+        modifiers: [],
+      },
+    ],
+  }));
   const rule = (enabled: boolean, notify = true): Rule => ({
     enabled,
     notify,
@@ -203,12 +240,19 @@ function installMock({
             temporalStatus: "active",
             provenance: {
               kind: "community-schedule",
-              contributors: ["browse-wf-arbitration-schedule", "browse-wf-regions"],
+              contributors: [
+                "browse-wf-arbitration-schedule",
+                "browse-wf-arbitration-tiers",
+                "browse-wf-regions",
+              ],
             },
             sourceId: "browse-wf-arbitration-schedule",
             sourceName: "browse.wf schedule",
             sourceUrl: "https://browse.wf/arbys.txt",
-            metadata: [{ key: "faction", value: "Infested" }],
+            metadata: [
+              { key: "arbitrationTier", value: "S" },
+              { key: "faction", value: "Infested" },
+            ],
             personalModifiers: [],
             stages: [
               {
@@ -222,6 +266,7 @@ function installMock({
             ],
           },
         ],
+        arbitrationPredictions,
         sortie: [
           {
             id: "sortie-current",

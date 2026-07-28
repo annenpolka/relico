@@ -476,6 +476,155 @@ body {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* 仲裁は現在cardの下へ、通知対象と分離した将来予測をコンパクトなスクロール一覧で置く。 */
+#timed-arbitration.timed-cards {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.arbitration-schedule {
+  min-width: 0;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.arbitration-schedule-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.arbitration-schedule-header h2 {
+  margin: 0;
+  color: var(--cyan);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.arbitration-schedule-header span {
+  color: var(--dim);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.arbitration-predictions {
+  max-height: clamp(180px, 45vh, 360px);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-color: var(--line) transparent;
+  scrollbar-width: thin;
+}
+
+.arbitration-predictions:focus-visible {
+  outline: 1px solid var(--amber);
+  outline-offset: -1px;
+}
+
+.arbitration-prediction {
+  display: grid;
+  grid-template-columns: minmax(126px, 0.72fr) minmax(0, 1fr) 112px;
+  align-items: center;
+  gap: 8px 14px;
+  min-height: 43px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--rowline);
+}
+
+.arbitration-prediction:last-child {
+  border-bottom: 0;
+}
+
+.arbitration-prediction-time {
+  justify-self: start;
+  color: var(--dim);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.arbitration-prediction-body {
+  display: grid;
+  grid-template-columns: 58px minmax(105px, 0.7fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.arbitration-prediction-tier {
+  justify-self: start;
+  width: 58px;
+  min-width: 0;
+  padding: 2px 5px;
+  border: 1px solid currentColor;
+  color: var(--dim);
+  font-size: 9px;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.arbitration-prediction-tier.tier-s {
+  color: var(--cyan);
+}
+
+.arbitration-prediction-tier.tier-a {
+  color: var(--ink);
+}
+
+.arbitration-prediction-tier.tier-b {
+  color: var(--amber);
+}
+
+.arbitration-prediction-tier.tier-d,
+.arbitration-prediction-tier.tier-f {
+  color: var(--red);
+}
+
+.arbitration-prediction-mission {
+  justify-self: start;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.arbitration-prediction-node {
+  justify-self: start;
+  min-width: 0;
+  color: var(--dim);
+  font-size: 10px;
+}
+
+.arbitration-prediction-node > span:last-child {
+  overflow-wrap: anywhere;
+}
+
+.arbitration-prediction .t-timer {
+  justify-self: end;
+  color: var(--dim);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+
+@media (max-width: 760px) {
+  .arbitration-prediction {
+    grid-template-columns: minmax(112px, 0.75fr) minmax(0, 1fr);
+  }
+
+  .arbitration-prediction .t-timer {
+    grid-column: 2;
+    justify-self: end;
+  }
+}
+
 .timed-upcoming {
   min-width: 0;
   grid-column: 1 / -1;

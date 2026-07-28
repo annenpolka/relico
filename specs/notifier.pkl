@@ -255,13 +255,18 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.TimedContentFixture {
     id = "TMD-001"
-    desc = "時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。Areaの環境・通常依頼・objective rotation・追加依頼・eventは別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない"
+    desc = "時限content wireはcardごとにactive/upcomingの時間状態、official-live/community-live/community-scheduleのprovenance、物理contributor ID群を別fieldで持ち、仲裁Tier表をbrowse-wf-arbitration-tiersとして識別し、WFCD/DE/Oracle Bounty/Oracle location-bounties/仲裁のsource freshnessをfresh/stale/out-of-range/unavailableとしてcamelCaseで安定してserializeする。仲裁の将来表示はarbitrationPredictions、Areaの環境・通常依頼・objective rotation・追加依頼・eventは各々別sliceであり、旧synthetic availabilityとbackend netracells fieldは持たない"
     scenario = "wire_shape"
   }
   new patterns.TimedContentFixture {
     id = "TMD-002"
-    desc = "有効な仲裁schedule行とPublic Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonusを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する"
+    desc = "有効な仲裁schedule行、browse.wfのArbitration Goons由来Tier表、Public Exportのregion・faction・辞書fixtureを結合すると、対象1時間のnode、惑星、mission、faction、enemy level、Dark Sector bonus、ノードID別Tierを持つcommunity-schedule cardになり、browse.wfをsourceとして保持する。Tier表に掲載された評価はS/A/B/C/Dだけを受理し、未掲載ノードはbrowse.wfと同じFとして扱う"
     scenario = "arbitration_join"
+  }
+  new patterns.TimedContentFixture {
+    id = "TMD-008"
+    desc = "仲裁は現在slotをactiveな通知対象sliceに1件だけ保持し、その直後から最大168件の連続slotをactivation昇順のupcomingな表示専用arbitrationPredictions sliceへ分離する。予測はschedule末尾を越えて循環・補間せず、現在slotと将来予測の双方を同じbrowse.wf schedule/Tier表/Public Exportから解決して各cardへTierを保持する。表示専用予測はcontentRulesの通知候補を列挙するallCardsへ混入させない"
+    scenario = "arbitration_predictions"
   }
   new patterns.TimedContentFixture {
     id = "TMD-003"
@@ -428,7 +433,7 @@ clauses: Listing<patterns.Clause> = new {
   }
   new patterns.RendererScenario {
     id = "RND-010"
-    desc = "コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁cardはcommunity schedule・browse.wf出典で絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示し、将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。DescendiaのSpecs/Aurasは生のLotus pathを本文へ表示せず、path leafを人間可読ラベル(CoH接頭辞とSpec/Aura接尾辞を除去しcamelCaseを分かち書き)へ整形して表示し、整形前のraw識別子はtooltipへ保持する。Descendiaのactive cardはupcoming行と同じくpanel全幅の単一列で表示し、multi-card gridの分割幅で細長く積まない。Circuitタブは現在のデュヴィリのスパイラル(WFCD由来の環境サイクルcard。状態ラベルと残り時間カウントダウン付き)をCircuit cardの前へ併記し、WFCD sourceの障害はこのタブでも表示できる。スパイラルcardはArea環境サイクルの表示からも取り除かない。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。パレットのGO TO {タブ}候補は対応タブへ切り替えてパレットを閉じ、ルール・設定を変更しない。タブ列が横幅からあふれるときは、あふれている側だけにedge fadeヒント(scrolled-start/scrolled-end)を付けてスクロール可能性を示し、native scrollbarより控えめな細いテーマ色バーを使う。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)"
+    desc = "コンテンツ領域はfissures/arbitration/sortie/archon/syndicates/area-missions/circuit/archimedea/descendiaの9タブをこの順で持ち、英語表示はFissures/Arbitration/Sortie/Archon Hunt/Syndicates/Area Missions/Circuit/Archimedea/Descendiaとなる。ネットセルのtabとtabpanelは持たない。時限cardは亀裂表と同じ時間文法に従い、仲裁の現在cardはcommunity schedule・browse.wf出典・Tier評価を持ち、絶対日時のStarts表記ではなくdata-expiry駆動の残り時間カウントダウンを表示する。仲裁の将来予測は現在cardの後に「今後の予測」として最大168行をactivation昇順で表示し、各行はローカル開始日時・Tier・mission・node・開始までのdata-activationカウントダウンを持ち、全行の開始日時・Tier・mission・nodeを同じ左端へ揃え、カウントダウンの右端を揃えた固定カラムとして、予測一覧自身を縦スクロールできる。将来Descendiaはupcomingとしてdata-activation駆動の開始までカウントダウンを表示する。DescendiaのSpecs/Aurasは生のLotus pathを本文へ表示せず、path leafを人間可読ラベル(CoH接頭辞とSpec/Aura接尾辞を除去しcamelCaseを分かち書き)へ整形して表示し、整形前のraw識別子はtooltipへ保持する。Descendiaのactive cardはupcoming行と同じくpanel全幅の単一列で表示し、multi-card gridの分割幅で細長く積まない。Circuitタブは現在のデュヴィリのスパイラル(WFCD由来の環境サイクルcard。状態ラベルと残り時間カウントダウン付き)をCircuit cardの前へ併記し、WFCD sourceの障害はこのタブでも表示できる。スパイラルcardはArea環境サイクルの表示からも取り除かない。個人進捗の非公開を説明するprogress noteはどのタブにも表示しない。Areaは環境・通常依頼・objective rotation・追加依頼・eventの5 groupをこの順で分離し、WFCD・Oracle Bounty・Oracle location-bountiesのsource別errorを表示できる。active tabと可視tabpanelは常に各1つで、Cmd+1..9は対応タブへ切替、Ctrl+Tab/Ctrl+Shift+Tabは前後へ循環し、Ctrl+1..9は従来どおりrule edit focusだけを変更する。パレットのGO TO {タブ}候補は対応タブへ切り替えてパレットを閉じ、ルール・設定を変更しない。タブ列が横幅からあふれるときは、あふれている側だけにedge fadeヒント(scrolled-start/scrolled-end)を付けてスクロール可能性を示し、native scrollbarより控えめな細いテーマ色バーを使う。tablist/tab/tabpanelのARIA対応、aria-controls/labelledby、aria-selectedとtabindex=0の一意性、矢印/Home/Endによるroving focusを保持し、poll更新で仲裁card全体をlive regionとして再告知しない(renderer統合)"
     scenario = "content_tabs"
   }
   new patterns.RendererScenario {
@@ -549,7 +554,7 @@ clauses: Listing<patterns.Clause> = new {
   new patterns.Manual {
     id = "MAN-012"
     desc = "9つの時限コンテンツ表示はsourceの由来と時間状態を分離し、取得経路の部分障害や個人進捗の非公開性をもっともらしい推測値で埋めない"
-    procedure = "リリース前に実データで確認する。1) DE公式、WFCD、browse.wf Oracle、browse.wf schedule/Public Exportへ実際に到達でき、cardのofficial/community/schedule badgeとbrowse.wf creditが文字として判読できる。2) 表示中の仲裁をbrowse.wf/liveとゲーム内から数件標本照合する。source別障害、期限切れ、schedule範囲外、個人進捗非推測はSRC-001・BNT-001・RND-010等で機械検証する。第三者scheduleの将来正確性とservice SLAは保証せず、この実データ確認でも将来の継続性を証明したとは扱わない。"
+    procedure = "リリース前に実データで確認する。1) DE公式、WFCD、browse.wf Oracle、browse.wf schedule/Tier表/Public Exportへ実際に到達でき、cardのofficial/community/schedule badgeとbrowse.wf creditが文字として判読できる。2) 表示中の仲裁とTierをbrowse.wf/arbysから数件標本照合し、仲裁自体はゲーム内とも照合する。source別障害、期限切れ、schedule範囲外、個人進捗非推測はSRC-001・BNT-001・RND-010等で機械検証する。第三者schedule・Tier評価の将来正確性とservice SLAは保証せず、この実データ確認でも将来の継続性を証明したとは扱わない。"
   }
   new patterns.Manual {
     id = "MAN-013"
