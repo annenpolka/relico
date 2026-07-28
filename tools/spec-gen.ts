@@ -5205,6 +5205,28 @@ test("${c.id} content tabs and browser shortcuts", async ({ page }) => {
   await expect(arbitrationPredictions.first().locator(".arbitration-prediction-mission")).toContainText("Defense");
   await expect(arbitrationPredictions.first().locator(".arbitration-prediction-node")).toContainText("Hydron (Sedna)");
   await expect(arbitrationPredictions.first().locator(".t-timer[data-activation]")).toHaveCount(1);
+  for (const selector of [
+    ".arbitration-prediction-time",
+    ".arbitration-prediction-tier",
+    ".arbitration-prediction-mission",
+    ".arbitration-prediction-node",
+  ]) {
+    const firstBox = await arbitrationPredictions.first().locator(selector).boundingBox();
+    const secondBox = await arbitrationPredictions.nth(1).locator(selector).boundingBox();
+    expect(firstBox).not.toBeNull();
+    expect(secondBox).not.toBeNull();
+    expect(Math.abs((firstBox?.x ?? 0) - (secondBox?.x ?? 0))).toBeLessThan(1);
+  }
+  const firstTimerBox = await arbitrationPredictions.first().locator(".t-timer").boundingBox();
+  const secondTimerBox = await arbitrationPredictions.nth(1).locator(".t-timer").boundingBox();
+  expect(firstTimerBox).not.toBeNull();
+  expect(secondTimerBox).not.toBeNull();
+  expect(
+    Math.abs(
+      ((firstTimerBox?.x ?? 0) + (firstTimerBox?.width ?? 0))
+        - ((secondTimerBox?.x ?? 0) + (secondTimerBox?.width ?? 0)),
+    ),
+  ).toBeLessThan(1);
   const predictionList = arbitrationSchedule.locator(".arbitration-predictions");
   expect(await predictionList.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
   await predictionList.evaluate((element) => {

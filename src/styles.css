@@ -528,7 +528,7 @@ body {
 
 .arbitration-prediction {
   display: grid;
-  grid-template-columns: minmax(126px, 0.72fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(126px, 0.72fr) minmax(0, 1fr) 112px;
   align-items: center;
   gap: 8px 14px;
   min-height: 43px;
@@ -541,22 +541,26 @@ body {
 }
 
 .arbitration-prediction-time {
+  justify-self: start;
   color: var(--dim);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
+  text-align: left;
+  white-space: nowrap;
 }
 
 .arbitration-prediction-body {
-  display: flex;
+  display: grid;
+  grid-template-columns: 58px minmax(105px, 0.7fr) minmax(0, 1fr);
   align-items: center;
-  flex-wrap: wrap;
-  gap: 3px 12px;
+  gap: 12px;
   min-width: 0;
 }
 
 .arbitration-prediction-tier {
-  flex: 0 0 auto;
-  min-width: 42px;
+  justify-self: start;
+  width: 58px;
+  min-width: 0;
   padding: 2px 5px;
   border: 1px solid currentColor;
   color: var(--dim);
@@ -584,11 +588,14 @@ body {
 }
 
 .arbitration-prediction-mission {
+  justify-self: start;
+  min-width: 0;
   color: var(--ink);
   font-size: 11px;
 }
 
 .arbitration-prediction-node {
+  justify-self: start;
   min-width: 0;
   color: var(--dim);
   font-size: 10px;
@@ -599,6 +606,7 @@ body {
 }
 
 .arbitration-prediction .t-timer {
+  justify-self: end;
   color: var(--dim);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
